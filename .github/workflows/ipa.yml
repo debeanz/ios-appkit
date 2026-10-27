@@ -45,13 +45,15 @@ jobs:
         run: |
           make umbrella SDK=device REEXPORT_TBDS="$(jq -r '.reexportTbds | join(" ")' build/routes.json)"
           U=build/device/AppKitShim.framework/AppKitShim
-          want=$(( $(jq '.reexportTbds | length' build/routes.json) + 1 ))
-          got=$(otool -l "$U" | grep -c LC_REEXPORT_DYLIB)
-          echo "umbrella re-exports $got (expected $want: AppKitShimCore + the routed iOS libraries)"
-          otool -l "$U" | grep -A2 LC_REEXPORT_DYLIB | grep ' name ' | sed -E 's/^ *name //; s/ \(offset.*//'
-          echo "umbrella plain dependencies (should be none):"
-          otool -l "$U" | grep -A2 -E 'LC_LOAD_DYLIB$' | grep ' name ' | sed -E 's/^ *name //; s/ \(offset.*//' || true
-          [ "$got" -eq "$want" ] || { echo "ERROR: umbrella is missing re-exports"; exit 1; }
+          names() { otool -l "$U" | grep -A2 -E "$1" | grep ' name ' | sed -E 's/^ *name //; s/ \(offset.*//' | sort; }
+          names 'LC_REEXPORT_DYLIB$' > build/umbrella-reexports.txt || true
+          { echo "@rpath/AppKitShimCore.framework/AppKitShimCore"; jq -r '.reexports[]' build/routes.json; } | sort > build/umbrella-expected.txt
+          echo "umbrella re-exports $(wc -l < build/umbrella-reexports.txt) of $(wc -l < build/umbrella-expected.txt) expected:"
+          cat build/umbrella-reexports.txt
+          missing=$(comm -23 build/umbrella-expected.txt build/umbrella-reexports.txt)
+          plain=$(names 'LC_LOAD_DYLIB$' || true)
+          [ -z "$plain" ] || { echo "ERROR: umbrella has plain dependencies:"; echo "$plain"; exit 1; }
+          [ -z "$missing" ] || { echo "ERROR: re-exports the linker did not write:"; echo "$missing"; exit 1; }
 
       - name: Verify the shim exports what only it can provide
         run: |

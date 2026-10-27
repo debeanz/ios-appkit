@@ -34,23 +34,36 @@ function iosPath(p) {
 // the rest are the sub-libraries it re-exports (libSystem inlines libsystem_c, _malloc, ...),
 // so every symbol in the file is reachable through the main install name. Also index each
 // file by where it sits: iOS install names aren't always the shallow guess (IOKit's is still
-// IOKit.framework/Versions/A/IOKit), so a library can be found by location too.
+// IOKit.framework/Versions/A/IOKit), so a library can be found by location too. A library
+// can also re-export others that live in their own .tbd (its reexported-libraries list:
+// CoreLocation -> _LocationEssentials), which dyld follows, so record those edges and
+// follow them transitively.
 function loadSdk(sdk) {
   const reach = new Map();  // main install name -> Set(canonical symbol)
   const tbdOf = new Map();  // main install name -> tbd path relative to the SDK
   const byFile = new Map(); // "/<dir>/<name>" (+ ".dylib" under usr/lib) -> main install name
+  const rexOf = new Map();  // main install name -> Set(install names it re-exports)
   const files = [...walk(path.join(sdk, 'System/Library/Frameworks')), ...walk(path.join(sdk, 'usr/lib'))];
   for (const f of files) {
     let text;
     try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
     const syms = new Set();
+    const rex = [];
     let main = null;
     try {
       if (text.trimStart().startsWith('{')) {
-        main = JSON.parse(text).main_library?.install_names?.[0]?.name || null;
+        const lib = JSON.parse(text).main_library || {};
+        main = lib.install_names?.[0]?.name || null;
+        for (const r of lib.reexported_libraries || []) rex.push(...(r.names || []));
         parseJson(text, (_, s) => syms.add(s));
       } else {
         main = (text.match(/install-name:\s*'?([^'\n]+)'?/) || [])[1] || null;
+        // The main document's top-level reexported-libraries block, up to the next key.
+        const first = text.split(/^---\s/m).find(d => /install-name:/.test(d)) || '';
+        const block = (first.match(/^reexported-libraries:([\s\S]*?)(?=^\S|(?![\s\S]))/m) || [])[1] || '';
+        for (const m of block.matchAll(/libraries:\s*\[([^\]]*)\]/g)) {
+          rex.push(...m[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean));
+        }
         parseYaml(text, (_, s) => syms.add(s));
       }
     } catch { continue; }
@@ -60,20 +73,50 @@ function loadSdk(sdk) {
     if (!reach.has(main)) {
       reach.set(main, new Set());
       tbdOf.set(main, rel);
+      rexOf.set(main, new Set());
     }
     for (const s of syms) reach.get(main).add(s);
+    for (const r of rex) rexOf.get(main).add(r.trim());
     const at = '/' + rel.replace(/\.tbd$/, '');
     if (!byFile.has(at)) byFile.set(at, main);
     if (at.startsWith('/usr/lib/') && !byFile.has(at + '.dylib')) byFile.set(at + '.dylib', main);
   }
-  const owners = new Map(); // canonical symbol -> [main install names]
+  const owners = new Map(); // canonical symbol -> [main install names that define it]
   for (const [lib, syms] of reach) for (const s of syms) {
     let o = owners.get(s);
     if (!o) owners.set(s, (o = []));
     o.push(lib);
   }
-  return { reach, tbdOf, byFile, owners };
+  // Everything a library re-exports, transitively (a cycle just stops early).
+  const under = new Map();
+  const reexportsOf = lib => {
+    if (under.has(lib)) return under.get(lib);
+    const out = new Set();
+    under.set(lib, out);
+    for (const r of rexOf.get(lib) || []) {
+      if (out.has(r)) continue;
+      out.add(r);
+      for (const x of reexportsOf(r)) out.add(x);
+    }
+    return out;
+  };
+  // Who re-exports a given library: the public route to a symbol whose definer is private.
+  const carriers = new Map();
+  for (const lib of reach.keys()) for (const u of reexportsOf(lib)) {
+    let c = carriers.get(u);
+    if (!c) carriers.set(u, (c = []));
+    c.push(lib);
+  }
+  // Can `lib` provide `sym` through two-level lookup (itself or anything it re-exports)?
+  const reaches = (lib, sym) =>
+    !!reach.get(lib)?.has(sym) || [...reexportsOf(lib)].some(r => reach.get(r)?.has(sym));
+  return { reach, tbdOf, byFile, owners, reexportsOf, carriers, reaches };
 }
+
+// Public libraries are ones a client may link: not a _Private.framework, a PrivateFramework,
+// or a /usr/lib/system piece of libSystem.
+const isPublic = lib => !/\/_[^/]*\.framework\//.test(lib) && !lib.includes('/PrivateFrameworks/') &&
+  !lib.startsWith('/usr/lib/system/');
 
 // The iOS library a macOS load path corresponds to, by its real install name: the path as
 // is, then its shallow form, each tried as an install name and then as a file location.
@@ -124,10 +167,12 @@ function route() {
   const imports = JSON.parse(fs.readFileSync(importsPath, 'utf8')).libraries;
   let runtime = {};
   try { runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8')).libraries || {}; } catch {}
-  const { reach, tbdOf, byFile, owners } = loadSdk(sdk);
+  const { reach, tbdOf, byFile, owners, reexportsOf, carriers, reaches } = loadSdk(sdk);
   console.log(`iOS SDK: ${reach.size} libraries indexed`);
 
-  const routes = {}, needFromShim = {}, reexports = new Set();
+  // Pass 1: each library's action, judged by what its iOS counterpart reaches through its
+  // own re-exports, exactly as dyld's two-level lookup would.
+  const routes = {}, needFromShim = {}, lackingOf = {}, reexports = new Set();
   const uses = systemLoadPaths(client);
   for (const p of [...uses.keys()].sort()) {
     const found = resolveIos(p, reach, byFile);
@@ -139,21 +184,39 @@ function route() {
     // What the library at the iOS path can't provide. Symbols the device has at runtime but
     // the SDK doesn't list still resolve when the real library is reached, so they only
     // count against a library that doesn't exist on iOS at all.
-    const lacking = syms.filter(s =>
-      !(present && (reach.get(ios).has(canon(s)) || atRuntime.has(s))));
+    const lacking = syms.filter(s => !(present && (reaches(ios, canon(s)) || atRuntime.has(s))));
     const action = present && lacking.length === 0 ? (ios === p ? 'keep' : 'flatten') : 'shim';
-    if (action === 'shim') {
-      if (present) reexports.add(ios);
-      const none = [];
-      for (const s of lacking) {
-        const o = owners.get(canon(s));
-        if (!o) { none.push(s); continue; }
-        // Prefer an owner already re-exported, so the set stays small.
-        reexports.add(o.find(l => reexports.has(l)) || o[0]);
-      }
-      if (none.length) needFromShim[p] = none;
-    }
+    // A shim-routed library that exists on iOS is forwarded whole by the umbrella.
+    if (action === 'shim' && present) reexports.add(ios);
+    lackingOf[p] = lacking;
     routes[p] = { action, to: action === 'shim' ? SHIM : ios, binaries: uses.get(p), imported: syms.length, lacking: lacking.length };
+  }
+
+  // Pass 2: for each symbol a shim-routed library lacks, make sure the umbrella reaches it:
+  // through what it already re-exports if possible, else by adding the library that defines
+  // it — or a public library that re-exports that one, since a private one can't be linked.
+  const covered = new Set();
+  const cover = lib => { covered.add(lib); for (const u of reexportsOf(lib)) covered.add(u); };
+  for (const r of reexports) cover(r);
+  for (const [p, r] of Object.entries(routes)) {
+    if (r.action !== 'shim') continue;
+    const none = [];
+    for (const s of lackingOf[p]) {
+      const defs = owners.get(canon(s));
+      if (!defs) { none.push(s); continue; }
+      if (defs.some(d => covered.has(d))) continue;
+      const candidates = [...defs, ...defs.flatMap(d => carriers.get(d) || [])];
+      const pick = candidates.find(isPublic) || candidates[0];
+      reexports.add(pick);
+      cover(pick);
+    }
+    if (none.length) needFromShim[p] = none;
+  }
+
+  // Drop a re-export another re-export already carries: the linker drops it anyway, and
+  // the umbrella check below compares names exactly.
+  for (const r of [...reexports]) {
+    if ([...reexports].some(o => o !== r && reexportsOf(o).has(r))) reexports.delete(r);
   }
 
   const reexportTbds = [...reexports].sort().map(l => tbdOf.get(l)).filter(Boolean);
