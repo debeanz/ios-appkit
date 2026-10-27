@@ -52,10 +52,22 @@ make test SDK=sim # build + link + run the smoke test
 make coverage     # regenerate COVERAGE.md from the import analysis
 ```
 
-No Mac on hand: push this folder to a repo and run the `appkit-shim` workflow in
-[`codemagic.yaml`](codemagic.yaml). It builds the static library for device and
-simulator, links the smoke test, and runs it on a booted simulator. No signing, no
-secrets, so it works on Codemagic's free tier.
+No Mac on hand: Codemagic runs [`ci.sh`](ci.sh) on every push (see
+[`codemagic.yaml`](codemagic.yaml)). It builds the static library for device and
+simulator, links the smoke test, runs it on a booted simulator, and posts the full log
+as a comment on the pushed commit. No signing, so it works on Codemagic's free tier.
+
+One-time setup:
+
+1. Sign in to [codemagic.io](https://codemagic.io) with GitHub and add this repo
+   (choose `codemagic.yaml` as the configuration).
+2. On GitHub, create a fine-grained personal access token limited to this repo,
+   with **Contents: Read and write**.
+3. In the Codemagic app, go to **Environment variables**, add `GITHUB_TOKEN` with that
+   token, mark it **Secret**, and put it in a group named `github`.
+
+After that, every push builds automatically and the log shows up on the commit:
+`gh api repos/debeanz/ios-appkit/commits/<sha>/comments`.
 
 ## Layout
 

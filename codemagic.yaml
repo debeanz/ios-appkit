@@ -1,6 +1,9 @@
-# Codemagic builds the shim on a real Mac and runs the smoke test on the arm64 simulator.
-# This gives a compile + link gate without a Mac on hand. Point a Codemagic app at this
-# repo and run the `appkit-shim` workflow; it needs no signing and no secrets.
+# Builds the shim on a Mac on every push, runs the smoke test on a simulator, and posts
+# the full build log as a comment on the pushed commit so it can be read with `gh`.
+#
+# One-time setup in Codemagic (see README): add this repo, then create an environment
+# variable group named `github` holding GITHUB_TOKEN, a fine-grained token for this repo
+# with "Contents: Read and write". Without it the build still runs; it just can't comment.
 workflows:
   appkit-shim:
     name: AppKitShim build + smoke test
@@ -8,26 +11,48 @@ workflows:
     max_build_duration: 30
     environment:
       xcode: latest
+      groups:
+        - github
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: '*'
+          include: true
+          source: true
+      cancel_previous_builds: true
     scripts:
-      - name: Coverage map is current
+      - name: Build and test
         script: |
-          node tools/gen-coverage.js ../steam-mac/report src/implemented.json COVERAGE.md coverage.json || \
-            echo "note: report dir not in this repo; skipping coverage regen"
-      - name: Build static lib (device arm64)
-        script: make SDK=device
-      - name: Build static lib (simulator arm64)
-        script: make SDK=sim
-      - name: Compile + link smoke test
-        script: make test SDK=sim
-      - name: Run smoke test on simulator
+          bash ci.sh > build.log 2>&1
+          echo $? > ci_status
+          cat build.log
+      - name: Post log to the commit
         script: |
-          set -e
-          UDID=$(xcrun simctl create akshim-test com.apple.CoreSimulator.SimDeviceType.iPhone-15 || true)
-          xcrun simctl boot "$UDID" || true
-          # The smoke test is a plain executable; run it under the simulator runtime.
-          xcrun simctl spawn "$UDID" build/sim/smoke || build/sim/smoke
-          xcrun simctl shutdown "$UDID" || true
+          python3 - <<'PY'
+          import json, os, urllib.request
+          token = os.environ.get("GITHUB_TOKEN", "")
+          sha = os.environ.get("CM_COMMIT", "")
+          repo = os.environ.get("CM_REPO_SLUG") or "debeanz/ios-appkit"
+          log = open("build.log", encoding="utf-8", errors="replace").read()
+          status = open("ci_status").read().strip()
+          if not token or not sha:
+              print("GITHUB_TOKEN or CM_COMMIT missing; not posting the log")
+              raise SystemExit(0)
+          if len(log) > 60000:  # GitHub comment limit is 65536
+              log = log[:5000] + "\n\n[... trimmed ...]\n\n" + log[-55000:]
+          body = f"codemagic build {os.environ.get('CM_BUILD_ID', '')} exit={status}\n\n```\n{log}\n```"
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/commits/{sha}/comments",
+              data=json.dumps({"body": body}).encode(),
+              headers={"Authorization": f"Bearer {token}",
+                       "Accept": "application/vnd.github+json"},
+              method="POST")
+          with urllib.request.urlopen(req) as r:
+              print("posted log comment:", r.status)
+          PY
+          exit "$(cat ci_status)"
     artifacts:
+      - build.log
       - build/**/libAppKitShim.a
-      - build/**/smoke
-      - COVERAGE.md
+      - build/sim/smoke
