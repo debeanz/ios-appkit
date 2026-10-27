@@ -16,6 +16,13 @@
 static UITextView *gLog;
 static NSMutableString *gBuf;
 
+// Path to Documents/launch.log — the log survives a crash only if it's on disk, so every
+// line is flushed there immediately (not just at the end).
+static NSString *logPath(void) {
+  NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+  return [docs stringByAppendingPathComponent:@"launch.log"];
+}
+
 static void hostlog(NSString *fmt, ...) {
   va_list ap; va_start(ap, fmt);
   NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -23,8 +30,13 @@ static void hostlog(NSString *fmt, ...) {
   NSLog(@"[host] %@", line);
   if (!gBuf) gBuf = [NSMutableString string];
   [gBuf appendFormat:@"%@\n", line];
+  // Flush the whole buffer to disk each time: if the very next dlopen kills the process,
+  // the log up to here is already on disk for pulling off the device.
+  [gBuf writeToFile:logPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  // Mirror to screen. The on-disk log above is the reliable record across a crash; this
+  // is the convenience view (fully populated if the probe runs to completion).
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (gLog) { gLog.text = gBuf; }
+    if (gLog) { gLog.text = gBuf; [gLog scrollRangeToVisible:NSMakeRange(gBuf.length, 0)]; }
   });
 }
 
@@ -80,11 +92,8 @@ static void bringUpClient(void) {
 
   hostlog(@"loaded images now:     %u", _dyld_image_count());
   hostlog(@"--- probe complete ---");
-
-  // Persist for pulling off the device.
-  NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-  [gBuf writeToFile:[docs stringByAppendingPathComponent:@"launch.log"]
-         atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  hostlog(@"log saved to: %@", logPath());
+  // Each line above was already flushed to that file, so it survives an earlier crash.
 }
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
