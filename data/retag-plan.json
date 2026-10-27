@@ -1,0 +1,1381 @@
+{
+ "root": "../steam-mac/client",
+ "shimInstallName": "@rpath/AppKitShim.framework/AppKitShim",
+ "counts": {
+  "binaries": 62,
+  "drop": 3,
+  "thin": 58,
+  "retag": 59,
+  "repointLoadCommands": 90
+ },
+ "repointByFramework": {
+  "ApplicationServices": 9,
+  "Cocoa": 17,
+  "AppKit": 17,
+  "Carbon": 12,
+  "OpenDirectory": 2,
+  "OpenGL": 10,
+  "Quartz": 2,
+  "IOBluetooth": 4,
+  "SecurityInterface": 2,
+  "ForceFeedback": 4,
+  "CoreWLAN": 2,
+  "ServiceManagement": 2,
+  "ScreenCaptureKit": 3,
+  "libcups": 2,
+  "libbsm": 2
+ },
+ "binaries": [
+  {
+   "file": "Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenDirectory.framework/Versions/A/OpenDirectory",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenDirectory",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Quartz.framework/Versions/A/Quartz",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Quartz",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/IOBluetooth.framework/Versions/A/IOBluetooth",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "IOBluetooth",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/SecurityInterface.framework/Versions/A/SecurityInterface",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "SecurityInterface",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ForceFeedback",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/CoreWLAN.framework/Versions/A/CoreWLAN",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "CoreWLAN",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ServiceManagement.framework/Versions/A/ServiceManagement",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ServiceManagement",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ScreenCaptureKit",
+     "weak": true
+    },
+    {
+     "from": "/usr/lib/libcups.2.dylib",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "libcups",
+     "weak": false
+    },
+    {
+     "from": "/usr/lib/libbsm.0.dylib",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "libbsm",
+     "weak": false
+    }
+   ],
+   "id": "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework"
+  },
+  {
+   "file": "Frameworks/Chromium Embedded Framework.framework/Versions/A/Chromium Embedded Framework",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenDirectory.framework/Versions/A/OpenDirectory",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenDirectory",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Quartz.framework/Versions/A/Quartz",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Quartz",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/IOBluetooth.framework/Versions/A/IOBluetooth",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "IOBluetooth",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/SecurityInterface.framework/Versions/A/SecurityInterface",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "SecurityInterface",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ForceFeedback",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/CoreWLAN.framework/Versions/A/CoreWLAN",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "CoreWLAN",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ServiceManagement.framework/Versions/A/ServiceManagement",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ServiceManagement",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ScreenCaptureKit",
+     "weak": true
+    },
+    {
+     "from": "/usr/lib/libcups.2.dylib",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "libcups",
+     "weak": false
+    },
+    {
+     "from": "/usr/lib/libbsm.0.dylib",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "libbsm",
+     "weak": false
+    }
+   ],
+   "id": "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework"
+  },
+  {
+   "file": "steamui.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ScreenCaptureKit",
+     "weak": true
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/steamui.dylib"
+  },
+  {
+   "file": "steamclient.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/IOBluetooth.framework/Versions/A/IOBluetooth",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "IOBluetooth",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/steamclient.dylib"
+  },
+  {
+   "file": "vgui2_s.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/vgui2_s.dylib"
+  },
+  {
+   "file": "Frameworks/Steam Helper.app/Contents/MacOS/libSDL3.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ForceFeedback",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/libSDL3.dylib"
+  },
+  {
+   "file": "gameoverlayui.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/gameoverlayui.dylib"
+  },
+  {
+   "file": "libSDL3.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ForceFeedback",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/libSDL3.dylib"
+  },
+  {
+   "file": "chromehtml.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/chromehtml.dylib"
+  },
+  {
+   "file": "gameoverlayrenderer.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/gameoverlayrenderer.dylib"
+  },
+  {
+   "file": "gameoverlayui",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "steamclean",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "streaming_client",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/IOBluetooth.framework/Versions/A/IOBluetooth",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "IOBluetooth",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "Frameworks/Chromium Embedded Framework.framework/Versions/A/Libraries/libGLESv2.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    }
+   ],
+   "id": "./libGLESv2.dylib"
+  },
+  {
+   "file": "Frameworks/Chromium Embedded Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ],
+   "id": "@rpath/libvk_swiftshader.dylib"
+  },
+  {
+   "file": "Frameworks/Steam Helper.app/Contents/MacOS/Steam Helper",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "friendsui.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "OpenGL",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/friendsui.dylib"
+  },
+  {
+   "file": "steam_osx",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    },
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "filesystem_stdio.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/filesystem_stdio.dylib"
+  },
+  {
+   "file": "Frameworks/Breakpad.framework/Breakpad",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/Frameworks/Breakpad.framework/Versions/A/Breakpad"
+  },
+  {
+   "file": "Frameworks/Breakpad.framework/Versions/A/Breakpad",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/Frameworks/Breakpad.framework/Versions/A/Breakpad"
+  },
+  {
+   "file": "Frameworks/Breakpad.framework/Versions/A/Resources/breakpadUtilities.dylib",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Carbon",
+     "weak": false
+    }
+   ],
+   "id": "@executable_path/../Frameworks/Breakpad.framework/Resources/breakpadUtilities.dylib"
+  },
+  {
+   "file": "Frameworks/Breakpad.framework/Versions/A/Resources/crash_report_sender.app/Contents/MacOS/crash_report_sender",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "AppKit",
+     "weak": false
+    }
+   ]
+  },
+  {
+   "file": "libSDL3_ttf.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "ApplicationServices",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/libSDL3_ttf.dylib"
+  },
+  {
+   "file": "libvideo.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [
+    {
+     "from": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "to": "@rpath/AppKitShim.framework/AppKitShim",
+     "framework": "Cocoa",
+     "weak": false
+    }
+   ],
+   "id": "@loader_path/libvideo.dylib"
+  },
+  {
+   "file": "bin/hardwareupdater/hardwareupdater.macos.arm",
+   "archs": [
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": false,
+   "retag": true,
+   "repoint": []
+  },
+  {
+   "file": "bin/hardwareupdater/hardwareupdater.macos.x86_64",
+   "archs": [
+    "x86_64"
+   ],
+   "drop": true,
+   "reason": "x86_64-only, no arm64 slice"
+  },
+  {
+   "file": "crashhandler.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/crashhandler.dylib"
+  },
+  {
+   "file": "Frameworks/Breakpad.framework/Versions/A/Resources/Inspector",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": []
+  },
+  {
+   "file": "Frameworks/Chromium Embedded Framework.framework/Versions/A/Libraries/libEGL.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "./libEGL.dylib"
+  },
+  {
+   "file": "Frameworks/Steam Helper.app/Contents/MacOS/libsteam_api.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libsteam_api.dylib"
+  },
+  {
+   "file": "Frameworks/Steam Helper.app/Contents/MacOS/libtier0_s.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libtier0_s.dylib"
+  },
+  {
+   "file": "Frameworks/Steam Helper.app/Contents/MacOS/libvstdlib_s.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libvstdlib_s.dylib"
+  },
+  {
+   "file": "gameoverlayrenderer32.dylib",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "overlaystub.arm64"
+  },
+  {
+   "file": "ipcserver",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": []
+  },
+  {
+   "file": "libaom.3.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libaom.3.dylib"
+  },
+  {
+   "file": "libaudio.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libaudio.dylib"
+  },
+  {
+   "file": "libavcodec.62.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libavcodec.62.dylib"
+  },
+  {
+   "file": "libavfilter.11.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libavfilter.11.dylib"
+  },
+  {
+   "file": "libavformat.62.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libavformat.62.dylib"
+  },
+  {
+   "file": "libavif.16.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libavif.16.dylib"
+  },
+  {
+   "file": "libavutil.60.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libavutil.60.dylib"
+  },
+  {
+   "file": "libdav1d.6.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libdav1d.6.dylib"
+  },
+  {
+   "file": "libogg.0.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libogg.0.dylib"
+  },
+  {
+   "file": "libopenvr_api.dylib",
+   "archs": [
+    "x86_64"
+   ],
+   "drop": true,
+   "reason": "x86_64-only, no arm64 slice"
+  },
+  {
+   "file": "libpng16.16.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libpng16.16.dylib"
+  },
+  {
+   "file": "libpyrowave-metal.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libpyrowave-metal.dylib"
+  },
+  {
+   "file": "libSDL3_image.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libSDL3_image.dylib"
+  },
+  {
+   "file": "libsteaminput.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libsteaminput.dylib"
+  },
+  {
+   "file": "libsteamwebrtc.dylib",
+   "archs": [
+    "x86_64"
+   ],
+   "drop": true,
+   "reason": "x86_64-only, no arm64 slice"
+  },
+  {
+   "file": "libswresample.6.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libswresample.6.dylib"
+  },
+  {
+   "file": "libswscale.9.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libswscale.9.dylib"
+  },
+  {
+   "file": "libtier0_s.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libtier0_s.dylib"
+  },
+  {
+   "file": "libusb-1.0.0.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libusb-1.0.0.dylib"
+  },
+  {
+   "file": "libvorbis.0.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libvorbis.0.dylib"
+  },
+  {
+   "file": "libvorbisenc.2.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libvorbisenc.2.dylib"
+  },
+  {
+   "file": "libvorbisfile.3.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libvorbisfile.3.dylib"
+  },
+  {
+   "file": "libvstdlib_s.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/libvstdlib_s.dylib"
+  },
+  {
+   "file": "steamloader.dylib",
+   "archs": [
+    "0x7",
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "drmstub.arm64"
+  },
+  {
+   "file": "steamservice.dylib",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "dylib",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": [],
+   "id": "@loader_path/steamservice.dylib"
+  },
+  {
+   "file": "steamsysinfo",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": []
+  },
+  {
+   "file": "steam_monitor",
+   "archs": [
+    "x86_64",
+    "arm64"
+   ],
+   "kind": "executable",
+   "platform": "macOS",
+   "thin": true,
+   "retag": true,
+   "repoint": []
+  }
+ ]
+}
