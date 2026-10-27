@@ -338,8 +338,9 @@ int main(int argc, const char *argv[]) {
 
     // Appearance follows light/dark and resolves a best match.
     NSAppearance *dark = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-    CHECK([[dark bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]]
-            isEqualToString:NSAppearanceNameDarkAqua], "dark appearance picks the dark match");
+    NSArray *choices = @[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ];
+    CHECK([[dark bestMatchFromAppearancesWithNames:choices] isEqualToString:NSAppearanceNameDarkAqua],
+          "dark appearance picks the dark match");
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];

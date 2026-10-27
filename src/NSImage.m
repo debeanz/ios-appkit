@@ -178,7 +178,7 @@ static CFStringRef AKUTTypeForFileType(NSBitmapImageFileType type) {
 - (void)lockFocus {
   CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
   _focusContext = CGBitmapContextCreate(NULL, MAX(1, (size_t)_size.width), MAX(1, (size_t)_size.height),
-                                        8, 0, cs, kCGImageAlphaPremultipliedLast);
+                                        8, 0, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
   CGColorSpaceRelease(cs);
   [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithCGContext:_focusContext flipped:NO]];
 }
