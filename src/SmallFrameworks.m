@@ -31,9 +31,13 @@ CFArrayRef CTFontCollectionCreateMatchingFontDescriptorsForFamily(CTFontCollecti
   return matching;
 }
 
-CGFontRef CTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef *descriptor) {
+// Returns an ATS font reference (a 32-bit number); ATS doesn't exist on iOS, so there's never
+// one: 0, with the font's descriptor as the out-attribute. Named through an asm label because
+// the iOS header already declares this function as unavailable.
+uint32_t AKCTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef *descriptor) __asm__("_CTFontGetPlatformFont");
+uint32_t AKCTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef *descriptor) {
   if (descriptor) *descriptor = font ? CTFontCopyFontDescriptor(font) : NULL;
-  return font ? CTFontCopyGraphicsFont(font, NULL) : NULL;
+  return 0;
 }
 
 #pragma mark QuartzCore

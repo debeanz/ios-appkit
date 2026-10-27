@@ -10,6 +10,7 @@
 
 #pragma mark Metal — external GPU removal (never happens on iOS)
 
+typedef NSString *MTLDeviceNotificationName; // macOS-only in Metal's headers
 typedef void (^MTLDeviceNotificationHandler)(id<MTLDevice> device, MTLDeviceNotificationName name);
 extern MTLDeviceNotificationName const MTLDeviceWasRemovedNotification;
 extern MTLDeviceNotificationName const MTLDeviceRemovalRequestedNotification;
@@ -18,10 +19,11 @@ extern NSArray<id<MTLDevice>> *MTLCopyAllDevicesWithObserver(id<NSObject> *obser
 
 #pragma mark CoreText
 
-// Font families and the platform font, answered from the iOS CoreText that exists.
+// Font families, answered from the iOS CoreText that exists.
 extern CFArrayRef CTFontCollectionCreateMatchingFontDescriptorsForFamily(CTFontCollectionRef collection,
                                                                          CFStringRef familyName, CFDictionaryRef options) CF_RETURNS_RETAINED;
-extern CGFontRef CTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef *descriptor);
+// CTFontGetPlatformFont is declared (unavailable) by iOS CoreText itself, returning an ATS
+// font reference; SmallFrameworks.m defines it under that exact symbol and returns 0 (none).
 
 #pragma mark QuartzCore — CAOpenGLLayer (no desktop GL on iOS)
 
