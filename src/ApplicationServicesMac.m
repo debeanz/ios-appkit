@@ -320,7 +320,7 @@ OSStatus PMSetDuplex(PMPrintSettings s, PMDuplexMode duplex) { if (!s) return kP
 
 // No printer exists, so printer handles can't be made and sessions report no default printer.
 OSStatus PMPrinterCreateFromPrinterID(CFStringRef printerID, PMPrinter *printer) { if (printer) *printer = NULL; return kPMInvalidPrinter; }
-CFStringRef PMPrinterGetID(PMPrinter printer) { return printer ? (CFStringRef)AKPM(printer).values[@"id"] : NULL; }
+CFStringRef PMPrinterGetID(PMPrinter printer) { return printer ? (__bridge CFStringRef)AKPM(printer).values[@"id"] : NULL; }
 OSStatus PMPrinterGetPaperList(PMPrinter printer, CFArrayRef *paperList) { if (paperList) *paperList = NULL; return kPMInvalidPrinter; }
 OSStatus PMPrinterGetPrinterResolutionCount(PMPrinter printer, UInt32 *count) { if (count) *count = 0; return kPMInvalidPrinter; }
 OSStatus PMPrinterGetIndexedPrinterResolution(PMPrinter printer, UInt32 index, PMResolution *resolution) { return kPMInvalidPrinter; }
