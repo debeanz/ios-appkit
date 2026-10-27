@@ -1,0 +1,15 @@
+# Native macOS Steam client packages needed for the iOS port.
+# Manifest: steam_client_osx version 1792618285 (ostype macos1015).
+# Columns: <name> <cdn-file> <sha256-of-zip>
+# fetch-client.sh downloads each from https://client-update.steamstatic.com/<cdn-file>,
+# verifies the sha256, and unzips it into the client dir. The hashes ARE the version pin
+# (the packages are content-addressed), so this reproduces the exact client that was analyzed.
+bins_osx bins_osx.zip.dc1e26e3e2a8c20701c770661b1d7f83da8b7a6c 270aafcd50893623534031f2a3d01572ff5e79afc188d0e113c50a1deb4d09bb
+steam_osx steam_osx.zip.03c9455fff7adaa51bab8af7a82fdf238b374440 c6dfa393fdba1ecc71eb8398c6ca8085453da54361c309c6ce27512bcefb4faa
+bins_client_osx bins_client_osx.zip.8494317737a1ee5eeb237e8defb24902dfe799a1 a33530b9c07c20fa56969ba8d83897019d2ef9c41b2c70a210fcdddb36edb4cb
+bins_codecs_osx bins_codecs_osx.zip.a801525026ce14d08761beadf7942eeaaeb3ec15 19ae7082312cecd649ec8e799a2286967f7222d5e43f339d9ef51f94c2aa295f
+bins_misc_osx bins_misc_osx.zip.7450dcbc9ce6066dd102f5ec175cea2ff4c89144 bb9ba9579676a61cc0a4bec476d85a14b364ca129ea0f94cc19dcaa466de871e
+bins_hardware_osx bins_hardware_osx.zip.eae152dcb7741402ff27db47723aa3fafac36e23 aba27c2ec14ebfd3aabb87cd22af6cdaff5554e96c493d455c8e4b8642518e65
+sdl3_osx sdl3_osx.zip.4ff63651b6921848bd4d2ebe6328e440213ea291 fddcfabc36c3aa0076524fad1d0c1a5b8f5460ec680897562d48d26a8ba9848b
+webhelpers_osx webhelpers_osx.zip.8d2c32f9c8707203cba5db754b814e2803f3e971 a0f1b8c87f2c3cdb8784ed8731683e73956bd5d921b54e08af4771684a418756
+webkit_osx webkit_osx.zip.0a26f91b0d7aaa6b9410de4b0050370e4193afd8 9c3957a340ecdc0338229fca1d2994f1c7ea76204ed9bf744598969f09bface9
