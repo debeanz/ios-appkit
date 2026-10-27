@@ -6,7 +6,7 @@
 
 #pragma mark Input state, recorded from every event NSApp delivers
 
-static const int AKTypeSlots = 32;
+enum { AKTypeSlots = 32 }; // a constant, so the state arrays below aren't variable-length
 static CFAbsoluteTime gLastTime[AKTypeSlots];
 static uint32_t gCount[AKTypeSlots];
 static NSMutableIndexSet *gKeysDown;

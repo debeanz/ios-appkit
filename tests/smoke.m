@@ -536,6 +536,14 @@ int main(int argc, const char *argv[]) {
     CGDisplayFadeReservationToken fadeToken = 1;
     CHECK(CGAcquireDisplayFadeReservation(1, &fadeToken) != kCGErrorSuccess && fadeToken == 0, "no display fades");
 
+    // Apple Event descriptors build and read back (nothing is dispatched on iOS).
+    NSAppleEventDescriptor *list = [NSAppleEventDescriptor listDescriptor];
+    [list insertDescriptor:[NSAppleEventDescriptor descriptorWithString:@"one"] atIndex:0];
+    [list insertDescriptor:[NSAppleEventDescriptor descriptorWithInt32:42] atIndex:0];
+    CHECK(list.numberOfItems == 2, "list descriptor holds its items");
+    CHECK([[list descriptorAtIndex:1].stringValue isEqualToString:@"one"] && [list descriptorAtIndex:2].int32Value == 42, "descriptor values read back");
+    CHECK([NSAppleEventManager.sharedAppleEventManager currentAppleEvent] == nil, "no Apple Event is current on iOS");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

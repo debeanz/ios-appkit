@@ -72,7 +72,11 @@
     "NSCustomTouchBarItem",
     "NSGroupTouchBarItem",
     "NSCandidateListTouchBarItem",
-    "NSAccessibilityElement"
+    "NSAccessibilityElement",
+    "NSUserNotification",
+    "NSUserNotificationCenter",
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager"
   ],
   "functions": [
     "NSBeep",
@@ -513,6 +517,9 @@
     "NSAccessibilityRemoteUIElement",
     "NSOpenGLPixelFormat",
     "NSOpenGLContext",
-    "NSOpenGLView"
+    "NSOpenGLView",
+    "NSScriptClassDescription",
+    "NSScriptCommand",
+    "NSUniqueIDSpecifier"
   ]
 }

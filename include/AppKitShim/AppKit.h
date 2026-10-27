@@ -31,6 +31,7 @@
 #import "NSFontManager.h"
 #import "NSServices.h"
 #import "NSWidgets.h"
+#import "FoundationMac.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"
