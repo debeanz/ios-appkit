@@ -3,7 +3,7 @@
 A clean-room, from-scratch subset of macOS **AppKit** for iOS, built on UIKit and Metal.
 
 It exists because the macOS Steam client (and the Chromium framework it renders Big
-Picture with) imports **865** system symbols that iOS doesn't provide, and **362 of
+Picture with) imports **843** system symbols that iOS doesn't provide, and **362 of
 those are AppKit** — the single biggest obstacle to running the native Mac client on an
 iPhone. This library is the stand-in for that layer. It contains none of Valve's or
 Apple's code; it reimplements those APIs against the iOS frameworks that do exist.
@@ -18,7 +18,7 @@ the live map (generated, not hand-written).
 
 ## Status
 
-**145 of 865 symbols implemented.** Carbon (42/42) and CoreVideo (10/10) are complete;
+**145 of 843 symbols implemented.** Carbon (42/42) and CoreVideo (10/10) are complete;
 AppKit is at 51 of 362, CoreGraphics at 39 of 103. This is a foundation, not a finished
 layer. What's here:
 
@@ -72,7 +72,7 @@ Not yet: IME composition (marked text for CJK input), drag and drop, context men
   dynamically, so the hundreds of messages CEF sends to `NSView`/`NSWindow`/`NSEvent`
   don't show up as undefined symbols — only the class references do. Making the layer
   *behave* like AppKit (live resize, text input, the event loop CEF's compositor
-  expects) is most of the real effort and isn't captured by "145/865".
+  expects) is most of the real effort and isn't captured by "145/843".
 - **The 704 CEF symbols are the mountain.** Chromium is the hardest consumer: it pokes
   at private AppKit internals and expects a real NSView hierarchy and event stream. The
   other consumers (SDL3, `steamui`, `steamclient`) are far smaller and more mechanical.

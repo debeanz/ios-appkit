@@ -1,0 +1,41 @@
+{
+  "libraries" : {
+    "\/usr\/lib\/libSystem.B.dylib" : {
+      "presentAtRuntime" : [
+        "_pthread_jit_write_protect_np"
+      ],
+      "framework" : "libSystem.B"
+    },
+    "\/System\/Library\/Frameworks\/AuthenticationServices.framework\/Versions\/A\/AuthenticationServices" : {
+      "presentAtRuntime" : [
+        "_ASAuthorizationPublicKeyCredentialAttestationKindNone",
+        "_ASAuthorizationPublicKeyCredentialUserVerificationPreferenceDiscouraged",
+        "_ASAuthorizationPublicKeyCredentialUserVerificationPreferencePreferred",
+        "_ASAuthorizationPublicKeyCredentialUserVerificationPreferenceRequired",
+        "_ASWebAuthenticationSessionErrorDomain",
+        "_OBJC_CLASS_$_ASAuthorizationController",
+        "_OBJC_CLASS_$_ASAuthorizationPlatformPublicKeyCredentialDescriptor",
+        "_OBJC_CLASS_$_ASAuthorizationPlatformPublicKeyCredentialProvider",
+        "_OBJC_CLASS_$_ASAuthorizationWebBrowserPublicKeyCredentialManager",
+        "_OBJC_METACLASS_$_ASAuthorizationController"
+      ],
+      "framework" : "AuthenticationServices"
+    },
+    "\/System\/Library\/Frameworks\/ApplicationServices.framework\/Versions\/A\/ApplicationServices" : {
+      "presentAtRuntime" : [
+        "_AXObserverAddNotification",
+        "_AXObserverGetRunLoopSource",
+        "_AXUIElementCopyAttributeValue",
+        "_AXUIElementCopyParameterizedAttributeValue",
+        "_AXUIElementGetTypeID",
+        "_AXUIElementPerformAction",
+        "_AXUIElementSetAttributeValue",
+        "_AXValueCreate",
+        "_AXValueGetType",
+        "_AXValueGetTypeID",
+        "_AXValueGetValue"
+      ],
+      "framework" : "ApplicationServices"
+    }
+  }
+}
