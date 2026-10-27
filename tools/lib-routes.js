@@ -32,10 +32,13 @@ function iosPath(p) {
 
 // Index the SDK one .tbd file at a time. A file's first document is the library itself and
 // the rest are the sub-libraries it re-exports (libSystem inlines libsystem_c, _malloc, ...),
-// so every symbol in the file is reachable through the main install name.
+// so every symbol in the file is reachable through the main install name. Also index each
+// file by where it sits: iOS install names aren't always the shallow guess (IOKit's is still
+// IOKit.framework/Versions/A/IOKit), so a library can be found by location too.
 function loadSdk(sdk) {
   const reach = new Map();  // main install name -> Set(canonical symbol)
   const tbdOf = new Map();  // main install name -> tbd path relative to the SDK
+  const byFile = new Map(); // "/<dir>/<name>" (+ ".dylib" under usr/lib) -> main install name
   const files = [...walk(path.join(sdk, 'System/Library/Frameworks')), ...walk(path.join(sdk, 'usr/lib'))];
   for (const f of files) {
     let text;
@@ -53,11 +56,15 @@ function loadSdk(sdk) {
     } catch { continue; }
     if (!main) continue;
     main = main.trim();
+    const rel = path.relative(sdk, f).split(path.sep).join('/');
     if (!reach.has(main)) {
       reach.set(main, new Set());
-      tbdOf.set(main, path.relative(sdk, f).split(path.sep).join('/'));
+      tbdOf.set(main, rel);
     }
     for (const s of syms) reach.get(main).add(s);
+    const at = '/' + rel.replace(/\.tbd$/, '');
+    if (!byFile.has(at)) byFile.set(at, main);
+    if (at.startsWith('/usr/lib/') && !byFile.has(at + '.dylib')) byFile.set(at + '.dylib', main);
   }
   const owners = new Map(); // canonical symbol -> [main install names]
   for (const [lib, syms] of reach) for (const s of syms) {
@@ -65,7 +72,17 @@ function loadSdk(sdk) {
     if (!o) owners.set(s, (o = []));
     o.push(lib);
   }
-  return { reach, tbdOf, owners };
+  return { reach, tbdOf, byFile, owners };
+}
+
+// The iOS library a macOS load path corresponds to, by its real install name: the path as
+// is, then its shallow form, each tried as an install name and then as a file location.
+function resolveIos(p, reach, byFile) {
+  for (const c of new Set([p, iosPath(p)])) {
+    if (reach.has(c)) return c;
+    if (byFile.has(c)) return byFile.get(c);
+  }
+  return null;
 }
 
 function walkFiles(dir, out = []) {
@@ -107,14 +124,16 @@ function route() {
   const imports = JSON.parse(fs.readFileSync(importsPath, 'utf8')).libraries;
   let runtime = {};
   try { runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8')).libraries || {}; } catch {}
-  const { reach, tbdOf, owners } = loadSdk(sdk);
+  const { reach, tbdOf, byFile, owners } = loadSdk(sdk);
   console.log(`iOS SDK: ${reach.size} libraries indexed`);
 
   const routes = {}, needFromShim = {}, reexports = new Set();
   const uses = systemLoadPaths(client);
   for (const p of [...uses.keys()].sort()) {
-    const ios = iosPath(p);
-    const present = reach.has(ios);
+    const found = resolveIos(p, reach, byFile);
+    const present = !!found;
+    const ios = found || iosPath(p);
+    if (found && found !== p && found !== iosPath(p)) console.log(`note: ${p} is ${found} on iOS`);
     const syms = (imports[p] && imports[p].symbols) || [];
     const atRuntime = new Set((runtime[p] && runtime[p].presentAtRuntime) || []);
     // What the library at the iOS path can't provide. Symbols the device has at runtime but

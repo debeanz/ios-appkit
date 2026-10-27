@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Assemble the unsigned Steam.app IPA.
 #
-#   tools/package-ipa.sh <client-dir> <shim-framework-dir> <host-binary> <out.ipa> [routes.json]
+#   tools/package-ipa.sh <client-dir> <frameworks-dir> <host-binary> <out.ipa> [routes.json]
 #
-# Takes the reconstructed macOS client (fetch-client.sh), the built AppKitShim.framework
-# (make framework SDK=device), and the built iOS host executable, and produces an unsigned
+# Takes the reconstructed macOS client (fetch-client.sh), a directory holding the shim's
+# built frameworks (make umbrella SDK=device: AppKitShim.framework, the umbrella Steam's
+# load commands point at, and AppKitShimCore.framework, the code it re-exports; every
+# *.framework there is embedded), and the built iOS host executable, and produces an unsigned
 # .ipa. The heavy lifting is the Mach-O surgery, driven by retag-plan.json (regenerated
 # here from this exact client): every client binary is thinned to arm64, its platform
 # retagged macOS->iOS, and every system load command rewritten — to its shallow iOS path,
@@ -19,8 +21,8 @@ set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
-CLIENT="${1:?usage: package-ipa.sh <client-dir> <shim-framework-dir> <host-binary> <out.ipa> [routes.json]}"
-SHIM_FW="${2:?missing shim framework dir}"
+CLIENT="${1:?usage: package-ipa.sh <client-dir> <frameworks-dir> <host-binary> <out.ipa> [routes.json]}"
+FW_DIR="${2:?missing frameworks dir}"
 HOST="${3:?missing host binary}"
 OUT="${4:?missing out.ipa}"
 ROUTES="${5:-}"
@@ -60,8 +62,11 @@ flatten_frameworks "$app/client"
 # The iOS host executable is the bundle's main binary.
 cp "$HOST" "$app/Steam"; chmod +x "$app/Steam"
 cp "$repo/host/Info.plist" "$app/Info.plist"
-# Embed the shim; every binary finds it through an @loader_path rpath to this directory.
-cp -R "$SHIM_FW" "$app/Frameworks/AppKitShim.framework"
+# Embed the shim frameworks; every binary finds them through an @loader_path rpath here.
+for fw in "$FW_DIR"/*.framework; do
+  [ -d "$fw" ] && cp -R "$fw" "$app/Frameworks/" && echo "  embedded Frameworks/$(basename "$fw")"
+done
+[ -d "$app/Frameworks/AppKitShim.framework" ] || { echo "ERROR: no AppKitShim.framework in $FW_DIR"; exit 1; }
 echo "laid out $(du -sh "$app" | cut -f1) in Steam.app"
 
 echo "=== Plan the surgery (retag-plan over the bundled client) ==="

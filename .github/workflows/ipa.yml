@@ -41,14 +41,21 @@ jobs:
           node tools/lib-routes.js client "$(xcrun --sdk iphoneos --show-sdk-path)" \
             data/imports.json data/runtime-gap.json build/routes.json
 
-      - name: Build the shim framework (device), re-exporting the routed iOS libraries
+      - name: Build the shim (AppKitShimCore) and its re-export umbrella (AppKitShim)
         run: |
-          make framework SDK=device REEXPORT_TBDS="$(jq -r '.reexportTbds | join(" ")' build/routes.json)"
-          echo "LC_REEXPORT_DYLIB in the shim: $(otool -l build/device/AppKitShim.framework/AppKitShim | grep -c LC_REEXPORT_DYLIB)"
+          make umbrella SDK=device REEXPORT_TBDS="$(jq -r '.reexportTbds | join(" ")' build/routes.json)"
+          U=build/device/AppKitShim.framework/AppKitShim
+          want=$(( $(jq '.reexportTbds | length' build/routes.json) + 1 ))
+          got=$(otool -l "$U" | grep -c LC_REEXPORT_DYLIB)
+          echo "umbrella re-exports $got (expected $want: AppKitShimCore + the routed iOS libraries)"
+          otool -l "$U" | grep -A2 LC_REEXPORT_DYLIB | grep ' name ' | sed -E 's/^ *name //; s/ \(offset.*//'
+          echo "umbrella plain dependencies (should be none):"
+          otool -l "$U" | grep -A2 -E 'LC_LOAD_DYLIB$' | grep ' name ' | sed -E 's/^ *name //; s/ \(offset.*//' || true
+          [ "$got" -eq "$want" ] || { echo "ERROR: umbrella is missing re-exports"; exit 1; }
 
       - name: Verify the shim exports what only it can provide
         run: |
-          nm -gU build/device/AppKitShim.framework/AppKitShim > build/shim-exports.txt
+          nm -gU build/device/AppKitShimCore.framework/AppKitShimCore > build/shim-exports.txt
           node tools/lib-routes.js --verify build/routes.json build/shim-exports.txt
 
       - name: Build the iOS host executable
@@ -62,7 +69,7 @@ jobs:
           file build/Steam
 
       - name: Package the unsigned IPA
-        run: bash tools/package-ipa.sh client build/device/AppKitShim.framework build/Steam dist/Steam-unsigned.ipa build/routes.json
+        run: bash tools/package-ipa.sh client build/device build/Steam dist/Steam-unsigned.ipa build/routes.json
 
       - name: Upload the IPA
         uses: actions/upload-artifact@v4

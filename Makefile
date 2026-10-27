@@ -35,15 +35,19 @@ SHIM_FRAMEWORKS := -framework UIKit -framework Foundation -framework CoreFoundat
   -framework AuthenticationServices -framework SafariServices -framework GameController \
   -framework SystemConfiguration -framework Network -framework Accelerate \
   -framework VideoToolbox -framework UniformTypeIdentifiers
-FRAMEWORK := $(BUILD)/AppKitShim.framework
+# Name of the framework 'make framework' builds. The IPA build names the code
+# AppKitShimCore and puts the AppKitShim umbrella (below) in front of it.
+SHIM_NAME ?= AppKitShim
+FRAMEWORK := $(BUILD)/$(SHIM_NAME).framework
 
-# iOS libraries the shim re-exports, as .tbd paths relative to the SDK (lib-routes.js
+# iOS libraries the umbrella re-exports, as .tbd paths relative to the SDK (lib-routes.js
 # writes them to routes.json as reexportTbds). Steam's load commands for a library that is
-# missing macOS-only symbols are pointed at the shim; re-exporting the real iOS library
+# missing macOS-only symbols are pointed at the umbrella; re-exporting the real iOS library
 # keeps every other symbol reachable through it, the way Cocoa re-exports AppKit on a Mac.
-# Empty (the per-push build) gives the plain shim.
 REEXPORT_TBDS ?=
 REEXPORT_FLAGS := $(foreach t,$(REEXPORT_TBDS),-Wl,-reexport_library,$(SYSROOT)/$(t))
+CORE_NAME := AppKitShimCore
+UMBRELLA := $(BUILD)/AppKitShim.framework
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -70,12 +74,30 @@ test: $(LIB)
 # src tags with asm labels; that export set is exactly what package-ipa.sh repoints to.
 framework: $(OBJS)
 	mkdir -p $(FRAMEWORK)
-	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/AppKitShim.framework/AppKitShim \
+	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/$(SHIM_NAME).framework/$(SHIM_NAME) \
 	  -compatibility_version 1.0 -current_version 1.0 \
-	  $(OBJS) $(SHIM_FRAMEWORKS) $(REEXPORT_FLAGS) -undefined dynamic_lookup \
-	  -o $(FRAMEWORK)/AppKitShim
-	cp framework/Info.plist $(FRAMEWORK)/Info.plist
-	@echo "built $(FRAMEWORK)/AppKitShim"
+	  $(OBJS) $(SHIM_FRAMEWORKS) -undefined dynamic_lookup \
+	  -o $(FRAMEWORK)/$(SHIM_NAME)
+	sed 's/AppKitShim/$(SHIM_NAME)/g' framework/Info.plist > $(FRAMEWORK)/Info.plist
+	@echo "built $(FRAMEWORK)/$(SHIM_NAME)"
+
+# The IPA's routing target: AppKitShim.framework with no code of its own, only re-exports —
+# the shim's code (built as AppKitShimCore) plus the real iOS libraries in REEXPORT_TBDS.
+# It is kept apart from the code because a library the linker also links plainly (the
+# code's -framework list, autolinked modules, the driver's implicit -lSystem) ends up a
+# plain dependency instead of a re-export; -nostdlib on an empty source leaves nothing but
+# the re-exports. @loader_path/.. is the app's Frameworks dir, where AppKitShimCore sits.
+umbrella:
+	$(MAKE) framework SHIM_NAME=$(CORE_NAME)
+	mkdir -p $(UMBRELLA)
+	$(CC) -isysroot $(SYSROOT) -target $(TARGET) -dynamiclib -nostdlib \
+	  -install_name @rpath/AppKitShim.framework/AppKitShim \
+	  -compatibility_version 1.0 -current_version 1.0 -Wl,-rpath,@loader_path/.. \
+	  -x c /dev/null \
+	  -Wl,-reexport_library,$(BUILD)/$(CORE_NAME).framework/$(CORE_NAME) $(REEXPORT_FLAGS) \
+	  -o $(UMBRELLA)/AppKitShim
+	cp framework/Info.plist $(UMBRELLA)/Info.plist
+	@echo "built $(UMBRELLA)/AppKitShim (re-exports $(CORE_NAME) + $(words $(REEXPORT_TBDS)) iOS libraries)"
 
 coverage:
 	node tools/gen-coverage.js data/ios-gap.json src/implemented.json COVERAGE.md coverage.json
@@ -83,4 +105,4 @@ coverage:
 clean:
 	rm -rf build
 
-.PHONY: all test framework coverage clean
+.PHONY: all test framework umbrella coverage clean

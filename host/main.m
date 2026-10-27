@@ -77,6 +77,9 @@ static void bringUpClient(void) {
 
   // The shim first, so its macOS symbols are in the global pool (RTLD_GLOBAL) before any
   // Steam dylib that was repointed to it resolves.
+  // The code first, then the umbrella in front of it that Steam's load commands point at
+  // (it re-exports the code plus the real iOS libraries), so a failure names the layer.
+  probe(@"AppKitShimCore.framework", inApp(@"Frameworks/AppKitShimCore.framework/AppKitShimCore"));
   probe(@"AppKitShim.framework", inApp(@"Frameworks/AppKitShim.framework/AppKitShim"));
 
   // Core Valve runtime, then the client, in rough dependency order. The Steam payload is
