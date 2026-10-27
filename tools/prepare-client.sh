@@ -35,3 +35,14 @@ done
 # Breakpad treats a missing Inspector as "crash reporting off" rather than failing.
 rm -rf "$root/Frameworks/Breakpad.framework/Resources/crash_report_sender.app" \
        "$root/Frameworks/Breakpad.framework/Resources/Inspector"
+
+# Steam's own switches (steam.cfg, read from the client directory) for a client that must
+# never update itself or check its files: an update would replace the patched binaries with
+# stock Mac ones. The host's launch flags say the same; this also covers the client's own
+# updater.
+cat > "$root/steam.cfg" <<'EOF'
+BootStrapperInhibitAll=enable
+BootStrapperInhibitUpdateOnLaunch=enable
+BootStrapperInhibitClientChecksum=enable
+BootStrapperInhibitBootstrapperChecksum=enable
+EOF
