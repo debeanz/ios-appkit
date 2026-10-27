@@ -16,7 +16,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const mg = require('../../tools/machogap.js');
+const mg = require('./machogap.js');
 const { slices, parseSlice, frameworkOf, isInternal, archName, CPU_ARM64 } = mg;
 
 // Frameworks iOS does not provide at all: every load command pointing here must be

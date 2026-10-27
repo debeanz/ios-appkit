@@ -25,6 +25,10 @@ HOST="${3:?missing host binary}"
 OUT="${4:?missing out.ipa}"
 
 SHIM_INSTALL='@rpath/AppKitShim.framework/AppKitShim'
+# Make OUT absolute now: the zip step runs inside a cd to $work, where a relative path
+# would resolve to the wrong place (and get cleaned up).
+mkdir -p "$(dirname "$OUT")"
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
 work="$(mktemp -d)"
 app="$work/Payload/Steam.app"
 mkdir -p "$app/Frameworks" "$app/client"
@@ -40,7 +44,10 @@ cp -R "$SHIM_FW" "$app/Frameworks/AppKitShim.framework"
 echo "laid out $(du -sh "$app" | cut -f1) in Steam.app"
 
 echo "=== Plan the surgery (retag-plan over the bundled client) ==="
-node "$here/retag-plan.js" "$app/client" "$work/plan.json"
+node "$here/retag-plan.js" "$app/client" "$work/plan.json" || { echo "retag-plan failed"; exit 1; }
+nplan=$(jq '.binaries | length' "$work/plan.json" 2>/dev/null || echo 0)
+echo "planned $nplan binaries"
+[ "$nplan" -gt 0 ] || { echo "ERROR: plan is empty — no binaries found under the bundled client"; exit 1; }
 
 echo "=== Mach-O surgery ==="
 dropped=0; thinned=0; retagged=0; repointed=0; rpathfail=0; total=0
