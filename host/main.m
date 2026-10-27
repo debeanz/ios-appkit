@@ -12,11 +12,13 @@
 // uncaught Objective-C exception with a backtrace) and steam-logs/ (Steam's own logs).
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
+#import <errno.h>
 #import <execinfo.h>
 #import <fcntl.h>
 #import <mach-o/dyld.h>
 #import <signal.h>
 #import <sys/resource.h>
+#import <sys/ucontext.h>
 #import <unistd.h>
 
 static UITextView *gLog;
@@ -70,9 +72,33 @@ static void writeStr(int fd, const char *s) { if (fd >= 0) write(fd, s, strlen(s
 // Fatal signal: record which, where, and the backtrace in Documents/crash.log (and the
 // console log), then die the normal way. Runs on an alternate stack so a stack overflow
 // can still report.
+//
+// SIGSYS is handled differently: the iOS sandbox raises it when the client makes a system
+// call it isn't allowed to (the SysV-semaphore crash was one). Rather than die, log which
+// call it was and resume with an error return (x0 = -ENOSYS), advancing past the trapping
+// instruction — so one run surfaces every blocked call, not just the first, and the client
+// takes its own "this failed" path. The right fix for each is to provide it in the shim, as
+// the semaphores now are; this keeps the process alive to find the next one.
 static void onFatalSignal(int sig, siginfo_t *info, void *uap) {
   int fd = open(gCrashPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
-  char line[200];
+  char line[256];
+  if (sig == SIGSYS) {
+    ucontext_t *uc = (ucontext_t *)uap;
+    unsigned long sysno = uc ? (unsigned long)uc->uc_mcontext->__ss.__x[16] : 0;  // arm64 syscall # in x16
+    void *pc = uc ? (void *)uc->uc_mcontext->__ss.__pc : NULL;
+    snprintf(line, sizeof line, "\n*** blocked system call %lu at pc %p — returning ENOSYS and continuing\n", sysno, pc);
+    writeStr(fd, line); writeStr(2, line);
+    void *frames[64];
+    int n = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, n, fd);
+    backtrace_symbols_fd(frames, n, 2);
+    if (fd >= 0) close(fd);
+    if (uc) {
+      uc->uc_mcontext->__ss.__x[0] = (uint64_t)(-ENOSYS);  // the call "fails"
+      uc->uc_mcontext->__ss.__pc += 4;                     // step over the trapping instruction
+    }
+    return;
+  }
   snprintf(line, sizeof line, "\n*** crashed: signal %d (SIG%s), fault address %p\n",
            sig, sig < NSIG ? sys_signame[sig] : "?", info ? info->si_addr : NULL);
   writeStr(fd, line); writeStr(2, line);
@@ -113,7 +139,7 @@ static void installCrashReporting(void) {
   sa.sa_sigaction = onFatalSignal;
   sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
   sigemptyset(&sa.sa_mask);
-  const int fatal[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
+  const int fatal[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGSYS };
   for (size_t i = 0; i < sizeof fatal / sizeof fatal[0]; i++) sigaction(fatal[i], &sa, NULL);
   NSSetUncaughtExceptionHandler(onUncaughtException);
 }
