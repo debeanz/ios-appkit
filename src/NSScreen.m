@@ -43,6 +43,21 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
 - (CGFloat)backingScaleFactor { return _screen.scale; }
 - (NSInteger)maximumFramesPerSecond { return _screen.maximumFramesPerSecond; }
 
+// EDR (HDR) headroom. These return a CGFloat, which the unimplemented-method fallback
+// can't fake (it would set the integer, not the floating-point, return register and SDL
+// would read garbage), so answer them: 1.0 means standard dynamic range, no extra headroom
+// — true for a client treating the display as SDR. iOS exposes the real value as
+// UIScreen.currentEDRHeadroom (iOS 16+); use it when present, clamped to at least 1.0.
+- (CGFloat)maximumExtendedDynamicRangeColorComponentValue {
+  if (@available(iOS 16.0, *)) return MAX(1.0, _screen.currentEDRHeadroom);
+  return 1.0;
+}
+- (CGFloat)maximumPotentialExtendedDynamicRangeColorComponentValue {
+  if (@available(iOS 16.0, *)) return MAX(1.0, _screen.potentialEDRHeadroom);
+  return 1.0;
+}
+- (CGFloat)maximumReferenceExtendedDynamicRangeColorComponentValue { return 1.0; }
+
 - (NSString *)localizedName {
   return _screen == UIScreen.mainScreen ? UIDevice.currentDevice.model : @"External Display";
 }

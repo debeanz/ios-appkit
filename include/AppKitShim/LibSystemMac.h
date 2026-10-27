@@ -32,3 +32,13 @@ int AKResponsibilitySpawnattrsSetdisclaim(void *attrs, bool disclaim) __asm__("_
 
 // The extended-format variant of syslog; behaves like syslog.
 void AKSyslogDarwinExtsn(int priority, const char *format, ...) __asm__("_syslog$DARWIN_EXTSN");
+
+// The process's executable path, as a client loaded through this shim sees it. Mac apps find
+// their own files next to their executable (Steam's tier0 loads filesystem_stdio.dylib,
+// vgui2_s.dylib ... from the directory _NSGetExecutablePath names). Hosted on iOS — under
+// LiveContainer the process's executable is LiveContainer itself — that is the wrong
+// directory, so the host names the executable the client would have had on a Mac in the
+// AK_EXECUTABLE_PATH environment variable and this answers with it. Without the variable it
+// defers to the real call. Only clients bound through the shim see this; system frameworks
+// keep the real answer.
+int AKNSGetExecutablePath(char *buf, uint32_t *bufsize) __asm__("__NSGetExecutablePath");

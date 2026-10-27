@@ -273,6 +273,12 @@ static void bringUpClient(void) {
   for (NSString *d in @[ logsDir(), steamRoot() ])
     [[NSFileManager defaultManager] createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
 
+  // On a Mac the process's executable is steam_osx, in the client directory, and Steam
+  // loads its modules (filesystem_stdio, vgui2_s, ...) from next to it. Here it's this host
+  // or LiveContainer, so tell the shim which executable to report to Steam
+  // (_NSGetExecutablePath). Set before any Steam library loads: initializers may ask.
+  setenv("AK_EXECUTABLE_PATH", [clientDir() stringByAppendingPathComponent:@"steam_osx"].fileSystemRepresentation, 1);
+
   // SteamLauncher.framework stands in for steam_osx's exported launcher functions. It goes
   // right after the shim and is configured at once: vgui2_s asks it for the universe while
   // it initializes, which happens as it loads.

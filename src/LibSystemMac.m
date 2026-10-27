@@ -1,6 +1,7 @@
 // See LibSystemMac.h.
 #import "AKShimPrivate.h"
 #import "AppKitShim/LibSystemMac.h"
+#import <dlfcn.h>
 #import <syslog.h>
 #import <stdarg.h>
 
@@ -35,4 +36,29 @@ void AKSyslogDarwinExtsn(int priority, const char *format, ...) {
   va_start(ap, format);
   vsyslog(priority, format, ap);
   va_end(ap);
+}
+
+#pragma mark Executable path
+
+// Same contract as dyld's: copy the path and return 0, or, when the buffer is too small,
+// store the size needed in *bufsize and return -1.
+int AKNSGetExecutablePath(char *buf, uint32_t *bufsize) {
+  const char *path = getenv("AK_EXECUTABLE_PATH");
+  if (!path || !*path) {
+    // Not configured: the real answer. This file's own symbol shadows the name, so look the
+    // real one up in libSystem.
+    static int (*real)(char *, uint32_t *);
+    if (!real) {
+      void *libSystem = dlopen("/usr/lib/libSystem.B.dylib", RTLD_LAZY | RTLD_NOLOAD);
+      real = libSystem ? (int (*)(char *, uint32_t *))dlsym(libSystem, "_NSGetExecutablePath") : NULL;
+    }
+    return real ? real(buf, bufsize) : -1;
+  }
+  uint32_t need = (uint32_t)strlen(path) + 1;
+  if (!bufsize || *bufsize < need) {
+    if (bufsize) *bufsize = need;
+    return -1;
+  }
+  memcpy(buf, path, need);
+  return 0;
 }
