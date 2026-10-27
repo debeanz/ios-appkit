@@ -577,25 +577,25 @@ int main(int argc, const char *argv[]) {
 
     // Keychain: the generic-password calls round-trip through the iOS keychain.
     const char *svc = "ios-appkit.test", *acct = "player";
-    SecKeychainItemDelete((SecKeychainItemRef)NULL); // ignore; clean slate below
-    SecKeychainAddGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, 6, "secret", NULL);
+    AKSecKeychainItemDelete(NULL); // no-op on NULL
+    AKSecKeychainAddGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, 6, "secret", NULL);
     UInt32 pwLen = 0;
     void *pw = NULL;
-    SecKeychainItemRef found = NULL;
-    OSStatus findStatus = SecKeychainFindGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, &pwLen, &pw, &found);
+    void *found = NULL;
+    OSStatus findStatus = AKSecKeychainFindGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, &pwLen, &pw, &found);
     if (findStatus == noErr) { // the simulator keychain may be unavailable in a CLI process
       CHECK(pwLen == 6 && memcmp(pw, "secret", 6) == 0, "stored password reads back");
-      SecKeychainItemFreeContent(NULL, pw);
-      CHECK(SecKeychainItemDelete(found) == noErr, "keychain item deletes");
-      CHECK(SecKeychainFindGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, NULL, NULL, NULL) == errSecItemNotFound, "deleted item is gone");
+      AKSecKeychainItemFreeContent(NULL, pw);
+      CHECK(AKSecKeychainItemDelete(found) == noErr, "keychain item deletes");
+      CHECK(AKSecKeychainFindGenericPassword(NULL, (UInt32)strlen(svc), svc, (UInt32)strlen(acct), acct, NULL, NULL, NULL) == AKErrSecItemNotFound, "deleted item is gone");
     } else {
       fprintf(stderr, "smoke: keychain unavailable in this process (%d); keychain checks skipped\n", (int)findStatus);
     }
     // Privilege elevation is always denied on iOS.
-    AuthorizationRef auth = NULL;
-    CHECK(AuthorizationCreate(NULL, NULL, 0, &auth) == errAuthorizationSuccess, "authorization ref created");
-    CHECK(AuthorizationExecuteWithPrivileges(auth, "/bin/sh", 0, NULL, NULL) == errAuthorizationDenied, "running with privileges is denied");
-    AuthorizationFree(auth, 0);
+    void *auth = NULL;
+    CHECK(AKAuthorizationCreate(NULL, NULL, 0, &auth) == AKErrAuthorizationSuccess, "authorization ref created");
+    CHECK(AKAuthorizationExecuteWithPrivileges(auth, "/bin/sh", 0, NULL, NULL) == AKErrAuthorizationDenied, "running with privileges is denied");
+    AKAuthorizationFree(auth, 0);
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
