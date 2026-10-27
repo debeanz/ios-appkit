@@ -23,8 +23,27 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
     shared.mutableWindows = [NSMutableArray array];
     shared.eventQueue = [NSMutableArray array];
     NSApp = shared;
+    [shared _ak_bridgeLifecycleNotifications];
   });
   return shared;
+}
+
+// UIKit's app lifecycle, re-posted under AppKit's names (Chromium pauses work and tracks
+// activation through these).
+- (void)_ak_bridgeLifecycleNotifications {
+  NSDictionary<NSNotificationName, NSNotificationName> *map = @{
+    UIApplicationDidBecomeActiveNotification: NSApplicationDidBecomeActiveNotification,
+    UIApplicationWillResignActiveNotification: NSApplicationDidResignActiveNotification,
+    UIApplicationWillEnterForegroundNotification: NSApplicationWillBecomeActiveNotification,
+    UIApplicationDidEnterBackgroundNotification: NSApplicationDidHideNotification,
+    UIApplicationWillTerminateNotification: NSApplicationWillTerminateNotification,
+  };
+  NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+  [map enumerateKeysAndObjectsUsingBlock:^(NSNotificationName ui, NSNotificationName appkit, BOOL *stop) {
+    [nc addObserverForName:ui object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+      [nc postNotificationName:appkit object:NSApp];
+    }];
+  }];
 }
 
 - (NSArray<NSWindow *> *)windows { return [_mutableWindows copy]; }
@@ -51,17 +70,16 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 }
 
 - (void)finishLaunching {
-  if ([_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) {
-    NSNotification *n = [NSNotification notificationWithName:@"NSApplicationDidFinishLaunchingNotification" object:self];
-    [_delegate applicationDidFinishLaunching:n];
-  }
+  NSNotification *n = [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self];
+  if ([_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) [_delegate applicationDidFinishLaunching:n];
+  [NSNotificationCenter.defaultCenter postNotification:n];
 }
 
 - (void)stop:(id)sender { self.running = NO; }
 
 - (void)terminate:(id)sender {
   if ([_delegate respondsToSelector:@selector(applicationWillTerminate:)]) {
-    [_delegate applicationWillTerminate:[NSNotification notificationWithName:@"NSApplicationWillTerminateNotification" object:self]];
+    [_delegate applicationWillTerminate:[NSNotification notificationWithName:NSApplicationWillTerminateNotification object:self]];
   }
   exit(0);
 }

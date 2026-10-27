@@ -99,14 +99,18 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)makeKeyWindow {
   NSWindow *previous = NSApp.keyWindow;
   if (previous == self) return;
+  NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+  // With one screen and no inspector panels, the key window is also the main window.
   if (previous) {
     previous.keyWindow = NO;
-    [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResignKeyNotification object:previous];
+    [nc postNotificationName:NSWindowDidResignKeyNotification object:previous];
+    [nc postNotificationName:NSWindowDidResignMainNotification object:previous];
   }
   self.keyWindow = YES;
   if (!self.firstResponder) [self makeFirstResponder:_contentView];
   else [self _syncUIKitFirstResponder];
-  [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidBecomeKeyNotification object:self];
+  [nc postNotificationName:NSWindowDidBecomeKeyNotification object:self];
+  [nc postNotificationName:NSWindowDidBecomeMainNotification object:self];
 }
 
 - (void)orderFront:(id)sender {
@@ -139,6 +143,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 }
 
 - (void)close {
+  [NSNotificationCenter.defaultCenter postNotificationName:NSWindowWillCloseNotification object:self];
   [self orderOut:nil];
   [NSApp _unregisterWindow:self];
 }

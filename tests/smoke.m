@@ -277,6 +277,40 @@ int main(int argc, const char *argv[]) {
     CFRelease(source);
     CHECK(KBGetLayoutType(LMGetKbdType()) == kKeyboardANSI, "ANSI keyboard");
 
+    // AppKit constants carry AppKit's values.
+    CHECK([NSAccessibilityButtonRole isEqualToString:@"AXButton"], "accessibility role value");
+    CHECK([NSAccessibilityValueChangedNotification isEqualToString:@"AXValueChanged"], "accessibility notification value");
+    CHECK([NSAccessibilityLineForIndexParameterizedAttribute isEqualToString:@"AXLineForIndex"], "parameterized attribute value");
+    CHECK(NSFontWeightBold == 0.4 && NSFontWeightRegular == 0, "font weights");
+    CHECK(NSFontIdentityMatrix[0] == 1 && NSFontIdentityMatrix[3] == 1 && NSFontIdentityMatrix[1] == 0, "identity text matrix");
+    CHECK([NSAccessibilityRoleDescription(NSAccessibilityPopUpButtonRole, nil) isEqualToString:@"pop up button"], "role description");
+
+    // Kill ring: consecutive kills join, a new sequence starts a new entry.
+    _NSInitializeKillRing();
+    _NSNewKillRingSequence();
+    _NSAppendToKillRing(@"foo");
+    _NSAppendToKillRing(@"bar");
+    CHECK([_NSYankFromKillRing() isEqualToString:@"foobar"], "consecutive kills join");
+    _NSNewKillRingSequence();
+    _NSAppendToKillRing(@"baz");
+    CHECK([_NSYankFromKillRing() isEqualToString:@"baz"], "a new kill sequence starts a new entry");
+
+    // This process is the one running application.
+    NSRunningApplication *me = NSRunningApplication.currentApplication;
+    CHECK(me.processIdentifier == getpid(), "current application is this process");
+    CHECK(NSWorkspace.sharedWorkspace.frontmostApplication == me, "frontmost application is this one");
+    CHECK([NSRunningApplication runningApplicationWithProcessIdentifier:getpid()] == me, "lookup by pid");
+    CHECK([NSRunningApplication runningApplicationWithProcessIdentifier:1] == nil, "other processes are not visible");
+
+    // UIKit's lifecycle arrives under AppKit's names.
+    __block BOOL becameActive = NO;
+    id token = [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidBecomeActiveNotification object:nil
+                                                                queue:nil usingBlock:^(NSNotification *n) { becameActive = YES; }];
+    [NSNotificationCenter.defaultCenter postNotificationName:UIApplicationDidBecomeActiveNotification object:nil];
+    [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+    CHECK(becameActive, "UIApplicationDidBecomeActive is re-posted as NSApplicationDidBecomeActive");
+    [NSNotificationCenter.defaultCenter removeObserver:token];
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

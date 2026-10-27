@@ -20,6 +20,10 @@
 #import "NSPasteboard.h"
 #import "NSCursor.h"
 #import "NSMenu.h"
+#import "NSWorkspace.h"
+#import "NSRunningApplication.h"
+#import "AppKitConstants.h"
+#import "AppKitFunctions.h"
 #import "AKShimInput.h"
 
 // Convenience alias used across AppKit code.
