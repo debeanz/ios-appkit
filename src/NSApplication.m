@@ -111,6 +111,7 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 }
 
 - (void)sendEvent:(NSEvent *)event {
+  AKNoteInputEvent(event);
   NSWindow *window = event.window ?: self.keyWindow;
   [window sendEvent:event];
   // A click or key press may have moved focus into or out of a text field.

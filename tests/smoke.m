@@ -488,6 +488,54 @@ int main(int argc, const char *argv[]) {
     CHECK(progress.doubleValue == 100, "progress clamps to maxValue");
     CHECK([[NSOpenGLPixelFormat alloc] initWithAttributes:NULL] == nil, "no desktop OpenGL: pixel format is nil, as AppKit reports when unsupported");
 
+    // Quartz events: key codes translate through the US layout with the event's modifiers.
+    CGEventRef keyA = CGEventCreateKeyboardEvent(NULL, 0x00, true);
+    UniChar chars[4];
+    UniCharCount nChars = 0;
+    CGEventKeyboardGetUnicodeString(keyA, 4, &nChars, chars);
+    CHECK(nChars == 1 && chars[0] == 'a' && CGEventGetType(keyA) == kCGEventKeyDown, "CGEvent key A types 'a'");
+    CGEventSetFlags(keyA, (CGEventFlags)NSEventModifierFlagShift);
+    CGEventKeyboardGetUnicodeString(keyA, 4, &nChars, chars);
+    CHECK(nChars == 1 && chars[0] == 'A', "with Shift it types 'A'");
+    CFDataRef blob = CGEventCreateData(NULL, keyA);
+    CGEventRef copied = CGEventCreateFromData(NULL, blob);
+    CHECK(copied && CGEventGetIntegerValueField(copied, kCGKeyboardEventKeycode) == 0x00 &&
+          CGEventGetFlags(copied) == (CGEventFlags)NSEventModifierFlagShift, "CGEvent survives serialization");
+    CFRelease(blob); CFRelease(copied); CFRelease(keyA);
+
+    // Input state comes from the events NSApp delivered.
+    uint32_t keyDownsBefore = CGEventSourceCounterForEventType(kCGEventSourceStateCombinedSessionState, kCGEventKeyDown);
+    [app sendEvent:KeyDown(win, @"q", 0x0C, 0)];
+    CHECK(CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, 0x0C), "Q is held after its key down");
+    CHECK(CGEventSourceCounterForEventType(kCGEventSourceStateCombinedSessionState, kCGEventKeyDown) == keyDownsBefore + 1, "key-down counter advances");
+    CHECK(CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGEventKeyDown) < 5, "last key down was just now");
+    [app sendEvent:[NSEvent keyEventWithType:NSEventTypeKeyUp location:NSZeroPoint modifierFlags:0 timestamp:0
+                                windowNumber:win.windowNumber context:nil characters:@"q" charactersIgnoringModifiers:@"q"
+                                   isARepeat:NO keyCode:0x0C]];
+    CHECK(!CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, 0x0C), "Q released after its key up");
+
+    // CGEventPost delivers into this app: a posted Z types into the focused field.
+    [win makeKeyWindow];
+    CGEventRef keyZ = CGEventCreateKeyboardEvent(NULL, 0x06, true);
+    CGEventPost(kCGHIDEventTap, keyZ);
+    CFRelease(keyZ);
+    CHECK([field.typed hasSuffix:@"z"], "posted key event reaches the focused text field");
+
+    // Windows: only this app's, with Quartz's dictionary keys.
+    NSArray *infos = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID));
+    BOOL listed = NO;
+    for (NSDictionary *info in infos)
+      if ([info[(__bridge NSString *)kCGWindowNumber] integerValue] == win.windowNumber &&
+          [info[(__bridge NSString *)kCGWindowOwnerPID] intValue] == getpid()) listed = YES;
+    CHECK(listed, "window list includes this app's window");
+    CHECK(CGWindowLevelForKey(kCGNormalWindowLevelKey) == 0 && CGWindowLevelForKey(kCGFloatingWindowLevelKey) == 3, "window levels");
+
+    // Capture and system-wide taps are unavailable, through the API's own failure values.
+    CHECK(CGEventTapCreate(kCGSessionEventTap, 0, 0, ~0ULL, NULL, NULL) == NULL, "no event taps");
+    CHECK(CGDisplayStreamCreate(1, 100, 100, 0, NULL, nil) == NULL && CGDisplayCreateImage(1) == NULL, "no screen capture");
+    CGDisplayFadeReservationToken fadeToken = 1;
+    CHECK(CGAcquireDisplayFadeReservation(1, &fadeToken) != kCGErrorSuccess && fadeToken == 0, "no display fades");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

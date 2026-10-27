@@ -26,6 +26,10 @@
 UIViewController *AKTopViewController(void);
 void AKRunModalUntil(BOOL (^finished)(void));
 
+// CGEvents.m: records every event NSApp delivers (per-type times and counts, keys and
+// buttons held, last mouse movement) for the CGEventSource state queries.
+void AKNoteInputEvent(NSEvent *event);
+
 // paramErr lives in the Mac-only MacErrors.h; the Carbon shims return the same value.
 enum { AKParamErr = -50 };
 

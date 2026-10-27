@@ -5,6 +5,7 @@
 
 #import "NSGeometry.h"
 #import "CoreGraphicsMac.h"
+#import "CoreGraphicsEvents.h"
 #import "CoreVideoMac.h"
 #import "CarbonMac.h"
 #import "CoreServicesMac.h"
