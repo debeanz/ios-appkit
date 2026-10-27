@@ -1,15 +1,13 @@
-#import "AppKitShim/NSApplication.h"
-#import "AppKitShim/NSWindow.h"
-#import "AppKitShim/NSEvent.h"
-#import <UIKit/UIKit.h>
+#import "AKShimPrivate.h"
+#import "AppKitShim/AKShimInput.h"
 
 NSApplication *NSApp = nil;
+NSRunLoopMode const NSEventTrackingRunLoopMode = @"NSEventTrackingRunLoopMode";
 
 @interface NSApplication ()
 @property (nonatomic, strong) NSMutableArray<NSWindow *> *mutableWindows;
 @property (nonatomic, strong) NSMutableArray<NSEvent *> *eventQueue;
 @property (nonatomic, assign, getter=isRunning, readwrite) BOOL running;
-@property (nonatomic, weak) NSResponder *firstResponder;
 @end
 
 @implementation NSApplication
@@ -18,7 +16,9 @@ NSApplication *NSApp = nil;
   static NSApplication *shared;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    shared = [[NSApplication alloc] init];
+    // CEF installs an NSApplication subclass by calling +sharedApplication on it first,
+    // so build an instance of whichever class got here.
+    shared = [[self alloc] init];
     shared.mutableWindows = [NSMutableArray array];
     shared.eventQueue = [NSMutableArray array];
     NSApp = shared;
@@ -32,6 +32,14 @@ NSApplication *NSApp = nil;
   for (NSWindow *w in _mutableWindows) if (w.isKeyWindow) return w;
   return nil;
 }
+
+- (NSWindow *)windowWithWindowNumber:(NSInteger)windowNumber {
+  for (NSWindow *w in _mutableWindows) if (w.windowNumber == windowNumber) return w;
+  return nil;
+}
+
+- (void)_registerWindow:(NSWindow *)w { if (![_mutableWindows containsObject:w]) [_mutableWindows addObject:w]; }
+- (void)_unregisterWindow:(NSWindow *)w { [_mutableWindows removeObject:w]; }
 
 // The UIKit run loop is already spinning, so -run does not block: it marks the app
 // running and lets control return to UIApplicationMain. Steam calls -run on a thread
@@ -84,25 +92,13 @@ NSApplication *NSApp = nil;
 }
 
 - (void)sendEvent:(NSEvent *)event {
-  NSResponder *target = _firstResponder ?: (NSResponder *)self.keyWindow.contentView;
-  switch (event.type) {
-    case NSEventTypeLeftMouseDown:  [target mouseDown:event]; break;
-    case NSEventTypeLeftMouseUp:    [target mouseUp:event]; break;
-    case NSEventTypeKeyDown:        [target keyDown:event]; break;
-    case NSEventTypeKeyUp:          [target keyUp:event]; break;
-    case NSEventTypeScrollWheel:    [target scrollWheel:event]; break;
-    default: break;
-  }
+  NSWindow *window = event.window ?: self.keyWindow;
+  [window sendEvent:event];
+  // A click or key press may have moved focus into or out of a text field.
+  AKShimUpdateSoftwareKeyboard();
 }
 
-- (void)makeFirstResponder:(NSResponder *)responder {
-  [_firstResponder resignFirstResponder];
-  _firstResponder = responder;
-  [responder becomeFirstResponder];
-}
-
-// Register a window when it is created. Called from NSWindow via NSApp.
-- (void)_registerWindow:(NSWindow *)w { if (![_mutableWindows containsObject:w]) [_mutableWindows addObject:w]; }
+- (void)makeFirstResponder:(NSResponder *)responder { [self.keyWindow makeFirstResponder:responder]; }
 
 @end
 

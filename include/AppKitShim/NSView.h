@@ -4,7 +4,7 @@
 #import "NSResponder.h"
 #import "NSGeometry.h"
 
-@class NSWindow;
+@class NSWindow, NSTextInputContext, NSTrackingArea;
 #if __has_include(<UIKit/UIKit.h>)
 @class UIView;
 #endif
@@ -40,6 +40,15 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 - (void)drawRect:(NSRect)dirtyRect;             // override point
 - (NSPoint)convertPoint:(NSPoint)point fromView:(NSView *)view;
 - (NSPoint)convertPoint:(NSPoint)point toView:(NSView *)view;
+
+// Non-nil only for views that adopt NSTextInputClient (Chromium's view does).
+@property (nonatomic, readonly, strong) NSTextInputContext *inputContext;
+
+// Tracking areas decide which views get mouseEntered:/mouseExited:/mouseMoved:.
+@property (nonatomic, readonly, copy) NSArray<NSTrackingArea *> *trackingAreas;
+- (void)addTrackingArea:(NSTrackingArea *)area;
+- (void)removeTrackingArea:(NSTrackingArea *)area;
+- (void)updateTrackingAreas;
 
 // Escape hatch: the backing UIView, so Metal layers and CEF's compositor can attach.
 #if __has_include(<UIKit/UIKit.h>)

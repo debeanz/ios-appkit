@@ -7,7 +7,14 @@
     "NSApplication",
     "NSEvent",
     "NSScreen",
-    "NSColor"
+    "NSColor",
+    "NSTextInputContext",
+    "NSTrackingArea",
+    "NSPasteboard",
+    "NSPasteboardItem",
+    "NSCursor",
+    "NSMenu",
+    "NSMenuItem"
   ],
   "functions": [
     "NSBeep",
@@ -15,7 +22,27 @@
   ],
   "constants": [
     "NSApp",
-    "NSAppKitVersionNumber"
+    "NSAppKitVersionNumber",
+    "NSEventTrackingRunLoopMode",
+    "NSWindowDidBecomeKeyNotification",
+    "NSWindowDidResignKeyNotification",
+    "NSTextInputContextKeyboardSelectionDidChangeNotification",
+    "NSTextInputReplacementRangeAttributeName",
+    "NSPasteboardNameGeneral",
+    "NSPasteboardNameFind",
+    "NSPasteboardNameDrag",
+    "NSPasteboardTypeString",
+    "NSPasteboardTypeURL",
+    "NSPasteboardTypeFileURL",
+    "NSPasteboardTypeHTML",
+    "NSPasteboardTypeRTF",
+    "NSPasteboardTypePNG",
+    "NSPasteboardTypeTIFF",
+    "NSMenuDidBeginTrackingNotification",
+    "NSMenuDidEndTrackingNotification",
+    "NSMenuWillSendActionNotification"
   ],
-  "stubbed": []
+  "stubbed": [
+    "NSInputManager"
+  ]
 }

@@ -6,6 +6,13 @@
 #ifndef APPKITSHIM_NSGEOMETRY_H
 #define APPKITSHIM_NSGEOMETRY_H
 
+// UIKit ships private classes with some AppKit names (NSColor, for one). Objective-C class
+// names are process-global, so a shim class with the same name would collide with it.
+// This keeps the link-time name (what the client's binaries bind to, _OBJC_CLASS_$_NSColor)
+// while registering the class with the runtime under a distinct name. The smoke test fails
+// on any remaining collision, so it tells us which classes need this.
+#define AK_SHIM_RUNTIME_NAME(name) __attribute__((objc_runtime_name("AKShim_" #name)))
+
 typedef CGPoint NSPoint;
 typedef CGSize  NSSize;
 typedef CGRect  NSRect;

@@ -32,7 +32,12 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
 - (void)activateIgnoringOtherApps:(BOOL)flag;
 - (BOOL)setActivationPolicy:(NSApplicationActivationPolicy)policy;
 
+- (NSWindow *)windowWithWindowNumber:(NSInteger)windowNumber;
+
 // Steam/CEF drive input by posting synthetic events and pulling them back out.
+// -sendEvent: is the single entry point for real input too: the UIKit bridge calls it,
+// and it routes to the event's window (or the key window). CEF subclasses NSApplication
+// and overrides it, so input must always come through here.
 - (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart;
 - (NSEvent *)nextEventMatchingMask:(NSUInteger)mask
                          untilDate:(NSDate *)date
@@ -41,9 +46,11 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
 - (void)sendEvent:(NSEvent *)event;
 - (void)finishLaunching;
 
-// Process-wide first responder; NSWindow's -makeFirstResponder: routes here.
+// Not AppKit API: convenience that sets the key window's first responder.
 - (void)makeFirstResponder:(NSResponder *)responder;
 @end
+
+extern NSRunLoopMode const NSEventTrackingRunLoopMode;
 
 // The AppKit global. Set when +sharedApplication first runs.
 extern NSApplication *NSApp;

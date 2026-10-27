@@ -11,6 +11,12 @@
 #import "NSEvent.h"
 #import "NSScreen.h"
 #import "NSColor.h"
+#import "NSTextInputContext.h"
+#import "NSTrackingArea.h"
+#import "NSPasteboard.h"
+#import "NSCursor.h"
+#import "NSMenu.h"
+#import "AKShimInput.h"
 
 // Convenience alias used across AppKit code.
 #ifndef NSAppKitVersionNumber

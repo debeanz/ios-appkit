@@ -14,18 +14,43 @@ gets built is driven by what the client actually calls, not guesswork. See
 
 ## Status
 
-**12 of 833 symbols implemented.** This is a foundation, not a finished layer. What's here:
+**40 of 833 symbols implemented** (40 of AppKit's 385). This is a foundation, not a
+finished layer. What's here:
 
 | Class | Backed by | Notes |
 |---|---|---|
-| `NSApplication` | `UIApplication` | run loop, delegate, event queue for `-postEvent:`/`-nextEventMatchingMask:` |
-| `NSWindow` | container view in one shared `UIWindow` | each window is a full-screen view; `orderFront:` z-orders them |
-| `NSView` | `UIView` subclass | `-drawRect:` override point, subview tree, flipped (top-left) coordinates |
-| `NSResponder` | — | the event/responder chain |
-| `NSEvent` | — | storage + factory for synthetic and bridged input events |
+| `NSApplication` | `UIApplication` | run loop, delegate, event queue; `-sendEvent:` routes input to the event's window |
+| `NSWindow` | container view in one shared `UIWindow` | full screen inside the safe area; per-window first responder; mouse → view under the pointer, keys → first responder, hover enter/exit/move |
+| `NSView` | `UIView` subclass | `-drawRect:`, subview tree, superview as next responder, input context, tracking areas, flipped (top-left) coordinates |
+| `NSResponder` | — | the responder chain, `interpretKeyEvents:`, `tryToPerform:with:`, `doCommandBySelector:` |
+| `NSEvent` | — | AppKit's key/mouse/other factories, key repeat, scrolling deltas, window numbers |
+| `NSTextInputContext` | — | turns key events into `insertText:replacementRange:` / editing commands for an `NSTextInputClient` (how Chromium's text fields get input) |
+| `NSPasteboard`, `NSPasteboardItem` | `UIPasteboard` | general pasteboard is the system clipboard |
+| `NSCursor` | — | system cursors, push/pop; records the current cursor (iPhones have none) |
+| `NSMenu`, `NSMenuItem` | — | full model + Cmd-shortcut dispatch; never shown (Big Picture draws its own) |
+| `NSTrackingArea` | — | drives `mouseEntered:`/`mouseExited:`/`mouseMoved:` |
 | `NSScreen` | `UIScreen` | frame, scale, safe-area `visibleFrame` |
 | `NSColor` | `UIColor` | RGBA + the system colors the client uses |
 | `NSGeometry` | CoreGraphics | `NSRect`/`NSPoint`/`NSSize` are the CG types, as on 64-bit macOS |
+
+### Input on iPhone and iPad
+
+[`src/InputBridge.m`](src/InputBridge.m) turns UIKit input into NSEvents and sends them
+through `[NSApp sendEvent:]`, so they reach views exactly as on the Mac:
+
+- **Touch** → left mouse down/drag/up (one pointer at a time); secondary click → right button.
+- **Hardware keyboard** → key down/up with macOS key codes and Mac-style key repeat;
+  modifier keys → `flagsChanged:`. Editing keys map to AppKit's standard commands
+  (`deleteBackward:`, `moveLeft:`, `insertNewline:`...).
+- **iPhone keyboard** → each character becomes a key down/up pair. Whether it shows is
+  set by `AKShimSetSoftwareKeyboardPolicy` ([`AKShimInput.h`](include/AppKitShim/AKShimInput.h)):
+  by default it appears only while a text field has focus — which Chromium signals by
+  returning a non-nil `-inputContext` — so Steam's sign-in fields bring it up and it goes
+  away elsewhere.
+- **iPad trackpad / mouse** → hover becomes `mouseMoved:` (with enter/exit via tracking
+  areas), two-finger scrolling becomes precise `scrollWheel:` events.
+
+Not yet: IME composition (marked text for CJK input), drag and drop, context menus.
 
 ## The honest part
 
@@ -33,13 +58,14 @@ gets built is driven by what the client actually calls, not guesswork. See
   dynamically, so the hundreds of messages CEF sends to `NSView`/`NSWindow`/`NSEvent`
   don't show up as undefined symbols — only the class references do. Making the layer
   *behave* like AppKit (live resize, text input, the event loop CEF's compositor
-  expects) is most of the real effort and isn't captured by "12/833".
+  expects) is most of the real effort and isn't captured by "40/833".
 - **The 704 CEF symbols are the mountain.** Chromium is the hardest consumer: it pokes
   at private AppKit internals and expects a real NSView hierarchy and event stream. The
   other consumers (SDL3, `steamui`, `steamclient`) are far smaller and more mechanical.
-- **Not built or verified here.** This was written on Windows; it has not been
-  compiled. Objective-C against the iOS SDK needs a Mac. Use Codemagic (below) or a
-  local Mac to get the first real compile.
+- **Compiled, not yet run on screen.** The library builds for device and simulator on
+  Codemagic (Xcode 26.6, iOS 26.5 SDK) and the smoke test links against real UIKit. The
+  smoke test pushes events through the input path but puts nothing on screen; real
+  touch/keyboard behaviour needs a hosted app on a device.
 
 ## Building
 

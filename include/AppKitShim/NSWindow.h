@@ -5,7 +5,7 @@
 #import "NSResponder.h"
 #import "NSGeometry.h"
 
-@class NSView, NSScreen;
+@class NSView, NSScreen, NSEvent;
 
 typedef NS_OPTIONS(NSUInteger, NSWindowStyleMask) {
   NSWindowStyleMaskBorderless     = 0,
@@ -18,6 +18,9 @@ typedef NS_OPTIONS(NSUInteger, NSWindowStyleMask) {
 
 typedef NS_ENUM(NSInteger, NSBackingStoreType) { NSBackingStoreBuffered = 2 };
 
+extern NSNotificationName const NSWindowDidBecomeKeyNotification;
+extern NSNotificationName const NSWindowDidResignKeyNotification;
+
 @interface NSWindow : NSResponder
 - (instancetype)initWithContentRect:(NSRect)rect
                           styleMask:(NSWindowStyleMask)style
@@ -28,16 +31,24 @@ typedef NS_ENUM(NSInteger, NSBackingStoreType) { NSBackingStoreBuffered = 2 };
 @property (nonatomic, weak) id delegate;
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, assign) NSRect frame;
+@property (nonatomic, readonly) NSInteger windowNumber;
 @property (nonatomic, readonly, getter=isVisible) BOOL visible;
 @property (nonatomic, readonly, getter=isKeyWindow) BOOL keyWindow;
 @property (nonatomic, readonly) NSScreen *screen;
 @property (nonatomic, assign) CGFloat alphaValue;
+@property (nonatomic, assign) BOOL acceptsMouseMovedEvents;
+
+// Per-window keyboard focus, as in AppKit. Key events go here; mouse events go to the
+// view under the pointer.
+@property (nonatomic, readonly, weak) NSResponder *firstResponder;
+- (BOOL)makeFirstResponder:(NSResponder *)responder;
 
 - (void)makeKeyAndOrderFront:(id)sender;
+- (void)makeKeyWindow;
 - (void)orderFront:(id)sender;
 - (void)orderOut:(id)sender;
 - (void)close;
-- (void)makeFirstResponder:(NSResponder *)responder;
+- (void)sendEvent:(NSEvent *)event;
 - (NSPoint)mouseLocationOutsideOfEventStream;
 - (NSRect)contentRectForFrameRect:(NSRect)frameRect;
 - (NSRect)frameRectForContentRect:(NSRect)contentRect;
