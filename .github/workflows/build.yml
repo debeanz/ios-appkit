@@ -25,6 +25,9 @@ jobs:
           echo "Using $XCODE"
           sudo xcode-select -s "$XCODE"
 
+      - name: Exact iOS gap (client imports vs. the real iOS SDK)
+        run: node tools/ios-sdk-gap.js data/imports.json "$(xcrun --sdk iphoneos --show-sdk-path)" ios-gap.json
+
       - name: Build and test
         run: bash ci.sh
 
@@ -34,6 +37,7 @@ jobs:
         with:
           name: appkit-shim
           path: |
+            ios-gap.json
             build/device/libAppKitShim.a
             build/sim/libAppKitShim.a
             build/sim/smoke
