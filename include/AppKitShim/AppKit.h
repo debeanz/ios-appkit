@@ -36,6 +36,7 @@
 #import "SmallFrameworks.h"
 #import "CoreServicesMacExtras.h"
 #import "SecurityMac.h"
+#import "OpenGLMac.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"

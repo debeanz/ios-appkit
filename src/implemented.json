@@ -354,7 +354,22 @@
     "SecKeychainItemFreeContent",
     "SecKeychainSetUserInteractionAllowed",
     "SecTrustSettingsCopyCertificates",
-    "SecTrustSettingsCopyTrustSettings"
+    "SecTrustSettingsCopyTrustSettings",
+    "CGLChoosePixelFormat",
+    "CGLErrorString",
+    "CGLFlushDrawable",
+    "CGLGetCurrentContext",
+    "CGLGetParameter",
+    "CGLGetSurface",
+    "CGLIsEnabled",
+    "CGLReleasePixelFormat",
+    "CGLSetCurrentContext",
+    "CGLTexImageIOSurface2D",
+    "glBegin",
+    "glEnd",
+    "glSwapAPPLE",
+    "glTexCoord2i",
+    "glVertex2f"
   ],
   "constants": [
     "NSApp",

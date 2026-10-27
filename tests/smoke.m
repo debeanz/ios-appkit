@@ -597,6 +597,14 @@ int main(int argc, const char *argv[]) {
     CHECK(AKAuthorizationExecuteWithPrivileges(auth, "/bin/sh", 0, NULL, NULL) == AKErrAuthorizationDenied, "running with privileges is denied");
     AKAuthorizationFree(auth, 0);
 
+    // Desktop OpenGL: no pixel format matches, there's never a current context.
+    CGLPixelFormatAttribute glAttrs[] = { 0 };
+    CGLPixelFormatObj glPix = (CGLPixelFormatObj)1;
+    AKGLint glCount = 7;
+    CHECK(CGLChoosePixelFormat(glAttrs, &glPix, &glCount) == kCGLNoError && glPix == NULL && glCount == 0, "no OpenGL pixel format");
+    CHECK(CGLGetCurrentContext() == NULL && CGLSetCurrentContext(NULL) == kCGLNoError, "no current GL context");
+    CHECK(strcmp(CGLErrorString(kCGLBadContext), "invalid context") == 0, "CGL error strings");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");
