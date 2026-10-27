@@ -39,6 +39,7 @@
 #import "OpenGLMac.h"
 #import "CupsMac.h"
 #import "LibSystemMac.h"
+#import "ApplicationServicesMac.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"

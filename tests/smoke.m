@@ -633,6 +633,35 @@ int main(int argc, const char *argv[]) {
     AKPthreadJitWriteProtectNp(0); // no-op, must not crash
     CHECK(AKResponsibilityGetPidResponsibleForPid(getpid()) == getpid(), "this process is its own responsible process");
 
+    // ApplicationServices: the current process resolves; the Carbon pasteboard round-trips;
+    // page formats hold paper geometry; printing finds no device.
+    ProcessSerialNumber psn;
+    pid_t psnPid = 0;
+    CHECK(GetCurrentProcess(&psn) == noErr && GetProcessPID(&psn, &psnPid) == noErr && psnPid == getpid(), "current process PSN -> pid");
+    PasteboardRef cpb = NULL;
+    CHECK(PasteboardCreate(CFSTR("ak.test.pb"), &cpb) == noErr && cpb, "carbon pasteboard created");
+    PasteboardClear(cpb);
+    PasteboardPutItemFlavor(cpb, (PasteboardItemID)1, CFSTR("public.utf8-plain-text"),
+                            (__bridge CFDataRef)[@"hi" dataUsingEncoding:NSUTF8StringEncoding], 0);
+    ItemCount cpbCount = 0;
+    PasteboardGetItemCount(cpb, &cpbCount);
+    CFDataRef cpbData = NULL;
+    OSStatus cpbStatus = PasteboardCopyItemFlavorData(cpb, (PasteboardItemID)1, CFSTR("public.utf8-plain-text"), &cpbData);
+    CHECK(cpbCount >= 1 && cpbStatus == noErr && [[[NSString alloc] initWithData:(__bridge NSData *)cpbData encoding:NSUTF8StringEncoding] isEqualToString:@"hi"], "carbon pasteboard round-trips");
+    if (cpbData) CFRelease(cpbData);
+    CFRelease((CFTypeRef)cpb);
+    PMPageFormat pageFmt = NULL;
+    PMCreatePageFormatWithPMPaper(&pageFmt, NULL);
+    PMSetOrientation(pageFmt, kPMLandscape, false);
+    PMRect paperRect;
+    PMOrientation pmOrient = kPMPortrait;
+    PMGetOrientation(pageFmt, &pmOrient);
+    PMGetAdjustedPaperRect(pageFmt, &paperRect);
+    CHECK(pmOrient == kPMLandscape && (paperRect.right - paperRect.left) == 792, "landscape page format swaps paper dimensions");
+    PMRelease(pageFmt);
+    CHECK(PMSessionBeginCGDocumentNoDialog(NULL, NULL, NULL) == kPMNoDefaultPrinter, "printing finds no printer");
+    CHECK(!UAZoomEnabled(), "screen zoom not reachable");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");
