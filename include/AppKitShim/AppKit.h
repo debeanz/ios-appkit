@@ -37,6 +37,7 @@
 #import "CoreServicesMacExtras.h"
 #import "SecurityMac.h"
 #import "OpenGLMac.h"
+#import "CupsMac.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"

@@ -605,6 +605,26 @@ int main(int argc, const char *argv[]) {
     CHECK(CGLGetCurrentContext() == NULL && CGLSetCurrentContext(NULL) == kCGLNoError, "no current GL context");
     CHECK(strcmp(CGLErrorString(kCGLBadContext), "invalid context") == 0, "CGL error strings");
 
+    // CUPS: no printers, but IPP messages, option lookup and media sizes work.
+    cups_dest_t *dests = (cups_dest_t *)1;
+    CHECK(cupsGetDests2(NULL, &dests) == 0 && dests == NULL, "no print destinations");
+    ipp_t *req = ippNewRequest(0x000B); // Get-Printer-Attributes
+    ippAddString(req, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, "ipp://localhost/printers/x");
+    ippAddInteger(req, IPP_TAG_OPERATION, IPP_TAG_INTEGER, "job-id", 42);
+    ippAddRange(req, IPP_TAG_JOB, "page-ranges", 1, 5);
+    ipp_attribute_t *uriAttr = ippFindAttribute(req, "printer-uri", IPP_TAG_URI);
+    CHECK(uriAttr && strcmp(ippGetString(uriAttr, 0, NULL), "ipp://localhost/printers/x") == 0, "IPP string attribute reads back");
+    CHECK(ippGetInteger(ippFindAttribute(req, "job-id", IPP_TAG_ZERO), 0) == 42, "IPP integer attribute reads back");
+    int upper = 0;
+    CHECK(ippGetRange(ippFindAttribute(req, "page-ranges", IPP_TAG_RANGE), 0, &upper) == 1 && upper == 5, "IPP range reads back");
+    int attrCount = 0;
+    for (ipp_attribute_t *a = ippFirstAttribute(req); a; a = ippNextAttribute(req)) attrCount++;
+    CHECK(attrCount == 5, "IPP attribute iteration (2 automatic + 3 added)");
+    CHECK(cupsDoRequest(NULL, req, "/") == NULL && cupsLastError() == IPP_STATUS_ERROR_SERVICE_UNAVAILABLE, "no CUPS server");
+    cups_option_t opts[] = { { "media", "iso_a4_210x297mm" }, { "copies", "2" } };
+    CHECK(strcmp(cupsGetOption("COPIES", 2, opts), "2") == 0, "option lookup is case-insensitive");
+    CHECK(strcmp(pwgMediaForSize(21000, 29700)->ppd, "A4") == 0 && strcmp(pwgMediaForSize(21590, 27940)->ppd, "Letter") == 0, "PWG media sizes");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");
