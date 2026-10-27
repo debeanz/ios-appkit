@@ -21,11 +21,28 @@ typedef void (*AXObserverCallbackWithInfo)(AXObserverRef observer, AXUIElementRe
 enum { kAXErrorSuccess = 0, kAXErrorFailure = -25200, kAXErrorNoValue = -25212,
        kAXErrorAPIDisabled = -25211, kAXErrorNotImplemented = -25208, kAXErrorInvalidUIElement = -25202 };
 
+typedef uint32_t AXValueType;
+enum { kAXValueIllegalType = 0, kAXValueCGPointType = 1, kAXValueCGSizeType = 2, kAXValueCGRectType = 3,
+       kAXValueCFRangeType = 4, kAXValueAXErrorType = 5 };
+
 extern AXUIElementRef AXUIElementCreateApplication(pid_t pid) CF_RETURNS_RETAINED;
 extern AXError AXUIElementCopyActionNames(AXUIElementRef element, CFArrayRef *names);
 extern AXError AXUIElementCopyAttributeNames(AXUIElementRef element, CFArrayRef *names);
 extern AXError AXUIElementCopyParameterizedAttributeNames(AXUIElementRef element, CFArrayRef *names);
+extern AXError AXUIElementCopyAttributeValue(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value);
+extern AXError AXUIElementCopyParameterizedAttributeValue(AXUIElementRef element, CFStringRef attribute,
+                                                          CFTypeRef parameter, CFTypeRef *result);
+extern AXError AXUIElementSetAttributeValue(AXUIElementRef element, CFStringRef attribute, CFTypeRef value);
+extern AXError AXUIElementPerformAction(AXUIElementRef element, CFStringRef action);
+extern CFTypeID AXUIElementGetTypeID(void);
 extern AXError AXObserverCreateWithInfoCallback(pid_t application, AXObserverCallbackWithInfo callback, AXObserverRef *outObserver);
+extern AXError AXObserverAddNotification(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *refcon);
+extern CFRunLoopSourceRef AXObserverGetRunLoopSource(AXObserverRef observer);
+
+extern AXValueRef AXValueCreate(AXValueType type, const void *valuePtr) CF_RETURNS_RETAINED;
+extern AXValueType AXValueGetType(AXValueRef value);
+extern Boolean AXValueGetValue(AXValueRef value, AXValueType type, void *valuePtr);
+extern CFTypeID AXValueGetTypeID(void);
 
 extern AXTextMarkerRef AXTextMarkerCreate(CFAllocatorRef allocator, const UInt8 *bytes, CFIndex length) CF_RETURNS_RETAINED;
 extern const UInt8 *AXTextMarkerGetBytePtr(AXTextMarkerRef marker);

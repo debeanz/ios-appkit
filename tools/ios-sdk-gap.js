@@ -104,4 +104,5 @@ function main() {
   fs.writeFileSync(outPath, JSON.stringify(result, null, 1) + '\n');
 }
 
-main();
+if (require.main === module) main();
+module.exports = { canon, walk, parseYaml, parseJson };

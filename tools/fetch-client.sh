@@ -51,22 +51,30 @@ while read -r name file want || [ -n "$name" ]; do
 done < "$manifest"
 
 # Valve's CDN zips are built on Windows and store some paths with backslashes (seen in
-# webkit_osx: "Frameworks\Chromium Embedded Framework.framework\..."). Info-ZIP's unzip
-# keeps those as literal filename characters instead of nesting, which breaks the CEF
-# framework. Rebuild any such entry as a real nested path.
+# webkit_osx: "Frameworks\Chromium Embedded Framework.framework\..."). Info-ZIP's unzip on
+# a Mac keeps those as literal filename characters, so each entry lands at the top level
+# under one long backslashed name instead of nesting. Rebuild every such entry as a real
+# nested path. Three kinds: files move; symlinks (the framework's Versions/Current and
+# top-level links) are recreated with their target's backslashes fixed too, since a
+# relative link only resolves from its proper place; directory entries merge into the
+# nested directory. (On Windows, \ is a separator, so none of this triggers there.)
 fixup_backslashes() {
-  # Find files whose name literally contains a backslash, deepest first.
   find "$out" -depth -name '*\\*' -print 2>/dev/null | while IFS= read -r p; do
     rel="${p#$out/}"
     fixed="${rel//\\//}"
     [ "$rel" = "$fixed" ] && continue
     tgt="$out/$fixed"
     mkdir -p "$(dirname "$tgt")"
-    # Skip the zero-byte directory-marker entries; move real files.
-    if [ -f "$p" ] && [ -s "$p" ]; then
-      mv -f "$p" "$tgt"
+    if [ -L "$p" ]; then
+      link="$(readlink "$p")"
+      ln -sfn "${link//\\//}" "$tgt"
+      rm -f "$p"
+    elif [ -d "$p" ]; then
+      mkdir -p "$tgt"
+      cp -a "$p"/. "$tgt"/ 2>/dev/null
+      rm -rf "$p"
     else
-      rm -f "$p" 2>/dev/null || true
+      mv -f "$p" "$tgt"
     fi
   done
 }

@@ -1,5 +1,6 @@
 # Build the unsigned Steam.app IPA end to end on a macOS runner:
-# fetch the client from Valve's CDN, build the shim framework + iOS host, run the Mach-O
+# fetch the client from Valve's CDN, route every system library against the real iOS SDK,
+# build the shim (re-exporting the iOS libraries it fronts) + iOS host, run the Mach-O
 # surgery, and upload Steam-unsigned.ipa as an artifact. Manual trigger (workflow_dispatch)
 # because it pulls ~270 MB and produces a large artifact; the per-push 'build' workflow
 # still validates the shim cheaply.
@@ -25,20 +26,6 @@ jobs:
           echo "Using $XCODE"
           sudo xcode-select -s "$XCODE"
 
-      - name: Build the shim framework (device)
-        run: make framework SDK=device
-
-      - name: Build the iOS host executable
-        run: |
-          mkdir -p build
-          SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-          xcrun clang -isysroot "$SYSROOT" -target arm64-apple-ios15.0 \
-            -fobjc-arc -O2 -Wall -Wno-unused-parameter \
-            host/main.m -framework UIKit -framework Foundation \
-            -Wl,-rpath,@executable_path/Frameworks \
-            -o build/Steam
-          file build/Steam
-
       - name: Cache the client packages (~270 MB)
         uses: actions/cache@v4
         with:
@@ -48,8 +35,34 @@ jobs:
       - name: Fetch + rebuild the macOS client from Valve's CDN
         run: bash tools/fetch-client.sh client .pkgcache
 
+      - name: Route every system library against the iOS SDK
+        run: |
+          mkdir -p build
+          node tools/lib-routes.js client "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            data/imports.json data/runtime-gap.json build/routes.json
+
+      - name: Build the shim framework (device), re-exporting the routed iOS libraries
+        run: |
+          make framework SDK=device REEXPORT_TBDS="$(jq -r '.reexportTbds | join(" ")' build/routes.json)"
+          echo "LC_REEXPORT_DYLIB in the shim: $(otool -l build/device/AppKitShim.framework/AppKitShim | grep -c LC_REEXPORT_DYLIB)"
+
+      - name: Verify the shim exports what only it can provide
+        run: |
+          nm -gU build/device/AppKitShim.framework/AppKitShim > build/shim-exports.txt
+          node tools/lib-routes.js --verify build/routes.json build/shim-exports.txt
+
+      - name: Build the iOS host executable
+        run: |
+          SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun clang -isysroot "$SYSROOT" -target arm64-apple-ios15.0 \
+            -fobjc-arc -O2 -Wall -Wno-unused-parameter \
+            host/main.m -framework UIKit -framework Foundation \
+            -Wl,-rpath,@executable_path/Frameworks \
+            -o build/Steam
+          file build/Steam
+
       - name: Package the unsigned IPA
-        run: bash tools/package-ipa.sh client build/device/AppKitShim.framework build/Steam dist/Steam-unsigned.ipa
+        run: bash tools/package-ipa.sh client build/device/AppKitShim.framework build/Steam dist/Steam-unsigned.ipa build/routes.json
 
       - name: Upload the IPA
         uses: actions/upload-artifact@v4
@@ -57,3 +70,13 @@ jobs:
           name: Steam-unsigned-ipa
           path: dist/Steam-unsigned.ipa
           if-no-files-found: error
+
+      - name: Upload the routing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routing-report
+          path: |
+            build/routes.json
+            build/shim-exports.txt
+          if-no-files-found: ignore

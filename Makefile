@@ -37,6 +37,14 @@ SHIM_FRAMEWORKS := -framework UIKit -framework Foundation -framework CoreFoundat
   -framework VideoToolbox -framework UniformTypeIdentifiers
 FRAMEWORK := $(BUILD)/AppKitShim.framework
 
+# iOS libraries the shim re-exports, as .tbd paths relative to the SDK (lib-routes.js
+# writes them to routes.json as reexportTbds). Steam's load commands for a library that is
+# missing macOS-only symbols are pointed at the shim; re-exporting the real iOS library
+# keeps every other symbol reachable through it, the way Cocoa re-exports AppKit on a Mac.
+# Empty (the per-push build) gives the plain shim.
+REEXPORT_TBDS ?=
+REEXPORT_FLAGS := $(foreach t,$(REEXPORT_TBDS),-Wl,-reexport_library,$(SYSROOT)/$(t))
+
 $(BUILD):
 	mkdir -p $(BUILD)
 
@@ -64,7 +72,7 @@ framework: $(OBJS)
 	mkdir -p $(FRAMEWORK)
 	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/AppKitShim.framework/AppKitShim \
 	  -compatibility_version 1.0 -current_version 1.0 \
-	  $(OBJS) $(SHIM_FRAMEWORKS) -undefined dynamic_lookup \
+	  $(OBJS) $(SHIM_FRAMEWORKS) $(REEXPORT_FLAGS) -undefined dynamic_lookup \
 	  -o $(FRAMEWORK)/AppKitShim
 	cp framework/Info.plist $(FRAMEWORK)/Info.plist
 	@echo "built $(FRAMEWORK)/AppKitShim"

@@ -20,10 +20,66 @@ AXError AXUIElementCopyParameterizedAttributeNames(AXUIElementRef element, CFArr
   if (names) *names = CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
   return kAXErrorSuccess;
 }
+// There is no other process to inspect: reads find no value, writes and actions are refused
+// the way they are when the user hasn't granted accessibility access.
+AXError AXUIElementCopyAttributeValue(AXUIElementRef element, CFStringRef attribute, CFTypeRef *value) {
+  if (value) *value = NULL;
+  return element ? kAXErrorNoValue : kAXErrorInvalidUIElement;
+}
+AXError AXUIElementCopyParameterizedAttributeValue(AXUIElementRef element, CFStringRef attribute,
+                                                   CFTypeRef parameter, CFTypeRef *result) {
+  if (result) *result = NULL;
+  return element ? kAXErrorNoValue : kAXErrorInvalidUIElement;
+}
+AXError AXUIElementSetAttributeValue(AXUIElementRef element, CFStringRef attribute, CFTypeRef value) { return kAXErrorAPIDisabled; }
+AXError AXUIElementPerformAction(AXUIElementRef element, CFStringRef action) { return kAXErrorAPIDisabled; }
+CFTypeID AXUIElementGetTypeID(void) { return CFStringGetTypeID(); } // elements are the strings above
+
 AXError AXObserverCreateWithInfoCallback(pid_t application, AXObserverCallbackWithInfo callback, AXObserverRef *outObserver) {
   if (outObserver) *outObserver = NULL;
   return kAXErrorNotImplemented; // no cross-process accessibility on iOS
 }
+// No observer is ever created, so these only ever see one the caller didn't get from us.
+AXError AXObserverAddNotification(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *refcon) {
+  return kAXErrorNotImplemented;
+}
+CFRunLoopSourceRef AXObserverGetRunLoopSource(AXObserverRef observer) { return NULL; }
+
+// An AXValue wraps a CGPoint/CGSize/CGRect/CFRange/AXError. Stored as NSData of { type, bytes }
+// so it is a real CFType, like the text markers below.
+static size_t AKAXValueSize(AXValueType type) {
+  switch (type) {
+    case kAXValueCGPointType: return sizeof(CGPoint);
+    case kAXValueCGSizeType:  return sizeof(CGSize);
+    case kAXValueCGRectType:  return sizeof(CGRect);
+    case kAXValueCFRangeType: return sizeof(CFRange);
+    case kAXValueAXErrorType: return sizeof(AXError);
+    default:                  return 0;
+  }
+}
+AXValueRef AXValueCreate(AXValueType type, const void *valuePtr) {
+  size_t size = AKAXValueSize(type);
+  if (!size || !valuePtr) return NULL;
+  NSMutableData *data = [NSMutableData dataWithBytes:&type length:sizeof type];
+  [data appendBytes:valuePtr length:size];
+  return CFBridgingRetain(data);
+}
+AXValueType AXValueGetType(AXValueRef value) {
+  NSData *data = (__bridge NSData *)value;
+  if (data.length < sizeof(AXValueType)) return kAXValueIllegalType;
+  AXValueType type;
+  memcpy(&type, data.bytes, sizeof type);
+  return type;
+}
+Boolean AXValueGetValue(AXValueRef value, AXValueType type, void *valuePtr) {
+  if (!value || !valuePtr || AXValueGetType(value) != type) return false;
+  NSData *data = (__bridge NSData *)value;
+  size_t size = AKAXValueSize(type);
+  if (data.length < sizeof(AXValueType) + size) return false;
+  memcpy(valuePtr, (const uint8_t *)data.bytes + sizeof(AXValueType), size);
+  return true;
+}
+CFTypeID AXValueGetTypeID(void) { return CFDataGetTypeID(); }
 
 // Text markers are opaque CF data; the shim keeps their bytes so a client that round-trips
 // them works. They are NSData, which makes them valid CFTypes (retain/release/CFEqual).

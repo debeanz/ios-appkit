@@ -4,13 +4,15 @@
 // any OS (pure parsing). The execution half (package-ipa.sh) consumes plan.json on the
 // Mac runner and drives Apple's own lipo / vtool / install_name_tool.
 //
-//   node tools/retag-plan.js <client-dir> <out.json>
+//   node tools/retag-plan.js <client-dir> <out.json> [routes.json]
 //
 // For each binary it records:
 //   thin      - has an x86_64 slice that must be dropped (iOS is arm64-only)
 //   retag     - arm64 slice is tagged macOS and must become iOS (vtool -set-build-version)
-//   repoint[] - LC_LOAD_DYLIB entries for frameworks iOS lacks; each must be changed to
-//               point at the bundled shim (install_name_tool -change old new)
+//   repoint[] - LC_LOAD_DYLIB entries to rewrite (install_name_tool -change from to). With
+//               routes.json (lib-routes.js, built from the iOS SDK) that is every system
+//               library: to the shim or to its shallow iOS path. Without it, only frameworks
+//               iOS lacks entirely go to the shim (the pre-SDK fallback).
 //   id        - LC_ID_DYLIB install name (dylibs only), used to wire @rpath references
 //   missingSystem[] - dylib deps on iOS-missing frameworks with NO shim coverage (a gap)
 'use strict';
@@ -55,8 +57,9 @@ function walk(dir, out = []) {
 }
 
 function main() {
-  const [root, outFile] = process.argv.slice(2);
-  if (!root || !outFile) { console.error('usage: node retag-plan.js <client-dir> <out.json>'); process.exit(2); }
+  const [root, outFile, routesFile] = process.argv.slice(2);
+  if (!root || !outFile) { console.error('usage: node retag-plan.js <client-dir> <out.json> [routes.json]'); process.exit(2); }
+  const routes = routesFile ? JSON.parse(fs.readFileSync(routesFile, 'utf8')).routes : null;
 
   const plan = [];
   let x86only = 0;
@@ -84,10 +87,16 @@ function main() {
     const r = parseSlice(arm.buf);
     const repoint = [];
     for (const d of r.dylibs) {
-      if (isMissing(d.path)) {
-        repoint.push({ from: d.path, to: SHIM_INSTALL, framework: frameworkOf(d.path), weak: d.weak });
-        repointFw[frameworkOf(d.path)] = (repointFw[frameworkOf(d.path)] || 0) + 1;
+      let to = null;
+      if (routes) {
+        const route = routes[d.path];
+        if (route && route.to !== d.path) to = route.to;
+      } else if (isMissing(d.path)) {
+        to = SHIM_INSTALL;
       }
+      if (!to) continue;
+      repoint.push({ from: d.path, to, framework: frameworkOf(d.path), weak: d.weak });
+      repointFw[frameworkOf(d.path)] = (repointFw[frameworkOf(d.path)] || 0) + 1;
     }
     const entry = {
       file: rel,
@@ -118,7 +127,7 @@ function main() {
   fs.writeFileSync(outFile, JSON.stringify(out, null, 1));
 
   console.log(`Binaries: ${out.counts.binaries}  drop(x86-only): ${out.counts.drop}  thin(fat): ${out.counts.thin}  retag(macOS->iOS): ${out.counts.retag}`);
-  console.log(`Load commands to repoint at the shim: ${out.counts.repointLoadCommands}`);
+  console.log(`Load commands to rewrite${routes ? ' (shim or iOS path)' : ' to the shim'}: ${out.counts.repointLoadCommands}`);
   console.log('By framework:', JSON.stringify(out.repointByFramework));
   console.log(`\nTop consumers of missing frameworks:`);
   for (const b of out.binaries.filter(b => b.repoint && b.repoint.length).slice(0, 15)) {
