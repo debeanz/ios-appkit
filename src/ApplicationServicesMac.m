@@ -167,7 +167,6 @@ OSStatus PasteboardCopyItemFlavorData(PasteboardRef pasteboard, PasteboardItemID
 @end
 
 static AKPMObject *AKPM(void *o) { return (__bridge AKPMObject *)o; }
-static void *AKNewPM(void) { return (void *)CFBridgingRetain([AKPMObject new]); }
 
 OSStatus PMRelease(PMObject object) { if (object) CFRelease(object); return noErr; }
 

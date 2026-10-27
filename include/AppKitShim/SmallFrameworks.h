@@ -61,6 +61,15 @@ extern void VTRegisterProfessionalVideoWorkflowVideoDecoders(void);
 @interface LAAuthenticationView : NSObject  // a macOS NSView; unavailable here
 @end
 
+#pragma mark AuthenticationServices — macOS browser passkey manager (not on iOS)
+
+// The browser-side web-authentication session manager exists only in macOS Safari; an iOS app
+// is never the system browser, so it reports it isn't available.
+@interface ASWebAuthenticationSessionWebBrowserSessionManager : NSObject
+@property (class, readonly, strong) ASWebAuthenticationSessionWebBrowserSessionManager *sharedManager;
+@property (nonatomic, readonly) BOOL wasLaunchedByAuthenticationServices;
+@end
+
 #pragma mark SafariServices
 
 @interface SFUniversalLink : NSObject

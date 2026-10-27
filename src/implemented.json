@@ -97,7 +97,8 @@
     "SCScreenshotManager",
     "SCShareableContent",
     "SCStream",
-    "SCStreamConfiguration"
+    "SCStreamConfiguration",
+    "ASWebAuthenticationSessionWebBrowserSessionManager"
   ],
   "functions": [
     "NSBeep",

@@ -77,6 +77,18 @@ void VTRegisterProfessionalVideoWorkflowVideoDecoders(void) {}
 @implementation LAAuthenticationView
 @end
 
+#pragma mark AuthenticationServices
+
+@implementation ASWebAuthenticationSessionWebBrowserSessionManager
++ (ASWebAuthenticationSessionWebBrowserSessionManager *)sharedManager {
+  static ASWebAuthenticationSessionWebBrowserSessionManager *shared;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ shared = [ASWebAuthenticationSessionWebBrowserSessionManager new]; });
+  return shared;
+}
+- (BOOL)wasLaunchedByAuthenticationServices { return NO; }
+@end
+
 #pragma mark SafariServices
 
 @implementation SFUniversalLink
