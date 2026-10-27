@@ -6,6 +6,8 @@
 #import "NSGeometry.h"
 #import "CoreGraphicsMac.h"
 #import "CoreVideoMac.h"
+#import "CarbonMac.h"
+#import "CoreServicesMac.h"
 #import "NSResponder.h"
 #import "NSView.h"
 #import "NSWindow.h"

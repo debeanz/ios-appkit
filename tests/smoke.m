@@ -6,6 +6,28 @@
 #import <objc/runtime.h>
 
 unsigned short AKMacKeyCodeForHIDUsage(long usage); // private, in KeyCodes.m
+BOOL AKCarbonDispatchHotKey(unsigned short keyCode, NSEventModifierFlags flags, BOOL down); // private, in Carbon.m
+
+static int gCarbonTrace;
+static UInt32 gHotKeyFired;
+static OSStatus AKTestInner(EventHandlerCallRef call, EventRef event, void *ud) { gCarbonTrace += 1; return noErr; }
+static OSStatus AKTestOuter(EventHandlerCallRef call, EventRef event, void *ud) {
+  gCarbonTrace += 10;
+  return CallNextEventHandler(call, event); // newest handler runs first, then passes it on
+}
+static OSStatus AKTestHotKey(EventHandlerCallRef call, EventRef event, void *ud) {
+  EventHotKeyID hid;
+  if (GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID, NULL, sizeof hid, NULL, &hid) == noErr) gHotKeyFired = hid.id;
+  return noErr;
+}
+
+static NSString *AKTranslate(const UCKeyboardLayout *layout, UInt16 key, UInt32 carbonModifiers, UInt16 action) {
+  UniChar buf[4];
+  UniCharCount n = 0;
+  UInt32 dead = 0;
+  UCKeyTranslate(layout, key, action, (carbonModifiers >> 8) & 0xFF, LMGetKbdType(), 0, &dead, 4, &n, buf);
+  return [NSString stringWithCharacters:buf length:n];
+}
 
 // Lists every Objective-C class this binary defines that some loaded system image also
 // defines. Two classes with one name make the runtime pick either at random, so any hit
@@ -212,6 +234,48 @@ int main(int argc, const char *argv[]) {
     CVDisplayLinkStop(link);
     CHECK(!CVDisplayLinkIsRunning(link), "display link stopped");
     CVDisplayLinkRelease(link);
+
+    // Carbon events: handler chaining, the event queue, hotkeys.
+    EventTypeSpec testType = { 'test', 1 };
+    InstallEventHandler(GetApplicationEventTarget(), AKTestInner, 1, &testType, NULL, NULL);
+    EventHandlerRef outer = NULL;
+    InstallEventHandler(GetApplicationEventTarget(), AKTestOuter, 1, &testType, NULL, &outer);
+    EventRef ev = NULL;
+    CreateEvent(NULL, 'test', 1, 0, 0, &ev);
+    CHECK(SendEventToEventTargetWithOptions(ev, GetApplicationEventTarget(), 0) == noErr && gCarbonTrace == 11,
+          "Carbon handlers run newest first and chain with CallNextEventHandler");
+    RemoveEventHandler(outer);
+    PostEventToQueue(GetMainEventQueue(), ev, kEventPriorityStandard);
+    EventRef got = NULL;
+    CHECK(ReceiveNextEvent(1, &testType, 0, true, &got) == noErr && got == ev, "Carbon event queue round-trip");
+    ReleaseEvent(got);
+    ReleaseEvent(ev);
+
+    EventTypeSpec hotType = { kEventClassKeyboard, kEventHotKeyPressed };
+    InstallEventHandler(GetApplicationEventTarget(), AKTestHotKey, 1, &hotType, NULL, NULL);
+    EventHotKeyRef hotKey = NULL;
+    CHECK(RegisterEventHotKey(0x31, cmdKey | shiftKey, (EventHotKeyID){ 'stem', 7 }, GetApplicationEventTarget(), 0, &hotKey) == noErr,
+          "hotkey registered");
+    CHECK(AKCarbonDispatchHotKey(0x31, NSEventModifierFlagCommand | NSEventModifierFlagShift, YES) && gHotKeyFired == 7,
+          "Cmd+Shift+Space fires the registered hotkey");
+    CHECK(!AKCarbonDispatchHotKey(0x31, NSEventModifierFlagCommand, YES), "a different combination does not");
+    UnregisterEventHotKey(hotKey);
+
+    // Keyboard layout: the US 'uchr' from Text Input Sources, read by UCKeyTranslate.
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    CFDataRef layoutData = (CFDataRef)TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+    CHECK(layoutData != NULL, "the input source has layout data");
+    const UCKeyboardLayout *layout = (const UCKeyboardLayout *)CFDataGetBytePtr(layoutData);
+    CHECK([AKTranslate(layout, 0x00, 0, kUCKeyActionDown) isEqualToString:@"a"], "A key -> a");
+    CHECK([AKTranslate(layout, 0x00, shiftKey, kUCKeyActionDown) isEqualToString:@"A"], "Shift+A -> A");
+    CHECK([AKTranslate(layout, 0x12, shiftKey, kUCKeyActionDown) isEqualToString:@"!"], "Shift+1 -> !");
+    CHECK([AKTranslate(layout, 0x12, alphaLock, kUCKeyActionDown) isEqualToString:@"1"], "Caps Lock leaves digits alone");
+    CHECK([AKTranslate(layout, 0x24, 0, kUCKeyActionDown) isEqualToString:@"\r"], "Return -> CR");
+    CHECK([AKTranslate(layout, 0x00, 0, kUCKeyActionUp) length] == 0, "key up types nothing");
+    NSString *sourceID = (__bridge NSString *)TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+    CHECK([sourceID isEqualToString:@"com.apple.keylayout.US"], "US input source");
+    CFRelease(source);
+    CHECK(KBGetLayoutType(LMGetKbdType()) == kKeyboardANSI, "ANSI keyboard");
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];

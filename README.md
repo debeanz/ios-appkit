@@ -3,19 +3,24 @@
 A clean-room, from-scratch subset of macOS **AppKit** for iOS, built on UIKit and Metal.
 
 It exists because the macOS Steam client (and the Chromium framework it renders Big
-Picture with) imports **833** system symbols that iOS doesn't provide, and **385 of
+Picture with) imports **865** system symbols that iOS doesn't provide, and **362 of
 those are AppKit** — the single biggest obstacle to running the native Mac client on an
 iPhone. This library is the stand-in for that layer. It contains none of Valve's or
-Apple's code; it reimplements the AppKit API against the iOS frameworks that do exist.
+Apple's code; it reimplements those APIs against the iOS frameworks that do exist.
 
-The symbol requirements come from the import analysis in `../steam-mac/report`, so what
-gets built is driven by what the client actually calls, not guesswork. See
-[`COVERAGE.md`](COVERAGE.md) for the live map (generated, not hand-written).
+The number is exact, not estimated. [`data/imports.json`](data/imports.json) lists every
+system symbol the Mac client imports (Apple API names only), and on every build
+[`tools/ios-sdk-gap.js`](tools/ios-sdk-gap.js) checks each one against the export lists
+in the real iOS SDK; the result is [`data/ios-gap.json`](data/ios-gap.json). The same
+check says what the shim must *not* define, because iOS already has it (UIKit's
+`NSParagraphStyle`, `FSEventStream`, `CGLayer`...). See [`COVERAGE.md`](COVERAGE.md) for
+the live map (generated, not hand-written).
 
 ## Status
 
-**40 of 833 symbols implemented** (40 of AppKit's 385). This is a foundation, not a
-finished layer. What's here:
+**145 of 865 symbols implemented.** Carbon (42/42) and CoreVideo (10/10) are complete;
+AppKit is at 51 of 362, CoreGraphics at 39 of 103. This is a foundation, not a finished
+layer. What's here:
 
 | Class | Backed by | Notes |
 |---|---|---|
@@ -32,6 +37,15 @@ finished layer. What's here:
 | `NSScreen` | `UIScreen` | frame, scale, safe-area `visibleFrame` |
 | `NSColor` | `UIColor` | RGBA + the system colors the client uses |
 | `NSGeometry` | CoreGraphics | `NSRect`/`NSPoint`/`NSSize` are the CG types, as on 64-bit macOS |
+| `CGDisplay*`, display modes | `UIScreen` | display IDs (1 = this device), bounds, scale, refresh rate (120 Hz on ProMotion), reconfiguration callbacks |
+| `CVDisplayLink` | `CADisplayLink` | vsync callbacks on a dedicated thread with macOS-style `CVTimeStamp`s |
+| Carbon events, hotkeys | — | working handler/target/queue implementation; `RegisterEventHotKey` fires from the hardware keyboard |
+| `UCKeyTranslate`, Text Input Sources | — | a real US `uchr` layout and a translator that reads it |
+
+`NSView` also hosts the client's `CALayer` (Chromium's compositor output) inside a
+container flipped to macOS's bottom-left layer geometry, so Mac layer code renders the
+right way up, and routes every frame change — including UIKit relayouts on rotation —
+through `-setFrameSize:`.
 
 ### Input on iPhone and iPad
 
@@ -58,7 +72,7 @@ Not yet: IME composition (marked text for CJK input), drag and drop, context men
   dynamically, so the hundreds of messages CEF sends to `NSView`/`NSWindow`/`NSEvent`
   don't show up as undefined symbols — only the class references do. Making the layer
   *behave* like AppKit (live resize, text input, the event loop CEF's compositor
-  expects) is most of the real effort and isn't captured by "40/833".
+  expects) is most of the real effort and isn't captured by "145/865".
 - **The 704 CEF symbols are the mountain.** Chromium is the hardest consumer: it pokes
   at private AppKit internals and expects a real NSView hierarchy and event stream. The
   other consumers (SDL3, `steamui`, `steamclient`) are far smaller and more mechanical.

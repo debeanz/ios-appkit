@@ -226,6 +226,8 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
   NSString *raw = special ?: key.charactersIgnoringModifiers;
 
   [self _ak_stopRepeat];
+  // A combination registered with RegisterEventHotKey goes to its Carbon handler instead.
+  if (AKCarbonDispatchHotKey(code, flags, down)) return;
   if (!down) {
     [self _ak_sendKey:NSEventTypeKeyUp code:code characters:chars unmodified:raw flags:flags repeat:NO];
     return;

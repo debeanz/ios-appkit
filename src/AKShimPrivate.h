@@ -17,6 +17,16 @@
 - (void)_ak_backingDidLayout;
 @end
 
+// paramErr lives in the Mac-only MacErrors.h; the Carbon shims return the same value.
+enum { AKParamErr = -50 };
+
+// Carbon.m: fires a registered hotkey for this key event; YES if one matched (and so the
+// key should not also go to the app, as on the Mac).
+BOOL AKCarbonDispatchHotKey(unsigned short keyCode, NSEventModifierFlags flags, BOOL down);
+
+// KeyLayout.m: the US layout in 'uchr' format (kTISPropertyUnicodeKeyLayoutData).
+NSData *AKUSKeyboardLayoutData(void);
+
 // CGDisplay.m: display IDs are 1-based positions in UIScreen's list.
 CGDirectDisplayID AKDisplayIDForScreen(UIScreen *screen);
 UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);

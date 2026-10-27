@@ -44,7 +44,7 @@ test: $(LIB)
 	@echo "linked $(BUILD)/smoke"
 
 coverage:
-	node tools/gen-coverage.js ../steam-mac/report src/implemented.json COVERAGE.md coverage.json
+	node tools/gen-coverage.js data/ios-gap.json src/implemented.json COVERAGE.md coverage.json
 
 clean:
 	rm -rf build
