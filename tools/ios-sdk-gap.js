@@ -12,14 +12,24 @@ const path = require('path');
 // Canonical form: no leading underscore (C symbols carry one in Mach-O, tbd v4 and imports).
 const canon = s => (s.startsWith('_') ? s.slice(1) : s);
 
-function walk(dir, out = []) {
+// Follows symlinked directories (some SDK frameworks are links, and skipping them hid
+// AuthenticationServices entirely), keeping the path as seen through the link; the set of
+// real paths on the current branch stops a link cycle.
+function walk(dir, out = [], branch = new Set()) {
+  let real;
+  try { real = fs.realpathSync(dir); } catch { return out; }
+  if (branch.has(real)) return out;
+  branch.add(real);
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { entries = []; }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) walk(p, out);
+    let isDir = e.isDirectory();
+    if (e.isSymbolicLink()) { try { isDir = fs.statSync(p).isDirectory(); } catch { continue; } }
+    if (isDir) walk(p, out, branch);
     else if (e.name.endsWith('.tbd')) out.push(p);
   }
+  branch.delete(real);
   return out;
 }
 

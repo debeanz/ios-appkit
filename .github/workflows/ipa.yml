@@ -38,8 +38,10 @@ jobs:
       - name: Route every system library against the iOS SDK
         run: |
           mkdir -p build
-          node tools/lib-routes.js client "$(xcrun --sdk iphoneos --show-sdk-path)" \
-            data/imports.json data/runtime-gap.json build/routes.json
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK frameworks that are symlinks: $(find "$SDK/System/Library/Frameworks" -maxdepth 1 -type l | wc -l)"
+          ls -la "$SDK/System/Library/Frameworks/AuthenticationServices.framework" "$SDK/System/Library/Frameworks/AuthenticationServices.framework/" 2>&1 | head -8
+          node tools/lib-routes.js client "$SDK" data/imports.json data/runtime-gap.json build/routes.json
 
       - name: Build the shim (AppKitShimCore) and its re-export umbrella (AppKitShim)
         run: |
