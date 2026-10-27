@@ -1,9 +1,7 @@
-# Builds the shim on a Mac on every push, runs the smoke test on a simulator, and posts
-# the full build log as a comment on the pushed commit so it can be read with `gh`.
-#
-# One-time setup in Codemagic (see README): add this repo, then create an environment
-# variable group named `github` holding GITHUB_TOKEN, a fine-grained token for this repo
-# with "Contents: Read and write". Without it the build still runs; it just can't comment.
+# Backup builder. GitHub Actions builds every push; this workflow runs only when started by
+# hand in Codemagic. It builds the shim, runs the smoke test on a simulator, and can post the
+# log as a commit comment if an environment group `github` with GITHUB_TOKEN (a fine-grained
+# token for this repo, "Contents: Read and write") is added and listed under `groups`.
 workflows:
   appkit-shim:
     name: AppKitShim build + smoke test
@@ -12,14 +10,7 @@ workflows:
     environment:
       xcode: latest
       # Optional: add a `groups: [github]` entry here once that group exists in Codemagic.
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: '*'
-          include: true
-          source: true
-      cancel_previous_builds: true
+    # Manual only: GitHub Actions (.github/workflows/build.yml) builds every push now.
     scripts:
       - name: Build and test
         script: |

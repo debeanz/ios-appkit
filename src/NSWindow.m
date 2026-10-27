@@ -3,6 +3,14 @@
 
 NSNotificationName const NSWindowDidBecomeKeyNotification = @"NSWindowDidBecomeKeyNotification";
 NSNotificationName const NSWindowDidResignKeyNotification = @"NSWindowDidResignKeyNotification";
+NSNotificationName const NSWindowDidChangeBackingPropertiesNotification = @"NSWindowDidChangeBackingPropertiesNotification";
+NSNotificationName const NSWindowDidChangeScreenNotification = @"NSWindowDidChangeScreenNotification";
+NSNotificationName const NSWindowDidChangeScreenProfileNotification = @"NSWindowDidChangeScreenProfileNotification";
+NSNotificationName const NSWindowWillEnterFullScreenNotification = @"NSWindowWillEnterFullScreenNotification";
+NSNotificationName const NSWindowDidEnterFullScreenNotification = @"NSWindowDidEnterFullScreenNotification";
+NSNotificationName const NSWindowWillExitFullScreenNotification = @"NSWindowWillExitFullScreenNotification";
+NSNotificationName const NSWindowDidExitFullScreenNotification = @"NSWindowDidExitFullScreenNotification";
+NSString *const NSBackingPropertyOldScaleFactorKey = @"NSBackingPropertyOldScaleFactorKey";
 
 // The single UIWindow every NSWindow mounts its content into. Created lazily so the
 // shim works whether the host app sets up its own scene or lets us make one.
@@ -51,6 +59,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     _windowNumber = nextNumber++;
     _frame = rect;
     _alphaValue = 1.0;
+    _styleMask = style | NSWindowStyleMaskFullScreen;
     _contentView = [[NSView alloc] initWithFrame:(NSRect){{0, 0}, rect.size}];
     [_contentView _setOwningWindow:self];
     [NSApplication.sharedApplication _registerWindow:self];
@@ -75,6 +84,10 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 }
 
 - (NSScreen *)screen { return NSScreen.mainScreen; }
+- (CGFloat)backingScaleFactor { return self.screen.backingScaleFactor; }
+
+- (void)setStyleMask:(NSWindowStyleMask)styleMask { _styleMask = styleMask | NSWindowStyleMaskFullScreen; }
+- (void)toggleFullScreen:(id)sender { /* already full screen, and can't leave it */ }
 
 #pragma mark Ordering and key status
 

@@ -20,6 +20,14 @@ typedef NS_ENUM(NSInteger, NSBackingStoreType) { NSBackingStoreBuffered = 2 };
 
 extern NSNotificationName const NSWindowDidBecomeKeyNotification;
 extern NSNotificationName const NSWindowDidResignKeyNotification;
+extern NSNotificationName const NSWindowDidChangeBackingPropertiesNotification;
+extern NSNotificationName const NSWindowDidChangeScreenNotification;
+extern NSNotificationName const NSWindowDidChangeScreenProfileNotification;
+extern NSNotificationName const NSWindowWillEnterFullScreenNotification;
+extern NSNotificationName const NSWindowDidEnterFullScreenNotification;
+extern NSNotificationName const NSWindowWillExitFullScreenNotification;
+extern NSNotificationName const NSWindowDidExitFullScreenNotification;
+extern NSString *const NSBackingPropertyOldScaleFactorKey;
 
 @interface NSWindow : NSResponder
 - (instancetype)initWithContentRect:(NSRect)rect
@@ -37,6 +45,14 @@ extern NSNotificationName const NSWindowDidResignKeyNotification;
 @property (nonatomic, readonly) NSScreen *screen;
 @property (nonatomic, assign) CGFloat alphaValue;
 @property (nonatomic, assign) BOOL acceptsMouseMovedEvents;
+
+// Points to pixels for this window's screen (2 or 3 on iPhone).
+@property (nonatomic, readonly) CGFloat backingScaleFactor;
+
+// Every window on iOS is full screen, so the style mask always includes
+// NSWindowStyleMaskFullScreen and -toggleFullScreen: has nothing to toggle.
+@property (nonatomic, assign) NSWindowStyleMask styleMask;
+- (void)toggleFullScreen:(id)sender;
 
 // Per-window keyboard focus, as in AppKit. Key events go here; mouse events go to the
 // view under the pointer.

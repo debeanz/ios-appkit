@@ -39,7 +39,8 @@ $(LIB): $(OBJS)
 test: $(LIB)
 	$(CC) $(CFLAGS) tests/smoke.m -Lbuild/$(SDK) -lAppKitShim \
 	  -framework UIKit -framework Foundation -framework CoreGraphics \
-	  -framework AudioToolbox -o $(BUILD)/smoke
+	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal \
+	  -o $(BUILD)/smoke
 	@echo "linked $(BUILD)/smoke"
 
 coverage:

@@ -3,6 +3,7 @@
 
 NSApplication *NSApp = nil;
 NSRunLoopMode const NSEventTrackingRunLoopMode = @"NSEventTrackingRunLoopMode";
+NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"NSApplicationDidChangeScreenParametersNotification";
 
 @interface NSApplication ()
 @property (nonatomic, strong) NSMutableArray<NSWindow *> *mutableWindows;

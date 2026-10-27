@@ -4,6 +4,8 @@
 #define APPKITSHIM_APPKIT_H
 
 #import "NSGeometry.h"
+#import "CoreGraphicsMac.h"
+#import "CoreVideoMac.h"
 #import "NSResponder.h"
 #import "NSView.h"
 #import "NSWindow.h"

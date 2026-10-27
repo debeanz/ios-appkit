@@ -2,6 +2,7 @@
 // libAppKitShim + real UIKit, and push events through the same path real input takes.
 // It does not put anything on screen; that needs a hosted simulator app.
 #import "AppKitShim/AppKit.h"
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 unsigned short AKMacKeyCodeForHIDUsage(long usage); // private, in KeyCodes.m
@@ -77,6 +78,23 @@ static int AKCountClassCollisions(const char *ourImage) {
 - (void)ak_copy:(id)sender { _copies++; }
 @end
 
+// Records the override points Chromium's view relies on.
+@interface AKTestLayerView : NSView
+@property (nonatomic, assign) int movedToWindow;
+@property (nonatomic, assign) NSSize lastSize;
+@end
+@implementation AKTestLayerView
+- (void)viewDidMoveToWindow { _movedToWindow++; }
+- (void)setFrameSize:(NSSize)size { [super setFrameSize:size]; _lastSize = size; }
+@end
+
+static int gDisplayLinkTicks;
+static CVReturn AKTestDisplayLinkCallback(CVDisplayLinkRef link, const CVTimeStamp *now, const CVTimeStamp *out,
+                                          CVOptionFlags flagsIn, CVOptionFlags *flagsOut, void *ctx) {
+  __atomic_add_fetch(&gDisplayLinkTicks, 1, __ATOMIC_RELAXED);
+  return kCVReturnSuccess;
+}
+
 static NSEvent *KeyDown(NSWindow *w, NSString *chars, unsigned short code, NSEventModifierFlags flags) {
   return [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:flags timestamp:0
                       windowNumber:w.windowNumber context:nil characters:chars
@@ -149,6 +167,51 @@ int main(int argc, const char *argv[]) {
     CHECK(AKMacKeyCodeForHIDUsage(0x04) == 0x00, "HID a -> kVK_ANSI_A");
     CHECK(AKMacKeyCodeForHIDUsage(0x28) == 0x24, "HID Return -> kVK_Return");
     CHECK(AKMacKeyCodeForHIDUsage(0x52) == 0x7E, "HID Up -> kVK_UpArrow");
+
+    // Views: window moves, frame-size overrides, layer hosting.
+    AKTestLayerView *lv = [[AKTestLayerView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
+    [content addSubview:lv];
+    CHECK(lv.movedToWindow == 1, "viewDidMoveToWindow fires when a view joins a window");
+    [lv setFrame:NSMakeRect(0, 0, 200, 150)];
+    CHECK(NSEqualSizes(lv.lastSize, NSMakeSize(200, 150)), "setFrame: goes through setFrameSize:");
+    lv.wantsLayer = YES;
+    CALayer *hosted = lv.layer;
+    CHECK(hosted && hosted != lv.backingView.layer, "the client's layer is not UIKit's own layer");
+    CHECK(hosted.superlayer.geometryFlipped, "client layers sit under a macOS-orientation container");
+    CHECK(CGSizeEqualToSize(hosted.bounds.size, CGSizeMake(200, 150)), "hosted layer fills the view");
+    CHECK(NSEqualSizes([lv convertSizeToBacking:NSMakeSize(10, 10)],
+                       NSMakeSize(10 * win.backingScaleFactor, 10 * win.backingScaleFactor)), "backing conversion");
+    CHECK(win.styleMask & NSWindowStyleMaskFullScreen, "windows report full screen");
+
+    // Displays: CoreGraphics and NSScreen agree on display 1.
+    CHECK(CGMainDisplayID() == 1, "main display is 1");
+    uint32_t displays = 0;
+    CHECK(CGGetActiveDisplayList(0, NULL, &displays) == kCGErrorSuccess && displays >= 1, "at least one display");
+    CHECK(CGDisplayPixelsWide(1) > 0 && CGDisplayPixelsHigh(1) > 0, "display has a size");
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(1);
+    CHECK(mode && CGDisplayModeGetRefreshRate(mode) > 0, "display mode has a refresh rate");
+    CHECK(CGDisplayModeGetPixelWidth(mode) >= CGDisplayModeGetWidth(mode), "pixels >= points");
+    CGDisplayModeRelease(mode);
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(1, NULL);
+    CHECK(modes && CFArrayGetCount(modes) == 1, "one mode per iOS screen");
+    CFRelease(modes);
+    CHECK([NSScreen.mainScreen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == CGMainDisplayID(),
+          "NSScreenNumber matches the CoreGraphics display ID");
+
+    // CVDisplayLink: create, start, stop. Ticks need a live display, which a command-line
+    // simulator process may not get, so they are reported rather than required.
+    CVDisplayLinkRef link = NULL;
+    CHECK(CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess && link, "display link created");
+    CHECK(CVDisplayLinkStart(link) != kCVReturnSuccess, "display link refuses to start without a callback");
+    CVDisplayLinkSetOutputCallback(link, AKTestDisplayLinkCallback, NULL);
+    CHECK(CVDisplayLinkStart(link) == kCVReturnSuccess && CVDisplayLinkIsRunning(link), "display link running");
+    CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
+    CHECK(period.timeValue == 1 && period.timeScale >= 30, "nominal refresh period is one frame");
+    [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+    fprintf(stderr, "smoke: display link ticked %d times in 0.5s\n", __atomic_load_n(&gDisplayLinkTicks, __ATOMIC_RELAXED));
+    CVDisplayLinkStop(link);
+    CHECK(!CVDisplayLinkIsRunning(link), "display link stopped");
+    CVDisplayLinkRelease(link);
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];

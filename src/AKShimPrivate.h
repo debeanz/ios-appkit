@@ -14,7 +14,12 @@
 
 @interface NSView (AKShimPrivate)
 - (void)_setOwningWindow:(NSWindow *)window;
+- (void)_ak_backingDidLayout;
 @end
+
+// CGDisplay.m: display IDs are 1-based positions in UIScreen's list.
+CGDirectDisplayID AKDisplayIDForScreen(UIScreen *screen);
+UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);
 
 @interface NSApplication (AKShimPrivate)
 - (void)_registerWindow:(NSWindow *)window;

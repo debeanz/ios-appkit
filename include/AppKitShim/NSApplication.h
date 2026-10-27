@@ -51,6 +51,8 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
 @end
 
 extern NSRunLoopMode const NSEventTrackingRunLoopMode;
+// Posted when a screen connects, disconnects or changes mode.
+extern NSNotificationName const NSApplicationDidChangeScreenParametersNotification;
 
 // The AppKit global. Set when +sharedApplication first runs.
 extern NSApplication *NSApp;

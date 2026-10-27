@@ -1,0 +1,40 @@
+# Builds the shim for device and simulator and runs the smoke test on a simulator, on every
+# push. Same script as Codemagic (ci.sh); this is the default because public repos get free
+# macOS runners that start right away.
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the newest Xcode on the runner
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+
+      - name: Build and test
+        run: bash ci.sh
+
+      - name: Keep the build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appkit-shim
+          path: |
+            build/device/libAppKitShim.a
+            build/sim/libAppKitShim.a
+            build/sim/smoke
+          if-no-files-found: ignore

@@ -4,7 +4,15 @@
 #import "NSResponder.h"
 #import "NSGeometry.h"
 
-@class NSWindow, NSTextInputContext, NSTrackingArea;
+@class NSWindow, NSTextInputContext, NSTrackingArea, CALayer;
+
+typedef NS_ENUM(NSInteger, NSViewLayerContentsRedrawPolicy) {
+  NSViewLayerContentsRedrawNever = 0,
+  NSViewLayerContentsRedrawOnSetNeedsDisplay = 1,
+  NSViewLayerContentsRedrawDuringViewResize = 2,
+  NSViewLayerContentsRedrawBeforeViewResize = 3,
+  NSViewLayerContentsRedrawCrossfade = 4,
+};
 #if __has_include(<UIKit/UIKit.h>)
 @class UIView;
 #endif
@@ -32,6 +40,34 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 @property (nonatomic, readonly, weak) NSView *superview;
 @property (nonatomic, readonly, copy) NSArray<NSView *> *subviews;
 @property (nonatomic, readonly, weak) NSWindow *window;
+
+// AppKit's -setFrame: goes through these two, and Chromium overrides -setFrameSize: to
+// resize its renderer, so the shim calls them too — including when UIKit layout (rotation,
+// safe-area changes) resizes the backing view.
+- (void)setFrameSize:(NSSize)size;
+- (void)setFrameOrigin:(NSPoint)origin;
+
+// Layer hosting. `layer` is a CALayer the client owns and fills (Chromium attaches its
+// compositor output here); it is never the backing UIView's own layer, whose delegate UIKit
+// needs. It sits in a container flipped to macOS's bottom-left layer geometry, so layer
+// code written for the Mac renders the right way up.
+@property (nonatomic, strong) CALayer *layer;
+@property (nonatomic, assign) NSViewLayerContentsRedrawPolicy layerContentsRedrawPolicy;
+
+// Override points, called as on the Mac when the view changes window or superview.
+- (void)viewWillMoveToWindow:(NSWindow *)newWindow;
+- (void)viewDidMoveToWindow;
+- (void)viewWillMoveToSuperview:(NSView *)newSuperview;
+- (void)viewDidMoveToSuperview;
+- (void)viewDidChangeBackingProperties;
+
+// Points <-> pixels, using the window's backing scale (2x or 3x on iPhone).
+- (NSRect)convertRectToBacking:(NSRect)rect;
+- (NSRect)convertRectFromBacking:(NSRect)rect;
+- (NSSize)convertSizeToBacking:(NSSize)size;
+- (NSSize)convertSizeFromBacking:(NSSize)size;
+- (NSPoint)convertPointToBacking:(NSPoint)point;
+- (NSPoint)convertPointFromBacking:(NSPoint)point;
 
 - (void)addSubview:(NSView *)view;
 - (void)removeFromSuperview;
