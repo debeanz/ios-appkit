@@ -41,7 +41,7 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
   NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
   [map enumerateKeysAndObjectsUsingBlock:^(NSNotificationName ui, NSNotificationName appkit, BOOL *stop) {
     [nc addObserverForName:ui object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-      [nc postNotificationName:appkit object:NSApp];
+      [NSNotificationCenter.defaultCenter postNotificationName:appkit object:NSApp];
     }];
   }];
 }

@@ -27,7 +27,8 @@ static NSString *AKWordsFromAXName(NSString *name) {
     unichar c = [name characterAtIndex:i];
     BOOL upper = c >= 'A' && c <= 'Z';
     if (upper && i > 0) [out appendString:@" "];
-    [out appendFormat:@"%C", upper ? (unichar)(c - 'A' + 'a') : c];
+    unichar lower = upper ? (unichar)(c - 'A' + 'a') : c;
+    [out appendFormat:@"%C", lower];
   }
   return out;
 }
