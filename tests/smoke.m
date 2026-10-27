@@ -568,11 +568,11 @@ int main(int argc, const char *argv[]) {
     CHECK(FSPathMakeRef((const UInt8 *)"/no/such/path", &fsref, NULL) == fnfErr, "missing path has no FSRef");
     AppleEvent ae;
     AECreateAppleEvent('GURL', 'GURL', NULL, kAutoGenerateReturnID, kAnyTransactionID, &ae);
-    AEDesc urlDesc, got;
+    AEDesc urlDesc, aeGot;
     AECreateDesc('utf8', "steam://open", 12, &urlDesc);
     AEPutParamDesc(&ae, '----', &urlDesc);
-    CHECK(AEGetParamDesc(&ae, '----', typeWildCard, &got) == noErr && got.descriptorType == 'utf8', "Apple Event parameter reads back");
-    AEDisposeDesc(&got); AEDisposeDesc(&urlDesc); AEDisposeDesc(&ae);
+    CHECK(AEGetParamDesc(&ae, '----', typeWildCard, &aeGot) == noErr && aeGot.descriptorType == 'utf8', "Apple Event parameter reads back");
+    AEDisposeDesc(&aeGot); AEDisposeDesc(&urlDesc); AEDisposeDesc(&ae);
     CHECK(LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL) == NULL, "no login items on iOS");
 
     // Odds and ends.
