@@ -342,6 +342,36 @@ int main(int argc, const char *argv[]) {
     CHECK([[dark bestMatchFromAppearancesWithNames:choices] isEqualToString:NSAppearanceNameDarkAqua],
           "dark appearance picks the dark match");
 
+    // Controls: value lives in the cell; actions reach an explicit target.
+    AKTestMenuTarget *clickTarget = [AKTestMenuTarget new];
+    NSButton *button = [NSButton buttonWithTitle:@"Go" target:clickTarget action:@selector(ak_copy:)];
+    CHECK([button.title isEqualToString:@"Go"], "button title");
+    [button performClick:nil];
+    CHECK(clickTarget.copies == 1, "performClick sends the action to the target");
+    NSTextField *field2 = [NSTextField textFieldWithString:@"hello"];
+    field2.integerValue = 42;
+    CHECK(field2.integerValue == 42 && [field2.stringValue isEqualToString:@"42"], "control value round-trips through the cell");
+
+    // NSAnimation: a zero-duration animation completes immediately and applies its curve.
+    NSAnimation *anim = [[NSAnimation alloc] initWithDuration:0 animationCurve:NSAnimationLinear];
+    [anim startAnimation];
+    CHECK(anim.currentProgress == 1.0 && !anim.isAnimating, "zero-duration animation finishes at once");
+    NSAnimation *eased = [[NSAnimation alloc] initWithDuration:1 animationCurve:NSAnimationEaseIn];
+    eased.currentProgress = 0.5;
+    CHECK(eased.currentValue == 0.25, "ease-in curve maps 0.5 -> 0.25");
+
+    // NSAlert builds its buttons with AppKit's return codes (presenting UI needs a device).
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Title";
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    CHECK(alert.buttons.count == 2 && alert.buttons[0].tag == NSAlertFirstButtonReturn, "alert buttons numbered from NSAlertFirstButtonReturn");
+
+    // NSSavePanel resolves to a real URL under the app's Documents directory.
+    NSSavePanel *save = [NSSavePanel savePanel];
+    save.nameFieldStringValue = @"save.txt";
+    CHECK([save runModal] == NSModalResponseOK && [save.URL.lastPathComponent isEqualToString:@"save.txt"], "save panel yields a Documents URL");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

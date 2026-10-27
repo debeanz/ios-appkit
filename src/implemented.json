@@ -24,7 +24,16 @@
     "NSBezierPath",
     "NSImage",
     "NSBitmapImageRep",
-    "NSImageRep"
+    "NSImageRep",
+    "NSCell",
+    "NSControl",
+    "NSButton",
+    "NSTextField",
+    "NSAlert",
+    "NSSavePanel",
+    "NSOpenPanel",
+    "NSAnimation",
+    "NSAnimationContext"
   ],
   "functions": [
     "NSBeep",

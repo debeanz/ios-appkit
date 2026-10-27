@@ -17,6 +17,11 @@
 - (void)_ak_backingDidLayout;
 @end
 
+// NSAlert.m: the view controller to present UIKit modals from, and a nested run loop that
+// returns once `finished` reports YES (AppKit's -runModal works the same way).
+UIViewController *AKTopViewController(void);
+void AKRunModalUntil(BOOL (^finished)(void));
+
 // paramErr lives in the Mac-only MacErrors.h; the Carbon shims return the same value.
 enum { AKParamErr = -50 };
 
