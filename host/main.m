@@ -55,6 +55,14 @@ static NSString *inApp(NSString *rel) {
   return [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:rel];
 }
 
+// The client (steam_osx's own directory on a Mac), Steam's log folder (in Documents, so
+// it can be pulled off the device) and Steam's data root (in this app's container).
+static NSString *clientDir(void) { return inApp(@"client"); }
+static NSString *logsDir(void) { return [docsDir() stringByAppendingPathComponent:@"steam-logs"]; }
+static NSString *steamRoot(void) {
+  return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Steam"];
+}
+
 #pragma mark Crash and console capture
 
 static void writeStr(int fd, const char *s) { if (fd >= 0) write(fd, s, strlen(s)); }
@@ -183,8 +191,8 @@ static void launcherPump(void) {}
 
 typedef int (*SteamDllMainExFn)(int argc, char **argv, void (*pump)(void));
 
-static void launchSteam(void *steamui) {
-  NSString *client = inApp(@"client");
+static void launchSteam(void *steamui, void *launcher) {
+  NSString *client = clientDir();
 
   // As steam_osx's main does: SIGPIPE ignored, at least 9216 open files.
   signal(SIGPIPE, SIG_IGN);
@@ -200,12 +208,8 @@ static void launchSteam(void *steamui) {
   // copy (impossible on iOS). The data root lives in this app's writable container.
   setenv("STEAM_APP_BUNDLE_PATH", [[NSBundle mainBundle] bundlePath].fileSystemRepresentation, 1);
   setenv("STEAM_CLIENT_CONFIG_FILE", "", 1);
-  NSString *logs = [docsDir() stringByAppendingPathComponent:@"steam-logs"];
-  NSString *root = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Steam"];
-  for (NSString *d in @[ logs, root ])
-    [[NSFileManager defaultManager] createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
-  setenv("STEAM_CLIENT_LOG_FOLDER", logs.fileSystemRepresentation, 1);
-  hostlog(@"steam root: %@", root);
+  setenv("STEAM_CLIENT_LOG_FOLDER", logsDir().fileSystemRepresentation, 1);
+  hostlog(@"steam root: %@", steamRoot());
 
   // steam_osx chdirs into its own directory (the client) and puts its own path in argv[0].
   if (chdir(client.fileSystemRepresentation) != 0) {
@@ -227,6 +231,8 @@ static void launchSteam(void *steamui) {
   hostlog(@"(Steam's own output goes to steam-console.log; a crash goes to crash.log)");
   int rc = entry(argc, argv, launcherPump);
   hostlog(@"SteamDllMainEx returned %d", rc);
+  const char *(*runOnExit)(void) = (const char *(*)(void))dlsym(launcher, "SteamLauncher_CommandLineToRunOnExit");
+  if (runOnExit && *runOnExit()) hostlog(@"Steam asked to be relaunched with: %s", runOnExit());
 }
 
 static void bringUpClient(void) {
@@ -237,9 +243,17 @@ static void bringUpClient(void) {
   // The shim's code first, then the umbrella in front of it that Steam's load commands
   // point at (it re-exports the code plus the real iOS libraries), so a failure names the
   // layer. Then the client, in rough dependency order (bundled under client/).
+  // Steam's folders must exist before the launcher library hands them out.
+  for (NSString *d in @[ logsDir(), steamRoot() ])
+    [[NSFileManager defaultManager] createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
+
+  // SteamLauncher.framework stands in for steam_osx's exported launcher functions. It goes
+  // right after the shim and is configured at once: vgui2_s asks it for the universe while
+  // it initializes, which happens as it loads.
   NSArray<NSArray<NSString *> *> *images = @[
     @[ @"AppKitShimCore.framework", @"Frameworks/AppKitShimCore.framework/AppKitShimCore" ],
     @[ @"AppKitShim.framework", @"Frameworks/AppKitShim.framework/AppKitShim" ],
+    @[ @"SteamLauncher.framework", @"Frameworks/SteamLauncher.framework/SteamLauncher" ],
     @[ @"libtier0_s", @"client/libtier0_s.dylib" ],
     @[ @"libvstdlib_s", @"client/libvstdlib_s.dylib" ],
     @[ @"libSDL3", @"client/libSDL3.dylib" ],
@@ -248,21 +262,34 @@ static void bringUpClient(void) {
     @[ @"steamclient", @"client/steamclient.dylib" ],
     @[ @"steamui", @"client/steamui.dylib" ],
   ];
-  void *steamui = NULL;
+  void *steamui = NULL, *launcher = NULL;
   BOOL allLoaded = YES;
   for (NSArray<NSString *> *image in images) {
     void *h = probe(image[0], inApp(image[1]));
     if (!h) allLoaded = NO;
     if ([image[0] isEqualToString:@"steamui"]) steamui = h;
+    if ([image[0] isEqualToString:@"SteamLauncher.framework"] && h) {
+      launcher = h;
+      void (*configure)(const char *, const char *, const char *) =
+          (void (*)(const char *, const char *, const char *))dlsym(h, "SteamLauncher_Configure");
+      if (configure) {
+        configure(clientDir().fileSystemRepresentation, logsDir().fileSystemRepresentation,
+                  steamRoot().fileSystemRepresentation);
+        hostlog(@"        launcher interface ready (install dir, logs, data root)");
+      } else {
+        hostlog(@"  FAIL  SteamLauncher_Configure missing");
+        allLoaded = NO;
+      }
+    }
   }
   hostlog(@"loaded images now:     %u", _dyld_image_count());
   logImageBases();
-  if (!allLoaded || !steamui) {
+  if (!allLoaded || !steamui || !launcher) {
     hostlog(@"--- not launching: a library failed to load ---");
     return;
   }
   hostlog(@"--- all libraries loaded; starting Steam ---");
-  launchSteam(steamui);
+  launchSteam(steamui, launcher);
 }
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>

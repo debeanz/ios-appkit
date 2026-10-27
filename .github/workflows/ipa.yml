@@ -65,7 +65,7 @@ jobs:
           nm -gU build/device/AppKitShimCore.framework/AppKitShimCore > build/shim-exports.txt
           node tools/lib-routes.js --verify build/routes.json build/shim-exports.txt
 
-      - name: Build the iOS host executable
+      - name: Build the iOS host executable and the launcher interface it loads
         run: |
           SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
           xcrun clang -isysroot "$SYSROOT" -target arm64-apple-ios15.0 \
@@ -74,6 +74,15 @@ jobs:
             -Wl,-rpath,@executable_path/Frameworks \
             -o build/Steam
           file build/Steam
+          # steam_osx's exported launcher functions, which steamui/steamclient/vgui2_s
+          # look up by name; the host dlopens this RTLD_GLOBAL before any Steam library.
+          L=build/device/SteamLauncher.framework
+          mkdir -p "$L"
+          xcrun clang -isysroot "$SYSROOT" -target arm64-apple-ios15.0 -O2 -Wall -Wno-unused-parameter \
+            -dynamiclib -install_name @rpath/SteamLauncher.framework/SteamLauncher \
+            host/SteamLauncher.c -o "$L/SteamLauncher"
+          sed 's/AppKitShim/SteamLauncher/g' framework/Info.plist > "$L/Info.plist"
+          echo "SteamLauncher exports:"; nm -gU "$L/SteamLauncher" | awk '{print "  " $3}'
 
       - name: Package the unsigned IPA
         run: bash tools/package-ipa.sh client build/device build/Steam dist/Steam-unsigned.ipa build/routes.json
