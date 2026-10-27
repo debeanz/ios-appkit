@@ -17,7 +17,7 @@
 @property (class, readonly) BOOL isAutomaticTextReplacementEnabled;
 @property (class, readonly) BOOL isAutomaticSpellingCorrectionEnabled;
 @property (nonatomic, readonly, copy) NSArray<NSString *> *availableLanguages;
-@property (nonatomic, copy) NSString *language;
+@property (nonatomic, readonly, copy) NSString *language; // set with -setLanguage:, which returns BOOL
 @property (nonatomic) BOOL automaticallyIdentifiesLanguages;
 + (NSInteger)uniqueSpellDocumentTag;
 - (void)closeSpellDocumentWithTag:(NSInteger)tag;

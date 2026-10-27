@@ -47,7 +47,32 @@
     "NSSharingServicePicker",
     "NSStatusBar",
     "NSToolbar",
-    "NSPrintInfo"
+    "NSPrintInfo",
+    "NSButtonCell",
+    "NSPopUpButtonCell",
+    "NSPopUpButton",
+    "NSComboBox",
+    "NSSegmentedControl",
+    "NSMatrix",
+    "NSPathControl",
+    "NSProgressIndicator",
+    "NSImageView",
+    "NSBox",
+    "NSScroller",
+    "NSScrollView",
+    "NSTabView",
+    "NSTableColumn",
+    "NSTableView",
+    "NSText",
+    "NSNextStepFrame",
+    "NSThemeFrame",
+    "NSTitlebarAccessoryViewController",
+    "NSDraggingItem",
+    "NSTouchBar",
+    "NSCustomTouchBarItem",
+    "NSGroupTouchBarItem",
+    "NSCandidateListTouchBarItem",
+    "NSAccessibilityElement"
   ],
   "functions": [
     "NSBeep",
@@ -420,6 +445,10 @@
   ],
   "stubbed": [
     "NSInputManager",
-    "NSPrintPanel"
+    "NSPrintPanel",
+    "NSAccessibilityRemoteUIElement",
+    "NSOpenGLPixelFormat",
+    "NSOpenGLContext",
+    "NSOpenGLView"
   ]
 }

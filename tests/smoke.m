@@ -101,6 +101,13 @@ static int AKCountClassCollisions(const char *ourImage) {
 - (void)viewDidLoad { _loads++; }
 @end
 
+@interface AKTestTableSource : NSObject
+@property (nonatomic, assign) NSInteger rows;
+@end
+@implementation AKTestTableSource
+- (NSInteger)numberOfRowsInTableView:(id)tableView { return _rows; }
+@end
+
 @interface AKTestMenuTarget : NSObject
 @property (nonatomic, assign) int copies;
 @end
@@ -423,6 +430,63 @@ int main(int argc, const char *argv[]) {
     NSPrintInfo *pi = NSPrintInfo.sharedPrintInfo;
     CHECK(NSEqualSizes(pi.paperSize, NSMakeSize(612, 792)) && pi.leftMargin == 72, "US Letter with AppKit margins");
     CHECK([NSPrintPanel.printPanel runModal] == NSModalResponseCancel, "print panel cancels without a document");
+
+    // Widgets keep working models.
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 100, 24) pullsDown:NO];
+    [popup addItemsWithTitles:@[ @"Low", @"Medium", @"High" ]];
+    CHECK(popup.indexOfSelectedItem == 0 && [popup.title isEqualToString:@"Low"], "first pop-up item starts selected");
+    [popup selectItemWithTitle:@"High"];
+    CHECK(popup.indexOfSelectedItem == 2 && [popup.titleOfSelectedItem isEqualToString:@"High"], "select by title");
+    CHECK([popup itemAtIndex:2].state == NSControlStateValueOn && [popup itemAtIndex:0].state == NSControlStateValueOff, "selected item is checked");
+
+    NSSegmentedControl *seg = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
+    seg.segmentCount = 3;
+    [seg setLabel:@"A" forSegment:0];
+    seg.selectedSegment = 1;
+    [seg setSelected:YES forSegment:2]; // select-one mode: clears segment 1
+    CHECK(seg.selectedSegment == 2 && ![seg isSelectedForSegment:1] && [[seg labelForSegment:0] isEqualToString:@"A"], "segmented control selects one");
+
+    NSComboBox *combo = [[NSComboBox alloc] initWithFrame:NSZeroRect];
+    [combo addItemWithObjectValue:@"red"];
+    [combo addItemWithObjectValue:@"blue"];
+    [combo selectItemAtIndex:1];
+    CHECK(combo.indexOfSelectedItem == 1 && [combo.stringValue isEqualToString:@"blue"], "combo box selection fills the field");
+
+    NSTabView *tabs = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 200, 100)];
+    NSTabViewItem *t1 = [[NSTabViewItem alloc] initWithIdentifier:@"one"], *t2 = [[NSTabViewItem alloc] initWithIdentifier:@"two"];
+    t1.view = [[NSView alloc] initWithFrame:NSZeroRect];
+    t2.view = [[NSView alloc] initWithFrame:NSZeroRect];
+    [tabs addTabViewItem:t1];
+    [tabs addTabViewItem:t2];
+    CHECK(tabs.selectedTabViewItem == t1 && t1.view.superview == tabs, "first tab shown");
+    [tabs selectTabViewItemAtIndex:1];
+    CHECK(tabs.selectedTabViewItem == t2 && t2.view.superview == tabs && t1.view.superview == nil, "only the selected tab's view is in the tree");
+
+    AKTestTableSource *source = [AKTestTableSource new];
+    source.rows = 5;
+    NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    table.dataSource = source;
+    [table addTableColumn:[[NSTableColumn alloc] initWithIdentifier:@"name"]];
+    [table selectRowIndexes:[NSIndexSet indexSetWithIndex:4] byExtendingSelection:NO];
+    CHECK(table.numberOfRows == 5 && table.selectedRow == 4 && [table tableColumnWithIdentifier:@"name"], "table rows come from the data source");
+    source.rows = 3;
+    [table reloadData];
+    CHECK(table.selectedRow == -1, "reload drops rows that no longer exist from the selection");
+
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
+    scroll.documentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, 400)];
+    [scroll scrollToPoint:NSMakePoint(0, 1000)];
+    CHECK(NSMinY(scroll.documentVisibleRect) == 300, "scrolling clamps to the document's end");
+
+    NSText *text = [[NSText alloc] initWithFrame:NSZeroRect];
+    text.string = @"Hello";
+    [text replaceCharactersInRange:NSMakeRange(5, 0) withString:@" world"];
+    CHECK([text.string isEqualToString:@"Hello world"] && text.selectedRange.location == 11, "NSText edits and moves the caret");
+
+    NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+    progress.doubleValue = 150;
+    CHECK(progress.doubleValue == 100, "progress clamps to maxValue");
+    CHECK([[NSOpenGLPixelFormat alloc] initWithAttributes:NULL] == nil, "no desktop OpenGL: pixel format is nil, as AppKit reports when unsupported");
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
