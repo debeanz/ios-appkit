@@ -26,7 +26,10 @@
 // of the key window, if one exists yet.
 - (NSRect)visibleFrame {
   CGRect b = _screen.bounds;
-  UIWindow *w = UIApplication.sharedApplication.windows.firstObject;
+  UIWindow *w = nil;
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if ([scene isKindOfClass:UIWindowScene.class]) { w = ((UIWindowScene *)scene).windows.firstObject; break; }
+  }
   if (w) {
     UIEdgeInsets in = w.safeAreaInsets;
     b = UIEdgeInsetsInsetRect(b, in);

@@ -84,7 +84,7 @@ NSApplication *NSApp = nil;
 }
 
 - (void)sendEvent:(NSEvent *)event {
-  NSResponder *target = _firstResponder ?: self.keyWindow.contentView;
+  NSResponder *target = _firstResponder ?: (NSResponder *)self.keyWindow.contentView;
   switch (event.type) {
     case NSEventTypeLeftMouseDown:  [target mouseDown:event]; break;
     case NSEventTypeLeftMouseUp:    [target mouseUp:event]; break;

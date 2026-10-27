@@ -21,9 +21,14 @@ step "Link smoke test"
 make test SDK=sim || fail "link smoke test"
 
 step "Run smoke test on a simulator"
-# Pick the newest available iPhone instead of hard-coding a model name.
-DEVTYPE=$(xcrun simctl list devicetypes | grep -o 'com.apple.CoreSimulator.SimDeviceType.iPhone-[0-9A-Za-z-]*' | tail -1)
-RUNTIME=$(xcrun simctl list runtimes available | grep -o 'com.apple.CoreSimulator.SimRuntime.iOS-[0-9-]*' | tail -1)
+# Pick the newest iOS runtime and an iPhone that runtime actually supports, instead of
+# guessing a model name (an old model fails with "Incompatible device").
+read -r RUNTIME DEVTYPE < <(xcrun simctl list runtimes available -j | python3 -c '
+import json, sys
+rts = [r for r in json.load(sys.stdin)["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
+rt = max(rts, key=lambda r: [int(x) for x in r["version"].split(".")])
+phones = [d["identifier"] for d in rt.get("supportedDeviceTypes", []) if d.get("productFamily") == "iPhone"]
+print(rt["identifier"], phones[-1] if phones else "")')
 echo "device type: $DEVTYPE"
 echo "runtime:     $RUNTIME"
 [ -n "$DEVTYPE" ] && [ -n "$RUNTIME" ] || fail "find simulator"
