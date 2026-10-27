@@ -32,6 +32,7 @@
 #import "NSServices.h"
 #import "NSWidgets.h"
 #import "FoundationMac.h"
+#import "DiskArbitrationMac.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"
