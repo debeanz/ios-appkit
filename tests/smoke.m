@@ -544,6 +544,19 @@ int main(int argc, const char *argv[]) {
     CHECK([[list descriptorAtIndex:1].stringValue isEqualToString:@"one"] && [list descriptorAtIndex:2].int32Value == 42, "descriptor values read back");
     CHECK([NSAppleEventManager.sharedAppleEventManager currentAppleEvent] == nil, "no Apple Event is current on iOS");
 
+    // Small frameworks: the present-on-iOS ones answer, the macOS-only ones report absence.
+    id<NSObject> gpuObserver = nil;
+    CHECK(MTLCopyAllDevicesWithObserver(&gpuObserver, ^(id<MTLDevice> d, MTLDeviceNotificationName n) {}).count >= 1, "one Metal device, never removed");
+    CHECK([CWWiFiClient.sharedWiFiClient interface] == nil, "no controllable Wi-Fi interface");
+    CHECK(IOBluetoothHostController.defaultController == nil && IOBluetoothDevice.pairedDevices.count == 0, "no classic Bluetooth");
+    CHECK(FFIsForceFeedback(0) == AKFFERR_NOINTERFACE, "no force feedback interface");
+    NSError *odError = nil;
+    CHECK([ODNode nodeWithSession:ODSession.defaultSession name:@"/Local/Default" error:&odError] == nil && odError, "directory services unavailable");
+    __block BOOL captureFailed = NO;
+    [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *c, NSError *e) { captureFailed = (c == nil && e != nil); }];
+    [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+    CHECK(captureFailed, "screen capture reports it is unavailable");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");
