@@ -1,4 +1,5 @@
 #import "AppKitShim/NSCursor.h"
+#import "AKShimPrivate.h"
 
 NSNotificationName const AKShimCursorDidChangeNotification = @"AKShimCursorDidChangeNotification";
 
@@ -77,5 +78,8 @@ static NSCursor *AKSystemCursor(NSString *name) {
   [gStack removeLastObject];
   [previous set];
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 
 @end

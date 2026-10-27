@@ -213,6 +213,12 @@ static void AKViewDidMoveToWindow(NSView *view) {
 - (NSPoint)convertPoint:(NSPoint)point toView:(NSView *)view {
   return [_backing convertPoint:point toView:[self _ak_spaceForView:view]];
 }
+- (NSRect)convertRect:(NSRect)rect fromView:(NSView *)view {
+  return [_backing convertRect:rect fromView:[self _ak_spaceForView:view]];
+}
+- (NSRect)convertRect:(NSRect)rect toView:(NSView *)view {
+  return [_backing convertRect:rect toView:[self _ak_spaceForView:view]];
+}
 
 - (CGFloat)_ak_backingScale {
   CGFloat s = self.window.backingScaleFactor;

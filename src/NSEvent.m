@@ -3,6 +3,18 @@
 static NSPoint gMouseLocation;
 static NSEventModifierFlags gModifierFlags;
 
+// A local monitor sees each event the app dispatches (NSApp -sendEvent: runs them first) and
+// may replace it or return nil to swallow it. A global monitor watches other apps' events,
+// which an iOS app never receives, so it is registered but never fires.
+@interface AKEventMonitor : NSObject
+@property (nonatomic, assign) unsigned long long mask;
+@property (nonatomic, copy) NSEvent *(^localHandler)(NSEvent *);
+@end
+@implementation AKEventMonitor
+@end
+
+static NSMutableArray<AKEventMonitor *> *gLocalMonitors;
+
 @implementation NSEvent {
   NSEventType _type;
   NSEventModifierFlags _flags;
@@ -116,4 +128,63 @@ static NSEvent *AKMakeEvent(NSEventType type, NSPoint location, NSEventModifierF
 + (NSPoint)mouseLocation { return gMouseLocation; }
 + (void)_setMouseLocation:(NSPoint)location { gMouseLocation = location; }
 
+// Bit n set while mouse button n is held (the input bridge maps touch to the left button).
++ (NSUInteger)pressedMouseButtons { return AKMouseButtonsDown(); }
+
+#pragma mark Pressure, phases, touches
+
+// A mouse or touch is either pressed (1.0) or not (0.0); there is no Force Touch trackpad.
+- (float)pressure {
+  switch (self.type) {
+    case NSEventTypeLeftMouseDown: case NSEventTypeLeftMouseDragged:
+    case NSEventTypeRightMouseDown: case NSEventTypeRightMouseDragged:
+    case NSEventTypeOtherMouseDown: case NSEventTypeOtherMouseDragged:
+      return 1.0f;
+    default:
+      return 0.0f;
+  }
+}
+- (float)tangentialPressure { return 0.0f; }
+- (NSInteger)phase { return 0; }          // NSEventPhaseNone
+- (NSInteger)momentumPhase { return 0; }  // NSEventPhaseNone
+- (BOOL)isDirectionInvertedFromDevice { return NO; }
+- (NSSet *)allTouches { return [NSSet set]; }
+- (NSSet *)touchesMatchingPhase:(NSUInteger)phase inView:(NSView *)view { return [NSSet set]; }
+
+#pragma mark Event monitors (AKEventMonitor and gLocalMonitors are defined above)
+
++ (id)addLocalMonitorForEventsMatchingMask:(unsigned long long)mask handler:(NSEvent *(^)(NSEvent *))block {
+  AKEventMonitor *m = [AKEventMonitor new];
+  m.mask = mask;
+  m.localHandler = block;
+  @synchronized (NSEvent.class) {
+    if (!gLocalMonitors) gLocalMonitors = [NSMutableArray array];
+    [gLocalMonitors addObject:m];
+  }
+  return m;
+}
+
++ (id)addGlobalMonitorForEventsMatchingMask:(unsigned long long)mask handler:(void (^)(NSEvent *))block {
+  AKEventMonitor *m = [AKEventMonitor new];
+  m.mask = mask;
+  return m;
+}
+
++ (void)removeMonitor:(id)monitor {
+  @synchronized (NSEvent.class) { [gLocalMonitors removeObject:monitor]; }
+}
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
+
 @end
+
+NSEvent *AKRunLocalEventMonitors(NSEvent *event) {
+  NSArray<AKEventMonitor *> *monitors;
+  @synchronized (NSEvent.class) { monitors = [gLocalMonitors copy]; }
+  for (AKEventMonitor *m in monitors) {
+    if (!event) break;
+    if (event.type < 64 && (m.mask & (1ULL << event.type)) && m.localHandler) event = m.localHandler(event);
+  }
+  return event;
+}

@@ -65,4 +65,8 @@
   // End of the chain. AppKit beeps for key events; we stay silent and drop it.
 }
 
+// Covers NSWindow and NSView (and client subclasses such as SDL3Window/SDL3View): a method
+// the shim lacks is logged and returns zero instead of aborting. See AKShimPrivate.h.
+AK_UNIMPLEMENTED_FORWARDER
+
 @end

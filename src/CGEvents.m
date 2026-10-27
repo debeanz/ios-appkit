@@ -53,6 +53,10 @@ bool CGEventSourceButtonState(CGEventSourceStateID stateID, CGMouseButton button
   @synchronized (NSEvent.class) { return (gButtonsDown >> button) & 1u; }
 }
 
+uint32_t AKMouseButtonsDown(void) {
+  @synchronized (NSEvent.class) { return gButtonsDown; }
+}
+
 // Seconds since the last event of a type; with no such event yet, since the app started.
 double CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID stateID, CGEventType type) {
   @synchronized (NSEvent.class) {

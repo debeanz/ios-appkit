@@ -228,4 +228,36 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (NSRect)contentRectForFrameRect:(NSRect)frameRect { return frameRect; }
 - (NSRect)frameRectForContentRect:(NSRect)contentRect { return contentRect; }
 
+#pragma mark Coordinates — window space is screen space offset by the frame origin
+
+- (NSRect)convertRectToScreen:(NSRect)rect {
+  return NSMakeRect(rect.origin.x + _frame.origin.x, rect.origin.y + _frame.origin.y, rect.size.width, rect.size.height);
+}
+- (NSRect)convertRectFromScreen:(NSRect)rect {
+  return NSMakeRect(rect.origin.x - _frame.origin.x, rect.origin.y - _frame.origin.y, rect.size.width, rect.size.height);
+}
+- (NSPoint)convertPointToScreen:(NSPoint)point {
+  return NSMakePoint(point.x + _frame.origin.x, point.y + _frame.origin.y);
+}
+- (NSPoint)convertPointFromScreen:(NSPoint)point {
+  return NSMakePoint(point.x - _frame.origin.x, point.y - _frame.origin.y);
+}
+
+- (void)setFrame:(NSRect)frame display:(BOOL)display { [self setFrame:frame]; }
+- (void)setFrame:(NSRect)frame display:(BOOL)display animate:(BOOL)animate { [self setFrame:frame]; }
+
+#pragma mark State a client polls — answered so it keeps rendering
+
+// Every window is full screen and frontmost: never minimized, always on the active space,
+// and visible. A zero (the fallback's answer) would read as "occluded", and SDL stops
+// presenting frames to an occluded window.
+- (BOOL)isZoomed { return YES; }
+- (BOOL)isMiniaturized { return NO; }
+- (BOOL)isOnActiveSpace { return YES; }
+- (BOOL)inLiveResize { return NO; }
+- (NSUInteger)occlusionState { return 1u << 1; }  // NSWindowOcclusionStateVisible
+- (void)center {}
+- (NSWindow *)parentWindow { return nil; }
+- (NSArray<NSWindow *> *)childWindows { return @[]; }
+
 @end

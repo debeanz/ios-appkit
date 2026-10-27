@@ -9,6 +9,15 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 @property (nonatomic, strong) NSMutableArray<NSWindow *> *mutableWindows;
 @property (nonatomic, strong) NSMutableArray<NSEvent *> *eventQueue;
 @property (nonatomic, assign, getter=isRunning, readwrite) BOOL running;
+// Menus the client builds on the Mac. Tracked so getters round-trip; never shown (iOS has
+// no menu bar — Big Picture draws its own UI).
+@property (nonatomic, strong) NSMenu *servicesMenu;
+@property (nonatomic, strong) NSMenu *windowsMenu;
+@property (nonatomic, strong) NSMenu *helpMenu;
+@property (nonatomic, strong) NSMenu *appleMenu;
+@property (nonatomic, strong) NSImage *applicationIconImage;
+@property (nonatomic, assign) NSUInteger presentationOptions;
+@property (nonatomic, assign) NSInteger modalDepth;
 @end
 
 @implementation NSApplication
@@ -111,6 +120,8 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 }
 
 - (void)sendEvent:(NSEvent *)event {
+  event = AKRunLocalEventMonitors(event);  // a local monitor may replace or swallow it
+  if (!event) return;
   AKNoteInputEvent(event);
   NSWindow *window = event.window ?: self.keyWindow;
   [window sendEvent:event];
@@ -119,6 +130,74 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 }
 
 - (void)makeFirstResponder:(NSResponder *)responder { [self.keyWindow makeFirstResponder:responder]; }
+
+#pragma mark Menus (tracked; not shown on iOS)
+
+// servicesMenu/windowsMenu/helpMenu/appleMenu are properties above (auto getters/setters).
+// SDL's Mac app setup assigns all of these while building the menu bar; keeping them avoids
+// log noise. mainMenu is a property in the header.
+
+#pragma mark Activation / visibility (single foreground app on iOS)
+
+- (void)hide:(id)sender {}
+- (void)unhide:(id)sender {}
+- (void)unhideWithoutActivation {}
+- (void)hideOtherApplications:(id)sender {}
+- (void)unhideAllApplications:(id)sender {}
+- (BOOL)isHidden { return NO; }
+- (BOOL)isActive { return YES; }
+- (void)activate {}
+- (void)updateWindows {}
+- (void)setWindowsNeedUpdate:(BOOL)needUpdate {}
+- (NSInteger)activationPolicy { return NSApplicationActivationPolicyRegular; }
+- (NSWindow *)mainWindow { return self.keyWindow; }
+- (NSInteger)requestUserAttention:(NSInteger)requestType { return 0; }
+- (void)cancelUserAttentionRequest:(NSInteger)request {}
+
+- (NSArray<NSWindow *> *)orderedWindows { return [self.mutableWindows copy]; }
+- (void)enumerateWindowsWithOptions:(NSUInteger)options
+                         usingBlock:(void (^)(NSWindow *window, BOOL *stop))block {
+  if (!block) return;
+  BOOL stop = NO;
+  for (NSWindow *w in [self.mutableWindows copy]) { block(w, &stop); if (stop) break; }
+}
+
+#pragma mark Appearance — the client only reads it; nil means "no override"
+
+- (id)effectiveAppearance { return nil; }
+- (id)appearance { return nil; }
+- (void)setAppearance:(id)appearance {}
+
+#pragma mark Modal sessions — no nested UI; report "keep running" so loops exit cleanly
+
+// Steam/SDL rarely run a real modal loop here. Returning a session that immediately reports
+// "stopped" means a -runModalSession: loop finishes at once instead of spinning forever.
+- (void *)beginModalSessionForWindow:(NSWindow *)window { self.modalDepth++; return (void *)(intptr_t)self.modalDepth; }
+- (NSInteger)runModalSession:(void *)session { return -1001; /* NSModalResponseStop */ }
+- (void)endModalSession:(void *)session { if (self.modalDepth > 0) self.modalDepth--; }
+- (NSInteger)runModalForWindow:(NSWindow *)window { return -1000; /* NSModalResponseOK */ }
+- (void)stopModalWithCode:(NSInteger)returnCode {}
+- (void)stopModal {}
+- (void)abortModal {}
+- (NSWindow *)modalWindow { return nil; }
+
+#pragma mark Action dispatch down the responder chain
+
+- (id)targetForAction:(SEL)action {
+  for (NSResponder *r = self.keyWindow.firstResponder; r; r = r.nextResponder)
+    if ([r respondsToSelector:action]) return r;
+  return [self respondsToSelector:action] ? self : nil;
+}
+
+- (BOOL)sendAction:(SEL)action to:(id)target from:(id)sender {
+  id dest = target ?: [self targetForAction:action];
+  if (!dest || ![dest respondsToSelector:action]) return NO;
+  IMP imp = [dest methodForSelector:action];
+  ((void (*)(id, SEL, id))imp)(dest, action, sender);
+  return YES;
+}
+
+AK_UNIMPLEMENTED_FORWARDER
 
 @end
 

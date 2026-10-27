@@ -29,6 +29,7 @@ void AKRunModalUntil(BOOL (^finished)(void));
 // CGEvents.m: records every event NSApp delivers (per-type times and counts, keys and
 // buttons held, last mouse movement) for the CGEventSource state queries.
 void AKNoteInputEvent(NSEvent *event);
+uint32_t AKMouseButtonsDown(void);  // bit n set while mouse button n is held
 
 // paramErr lives in the Mac-only MacErrors.h; the Carbon shims return the same value.
 enum { AKParamErr = -50 };
@@ -57,6 +58,42 @@ UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);
 + (void)_setMouseLocation:(NSPoint)location;
 + (void)_setModifierFlags:(NSEventModifierFlags)flags;
 @end
+
+// AKForwarding.m: a shim class that is missing a method logs it (once per class+selector,
+// to stderr -> steam-console.log) and returns zero instead of raising "unrecognized
+// selector". This keeps the client running so one launch surfaces every method the shim
+// still needs, the way a real AppKit object would already respond. A class opts in by
+// putting AK_UNIMPLEMENTED_FORWARDER in its @implementation. respondsToSelector: is
+// unaffected (it checks the real method list), so feature detection still sees the truth.
+void AKLogUnimplemented(id obj, SEL sel);
+NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
+
+#define AK_UNIMPLEMENTED_FORWARDER \
+  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector { \
+    NSMethodSignature *sig = [super methodSignatureForSelector:aSelector]; \
+    return sig ?: AKGenericSignatureForSelector(aSelector); \
+  } \
+  - (void)forwardInvocation:(NSInvocation *)anInvocation { \
+    AKLogUnimplemented(self, anInvocation.selector); \
+    NSUInteger len = anInvocation.methodSignature.methodReturnLength; \
+    if (len) { void *zero = calloc(1, len); [anInvocation setReturnValue:zero]; free(zero); } \
+  }
+
+// The same for class methods (+[NSEvent ...], +[NSMenu ...]).
+#define AK_UNIMPLEMENTED_CLASS_FORWARDER \
+  + (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector { \
+    NSMethodSignature *sig = [super methodSignatureForSelector:aSelector]; \
+    return sig ?: AKGenericSignatureForSelector(aSelector); \
+  } \
+  + (void)forwardInvocation:(NSInvocation *)anInvocation { \
+    AKLogUnimplemented(self, anInvocation.selector); \
+    NSUInteger len = anInvocation.methodSignature.methodReturnLength; \
+    if (len) { void *zero = calloc(1, len); [anInvocation setReturnValue:zero]; free(zero); } \
+  }
+
+// NSEvent.m: local event monitors (+addLocalMonitorForEventsMatchingMask:handler:). NSApp's
+// -sendEvent: passes each event through them first; a handler returning nil swallows it.
+NSEvent *AKRunLocalEventMonitors(NSEvent *event);
 
 // KeyCodes.m
 unsigned short AKMacKeyCodeForHIDUsage(long usage);       // 0xFF when unknown

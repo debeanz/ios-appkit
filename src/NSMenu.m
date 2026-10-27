@@ -1,5 +1,6 @@
 #import "AppKitShim/AppKit.h"
 #import "AppKitShim/NSMenu.h"
+#import "AKShimPrivate.h"
 
 NSNotificationName const NSMenuDidBeginTrackingNotification = @"NSMenuDidBeginTrackingNotification";
 NSNotificationName const NSMenuDidEndTrackingNotification = @"NSMenuDidEndTrackingNotification";
@@ -43,6 +44,8 @@ NSNotificationName const NSMenuWillSendActionNotification = @"NSMenuWillSendActi
   _submenu = submenu;
   submenu.supermenu = self.menu;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
 
 @end
 
@@ -146,5 +149,14 @@ static const NSEventModifierFlags AKShortcutModifiers =
 + (void)popUpContextMenu:(NSMenu *)menu withEvent:(NSEvent *)event forView:(NSView *)view {}
 
 - (void)cancelTracking {}
+
+// The Mac menu bar's visibility (SDL hides it for fullscreen). There is no menu bar on iOS;
+// remember what was asked so the getter round-trips.
+static BOOL gMenuBarVisible = YES;
++ (BOOL)menuBarVisible { return gMenuBarVisible; }
++ (void)setMenuBarVisible:(BOOL)visible { gMenuBarVisible = visible; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 
 @end
