@@ -462,14 +462,14 @@ int main(int argc, const char *argv[]) {
     [tabs selectTabViewItemAtIndex:1];
     CHECK(tabs.selectedTabViewItem == t2 && t2.view.superview == tabs && t1.view.superview == nil, "only the selected tab's view is in the tree");
 
-    AKTestTableSource *source = [AKTestTableSource new];
-    source.rows = 5;
+    AKTestTableSource *tableSource = [AKTestTableSource new];
+    tableSource.rows = 5;
     NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    table.dataSource = source;
+    table.dataSource = tableSource;
     [table addTableColumn:[[NSTableColumn alloc] initWithIdentifier:@"name"]];
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:4] byExtendingSelection:NO];
     CHECK(table.numberOfRows == 5 && table.selectedRow == 4 && [table tableColumnWithIdentifier:@"name"], "table rows come from the data source");
-    source.rows = 3;
+    tableSource.rows = 3;
     [table reloadData];
     CHECK(table.selectedRow == -1, "reload drops rows that no longer exist from the selection");
 
