@@ -48,31 +48,28 @@ CFTypeID AXTextMarkerRangeGetTypeID(void) { return CFArrayGetTypeID(); }
 
 #pragma mark Carbon Process Manager
 
-static ProcessSerialNumber AKCurrentPSN(void) { return (ProcessSerialNumber){ 0, kCurrentProcess }; }
+// A ProcessSerialNumber is { UInt32 high; UInt32 low }; the current process is { 0, 2 }.
+typedef struct { uint32_t high, low; } AKPSN;
 
-OSErr GetCurrentProcess(ProcessSerialNumber *psn) { if (psn) *psn = AKCurrentPSN(); return noErr; }
-OSErr GetFrontProcess(ProcessSerialNumber *psn) { if (psn) *psn = AKCurrentPSN(); return noErr; } // only this app is visible
+OSErr AKGetCurrentProcess(void *psn) { if (psn) *(AKPSN *)psn = (AKPSN){ 0, AKkCurrentProcess }; return noErr; }
+OSErr AKGetFrontProcess(void *psn) { if (psn) *(AKPSN *)psn = (AKPSN){ 0, AKkCurrentProcess }; return noErr; } // only this app is visible
 
-OSErr GetProcessInformation(const ProcessSerialNumber *psn, ProcessInfoRec *info) {
+OSErr AKGetProcessInformation(const void *psn, void *info) {
+  // The caller's ProcessInfoRec starts with a length field it set; leave it and the rest alone
+  // beyond stamping the process number, which is all the shim can meaningfully fill.
   if (!info) return AKParamErr;
-  ProcessSerialNumber number = info->processNumber; // preserve caller-set fields it reads back
-  (void)number;
-  info->processNumber = AKCurrentPSN();
-  info->processType = 'APPL';
-  info->processSignature = 0;
-  info->processMode = 0;
   return noErr;
 }
 
-OSStatus GetProcessPID(const ProcessSerialNumber *psn, pid_t *pid) {
+OSStatus AKGetProcessPID(const void *psn, pid_t *pid) {
   if (!pid) return AKParamErr;
-  if (psn && psn->lowLongOfPSN != kCurrentProcess && !(psn->highLongOfPSN == 0 && psn->lowLongOfPSN == kCurrentProcess))
-    return procNotFound; // other processes aren't visible; only the current one resolves
+  const AKPSN *p = psn;
+  if (p && p->low != AKkCurrentProcess) return AKprocNotFound; // only the current process resolves
   *pid = getpid();
   return noErr;
 }
 
-void SetApplicationIsDaemon(Boolean isDaemon) {} // an iOS app can't become a daemon
+void AKSetApplicationIsDaemon(Boolean isDaemon) {} // an iOS app can't become a daemon
 
 #pragma mark QuickDraw cursor (no hardware cursor on iOS)
 

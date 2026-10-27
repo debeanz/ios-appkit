@@ -635,9 +635,9 @@ int main(int argc, const char *argv[]) {
 
     // ApplicationServices: the current process resolves; the Carbon pasteboard round-trips;
     // page formats hold paper geometry; printing finds no device.
-    ProcessSerialNumber psn;
+    struct { uint32_t high, low; } psn = {0};
     pid_t psnPid = 0;
-    CHECK(GetCurrentProcess(&psn) == noErr && GetProcessPID(&psn, &psnPid) == noErr && psnPid == getpid(), "current process PSN -> pid");
+    CHECK(AKGetCurrentProcess(&psn) == noErr && AKGetProcessPID(&psn, &psnPid) == noErr && psnPid == getpid(), "current process PSN -> pid");
     PasteboardRef cpb = NULL;
     CHECK(PasteboardCreate(CFSTR("ak.test.pb"), &cpb) == noErr && cpb, "carbon pasteboard created");
     PasteboardClear(cpb);

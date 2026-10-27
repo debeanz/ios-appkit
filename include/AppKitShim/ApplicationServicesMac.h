@@ -38,20 +38,19 @@ extern CFTypeID AXTextMarkerRangeGetTypeID(void);
 
 #pragma mark Carbon Process Manager
 
-typedef struct ProcessSerialNumber { UInt32 highLongOfPSN; UInt32 lowLongOfPSN; } ProcessSerialNumber;
-typedef struct ProcessInfoRec { UInt32 processInfoLength; void *processName; ProcessSerialNumber processNumber;
-                                UInt32 processType; OSType processSignature; UInt32 processMode; void *processLocation;
-                                UInt32 processSize; UInt32 processFreeMem; ProcessSerialNumber processLauncher;
-                                SInt32 processLaunchDate; SInt32 processActiveTime; void *processAppRef; } ProcessInfoRec;
-
+// The Process Manager types (ProcessSerialNumber, ProcessInfoRec) and functions are declared
+// by the iOS SDK as legacy/unavailable, so the shim can't reuse their names. Each function has
+// an AK-prefixed name and exports the real symbol through an asm label; a ProcessSerialNumber
+// is two 32-bit words, so it's passed as a pair of pointers' worth of memory via void *.
 typedef struct PMPaperMargins { double top, left, bottom, right; } PMPaperMargins;
-enum { kNoProcess = 0, kCurrentProcess = 2, procNotFound = -600 };
 
-extern OSErr GetCurrentProcess(ProcessSerialNumber *psn);
-extern OSErr GetFrontProcess(ProcessSerialNumber *psn);
-extern OSErr GetProcessInformation(const ProcessSerialNumber *psn, ProcessInfoRec *info);
-extern OSStatus GetProcessPID(const ProcessSerialNumber *psn, pid_t *pid);
-extern void SetApplicationIsDaemon(Boolean isDaemon);
+enum { AKkCurrentProcess = 2, AKprocNotFound = -600 };
+
+OSErr AKGetCurrentProcess(void *psn) __asm__("_GetCurrentProcess");
+OSErr AKGetFrontProcess(void *psn) __asm__("_GetFrontProcess");
+OSErr AKGetProcessInformation(const void *psn, void *info) __asm__("_GetProcessInformation");
+OSStatus AKGetProcessPID(const void *psn, pid_t *pid) __asm__("_GetProcessPID");
+void AKSetApplicationIsDaemon(Boolean isDaemon) __asm__("_SetApplicationIsDaemon");
 
 #pragma mark QuickDraw cursor (no hardware cursor on iOS)
 
