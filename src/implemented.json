@@ -1,0 +1,21 @@
+{
+  "_comment": "What src/ actually provides. gen-coverage.js reads this so COVERAGE.md can't overstate progress. Add a name here only when real code backs it.",
+  "classes": [
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "NSApplication",
+    "NSEvent",
+    "NSScreen",
+    "NSColor"
+  ],
+  "functions": [
+    "NSBeep",
+    "NSApplicationMain"
+  ],
+  "constants": [
+    "NSApp",
+    "NSAppKitVersionNumber"
+  ],
+  "stubbed": []
+}

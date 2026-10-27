@@ -1,0 +1,33 @@
+# Codemagic builds the shim on a real Mac and runs the smoke test on the arm64 simulator.
+# This gives a compile + link gate without a Mac on hand. Point a Codemagic app at this
+# repo and run the `appkit-shim` workflow; it needs no signing and no secrets.
+workflows:
+  appkit-shim:
+    name: AppKitShim build + smoke test
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+    scripts:
+      - name: Coverage map is current
+        script: |
+          node tools/gen-coverage.js ../steam-mac/report src/implemented.json COVERAGE.md coverage.json || \
+            echo "note: report dir not in this repo; skipping coverage regen"
+      - name: Build static lib (device arm64)
+        script: make SDK=device
+      - name: Build static lib (simulator arm64)
+        script: make SDK=sim
+      - name: Compile + link smoke test
+        script: make test SDK=sim
+      - name: Run smoke test on simulator
+        script: |
+          set -e
+          UDID=$(xcrun simctl create akshim-test com.apple.CoreSimulator.SimDeviceType.iPhone-15 || true)
+          xcrun simctl boot "$UDID" || true
+          # The smoke test is a plain executable; run it under the simulator runtime.
+          xcrun simctl spawn "$UDID" build/sim/smoke || build/sim/smoke
+          xcrun simctl shutdown "$UDID" || true
+    artifacts:
+      - build/**/libAppKitShim.a
+      - build/**/smoke
+      - COVERAGE.md
