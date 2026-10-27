@@ -38,6 +38,7 @@ jobs:
           name: appkit-shim
           path: |
             ios-gap.json
+            runtime-gap.json
             build/device/libAppKitShim.a
             build/sim/libAppKitShim.a
             build/sim/smoke

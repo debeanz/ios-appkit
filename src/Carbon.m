@@ -74,7 +74,7 @@ OSStatus GetEventParameter(EventRef event, EventParamName name, EventParamType d
 static NSMutableArray<AKCarbonEvent *> *gDispatching; // events being sent, innermost last
 
 EventRef GetCurrentEvent(void) {
-  return (__bridge EventRef)(void *)gDispatching.lastObject;
+  return (__bridge EventRef)gDispatching.lastObject;
 }
 
 #pragma mark Targets and handlers

@@ -36,6 +36,16 @@ UDID=$(xcrun simctl create akshim-smoke "$DEVTYPE" "$RUNTIME") || fail "create s
 xcrun simctl boot "$UDID" || fail "boot simulator"
 xcrun simctl spawn "$UDID" "$PWD/build/sim/smoke"
 CODE=$?
+
+# Runtime cross-check of the SDK gap list (informational: never fails the build).
+if [ -f ios-gap.json ]; then
+  step "Runtime gap check"
+  SIMSDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+  if xcrun --sdk iphonesimulator clang -target arm64-apple-ios15.0-simulator -isysroot "$SIMSDK" \
+       -fobjc-arc -framework Foundation tools/runtime-gap.m -o build/sim/runtime-gap; then
+    xcrun simctl spawn "$UDID" "$PWD/build/sim/runtime-gap" "$PWD/ios-gap.json" "$PWD/runtime-gap.json" || true
+  fi
+fi
 xcrun simctl shutdown "$UDID" >/dev/null 2>&1
 xcrun simctl delete "$UDID" >/dev/null 2>&1
 [ $CODE -eq 0 ] || fail "smoke test exited $CODE"
