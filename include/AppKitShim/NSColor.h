@@ -15,5 +15,13 @@ AK_SHIM_RUNTIME_NAME(NSColor)
 + (NSColor *)windowBackgroundColor;
 + (NSColor *)textColor;
 + (NSColor *)controlColor;
++ (NSColor *)redColor;
++ (NSColor *)greenColor;
++ (NSColor *)blueColor;
++ (NSColor *)grayColor;
 @property (nonatomic, readonly) CGColorRef CGColor;
+// Make this the fill and/or stroke colour of the current graphics context.
+- (void)set;
+- (void)setFill;
+- (void)setStroke;
 @end

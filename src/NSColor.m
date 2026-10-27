@@ -1,4 +1,5 @@
 #import "AppKitShim/NSColor.h"
+#import "AppKitShim/NSGraphics.h"
 #import <UIKit/UIKit.h>
 
 @implementation NSColor {
@@ -21,6 +22,21 @@
 + (NSColor *)textColor { return [[NSColor alloc] initWithUIColor:UIColor.labelColor]; }
 + (NSColor *)controlColor { return [[NSColor alloc] initWithUIColor:UIColor.secondarySystemBackgroundColor]; }
 
++ (NSColor *)redColor   { return [[NSColor alloc] initWithUIColor:UIColor.redColor]; }
++ (NSColor *)greenColor { return [[NSColor alloc] initWithUIColor:UIColor.greenColor]; }
++ (NSColor *)blueColor  { return [[NSColor alloc] initWithUIColor:UIColor.blueColor]; }
++ (NSColor *)grayColor  { return [[NSColor alloc] initWithUIColor:UIColor.grayColor]; }
+
 - (CGColorRef)CGColor { return _color.CGColor; }
+
+- (void)set { [self setFill]; [self setStroke]; }
+- (void)setFill {
+  CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
+  if (ctx) CGContextSetFillColorWithColor(ctx, _color.CGColor);
+}
+- (void)setStroke {
+  CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
+  if (ctx) CGContextSetStrokeColorWithColor(ctx, _color.CGColor);
+}
 
 @end

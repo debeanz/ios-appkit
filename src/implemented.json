@@ -17,7 +17,14 @@
     "NSMenuItem",
     "NSWorkspace",
     "NSWorkspaceOpenConfiguration",
-    "NSRunningApplication"
+    "NSRunningApplication",
+    "NSGraphicsContext",
+    "NSColorSpace",
+    "NSAppearance",
+    "NSBezierPath",
+    "NSImage",
+    "NSBitmapImageRep",
+    "NSImageRep"
   ],
   "functions": [
     "NSBeep",

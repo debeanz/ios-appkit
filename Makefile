@@ -39,7 +39,7 @@ $(LIB): $(OBJS)
 test: $(LIB)
 	$(CC) $(CFLAGS) tests/smoke.m -Lbuild/$(SDK) -lAppKitShim \
 	  -framework UIKit -framework Foundation -framework CoreGraphics \
-	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal \
+	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal -framework ImageIO \
 	  -o $(BUILD)/smoke
 	@echo "linked $(BUILD)/smoke"
 

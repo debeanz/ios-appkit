@@ -311,6 +311,36 @@ int main(int argc, const char *argv[]) {
     CHECK(becameActive, "UIApplicationDidBecomeActive is re-posted as NSApplicationDidBecomeActive");
     [NSNotificationCenter.defaultCenter removeObserver:token];
 
+    // Graphics: color space, bezier path, an image round-tripped through PNG.
+    CHECK(NSColorSpace.sRGBColorSpace.colorSpaceModel == NSColorSpaceModelRGB, "sRGB is an RGB space");
+    CHECK(NSColorSpace.sRGBColorSpace.numberOfColorComponents == 3, "RGB has 3 components");
+    NSBezierPath *path = [NSBezierPath bezierPathWithRect:NSMakeRect(0, 0, 10, 20)];
+    CHECK(!path.isEmpty && NSEqualSizes(path.bounds.size, NSMakeSize(10, 20)), "bezier path bounds");
+    CHECK([path containsPoint:NSMakePoint(5, 5)] && ![path containsPoint:NSMakePoint(50, 50)], "bezier containsPoint");
+
+    unsigned char px[4 * 2 * 2] = {255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255};
+    unsigned char *planes = px;
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:&planes pixelsWide:2 pixelsHigh:2
+        bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace
+        bitmapFormat:0 bytesPerRow:8 bitsPerPixel:32];
+    CHECK(rep.CGImage && CGImageGetWidth(rep.CGImage) == 2, "bitmap rep builds a 2x2 CGImage");
+    NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    CHECK(png.length > 8 && ((const uint8_t *)png.bytes)[1] == 'P', "encodes PNG");
+    NSImage *decoded = [[NSImage alloc] initWithData:png];
+    CHECK(decoded.isValid && NSEqualSizes(decoded.size, NSMakeSize(2, 2)), "decodes the PNG back to a 2x2 image");
+
+    NSImage *drawn = [NSImage imageWithSize:NSMakeSize(4, 4) flipped:NO drawingHandler:^BOOL(NSRect r) {
+      [[NSColor redColor] set];
+      NSRectFill(r);
+      return YES;
+    }];
+    CHECK([drawn CGImageForProposedRect:NULL context:nil hints:nil] != NULL, "drawingHandler produces an image");
+
+    // Appearance follows light/dark and resolves a best match.
+    NSAppearance *dark = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    CHECK([[dark bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]]
+            isEqualToString:NSAppearanceNameDarkAqua], "dark appearance picks the dark match");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

@@ -22,6 +22,7 @@
 #import "NSMenu.h"
 #import "NSWorkspace.h"
 #import "NSRunningApplication.h"
+#import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"
 #import "AKShimInput.h"
