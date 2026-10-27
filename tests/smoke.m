@@ -93,6 +93,14 @@ static int AKCountClassCollisions(const char *ourImage) {
 - (void)ak_testAction:(id)sender { _actionReached = YES; }
 @end
 
+@interface AKTestViewController : NSViewController
+@property (nonatomic, assign) int loads;
+@end
+@implementation AKTestViewController
+- (void)loadView { self.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 50, 50)]; }
+- (void)viewDidLoad { _loads++; }
+@end
+
 @interface AKTestMenuTarget : NSObject
 @property (nonatomic, assign) int copies;
 @end
@@ -371,6 +379,50 @@ int main(int argc, const char *argv[]) {
     NSSavePanel *save = [NSSavePanel savePanel];
     save.nameFieldStringValue = @"save.txt";
     CHECK([save runModal] == NSModalResponseOK && [save.URL.lastPathComponent isEqualToString:@"save.txt"], "save panel yields a Documents URL");
+
+    // Controllers: the view loads once, through -loadView, on first access.
+    AKTestViewController *vc = [AKTestViewController new];
+    CHECK(!vc.isViewLoaded, "view not loaded before first access");
+    (void)vc.view; (void)vc.view;
+    CHECK(vc.isViewLoaded && vc.loads == 1 && NSEqualSizes(vc.view.frame.size, NSMakeSize(50, 50)), "loadView + viewDidLoad run once");
+    NSWindowController *wc = [[NSWindowController alloc] initWithWindow:win];
+    CHECK(wc.window == win && wc.isWindowLoaded, "window controller holds its window");
+
+    // Fonts, answered from the system's font list.
+    NSFontManager *fm = NSFontManager.sharedFontManager;
+    CHECK(fm.availableFontFamilies.count > 0 && fm.availableFonts.count > 0, "font families listed");
+    UIFont *courierBold = [fm fontWithFamily:@"Courier" traits:NSBoldFontMask weight:5 size:12];
+    CHECK(courierBold && ([fm traitsOfFont:courierBold] & NSBoldFontMask), "bold Courier found");
+    CHECK([fm traitsOfFont:courierBold] & NSFixedPitchFontMask, "Courier is fixed pitch");
+    CHECK([fm fontWithFamily:@"No Such Family" traits:0 weight:5 size:12] == nil, "unknown family -> nil");
+    CHECK(llabs((long long)[fm weightOfFont:[UIFont systemFontOfSize:12]] - 5) <= 1, "regular weight is about 5");
+
+    // Spelling, when the simulator has dictionaries installed.
+    NSSpellChecker *spell = NSSpellChecker.sharedSpellChecker;
+    if (spell.availableLanguages.count) {
+      NSRange bad = [spell checkSpellingOfString:@"helo world" startingAt:0];
+      CHECK(bad.location == 0 && bad.length == 4, "'helo' is flagged");
+      CHECK([spell guessesForWordRange:bad inString:@"helo world" language:nil inSpellDocumentWithTag:0].count > 0, "guesses offered");
+      NSInteger doc = NSSpellChecker.uniqueSpellDocumentTag;
+      [spell ignoreWord:@"helo" inSpellDocumentWithTag:doc];
+      NSRange ignored = [spell checkSpellingOfString:@"helo world" startingAt:0 language:nil wrap:NO inSpellDocumentWithTag:doc wordCount:NULL];
+      CHECK(ignored.location == NSNotFound, "ignored word is skipped in that document");
+      [spell closeSpellDocumentWithTag:doc];
+    } else {
+      fprintf(stderr, "smoke: no spelling dictionaries on this simulator; spell checks skipped\n");
+    }
+
+    // Speech, toolbar, status bar, printing defaults.
+    NSSpeechSynthesizer *speech = [[NSSpeechSynthesizer alloc] initWithVoice:nil];
+    CHECK(speech.rate == 180 && !speech.isSpeaking, "speech defaults to 180 wpm, idle");
+    NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"main"];
+    [toolbar insertItemWithItemIdentifier:@"a" atIndex:0];
+    [toolbar insertItemWithItemIdentifier:@"b" atIndex:0];
+    CHECK([toolbar.items isEqualToArray:(@[ @"b", @"a" ])], "toolbar items keep their order");
+    CHECK(NSStatusBar.systemStatusBar.thickness == 0, "no menu bar");
+    NSPrintInfo *pi = NSPrintInfo.sharedPrintInfo;
+    CHECK(NSEqualSizes(pi.paperSize, NSMakeSize(612, 792)) && pi.leftMargin == 72, "US Letter with AppKit margins");
+    CHECK([NSPrintPanel.printPanel runModal] == NSModalResponseCancel, "print panel cancels without a document");
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];

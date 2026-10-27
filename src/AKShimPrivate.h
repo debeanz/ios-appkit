@@ -12,6 +12,10 @@
 - (void)_ak_installInputSupport;
 @end
 
+@interface NSColor (AKShimPrivate)
+- (instancetype)initWithUIColor:(UIColor *)color;
+@end
+
 @interface NSView (AKShimPrivate)
 - (void)_setOwningWindow:(NSWindow *)window;
 - (void)_ak_backingDidLayout;

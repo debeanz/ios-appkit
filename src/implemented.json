@@ -33,7 +33,21 @@
     "NSSavePanel",
     "NSOpenPanel",
     "NSAnimation",
-    "NSAnimationContext"
+    "NSAnimationContext",
+    "NSViewController",
+    "NSWindowController",
+    "NSFontDescriptor",
+    "NSFontManager",
+    "NSSpellChecker",
+    "NSSpeechSynthesizer",
+    "NSPopover",
+    "NSColorPanel",
+    "NSColorSampler",
+    "NSSharingService",
+    "NSSharingServicePicker",
+    "NSStatusBar",
+    "NSToolbar",
+    "NSPrintInfo"
   ],
   "functions": [
     "NSBeep",
@@ -405,6 +419,7 @@
     "NSWorkspaceLaunchConfigurationEnvironment"
   ],
   "stubbed": [
-    "NSInputManager"
+    "NSInputManager",
+    "NSPrintPanel"
   ]
 }
