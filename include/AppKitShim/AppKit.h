@@ -34,6 +34,7 @@
 #import "FoundationMac.h"
 #import "DiskArbitrationMac.h"
 #import "SmallFrameworks.h"
+#import "CoreServicesMacExtras.h"
 #import "NSGraphics.h"
 #import "AppKitConstants.h"
 #import "AppKitFunctions.h"

@@ -557,6 +557,24 @@ int main(int argc, const char *argv[]) {
     [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
     CHECK(captureFailed, "screen capture reports it is unavailable");
 
+    // CoreServices: FSRef round-trips a real path; Apple Event params read back; no login items.
+    NSString *tmp = NSTemporaryDirectory();
+    FSRef fsref;
+    Boolean isDir = false;
+    CHECK(FSPathMakeRef((const UInt8 *)tmp.fileSystemRepresentation, &fsref, &isDir) == noErr && isDir, "FSRef for the temp directory");
+    UInt8 back[1024];
+    CHECK(FSRefMakePath(&fsref, back, sizeof back) == noErr &&
+          [[NSString stringWithUTF8String:(const char *)back] isEqualToString:tmp.stringByStandardizingPath], "FSRef gives the path back");
+    CHECK(FSPathMakeRef((const UInt8 *)"/no/such/path", &fsref, NULL) == fnfErr, "missing path has no FSRef");
+    AppleEvent ae;
+    AECreateAppleEvent('GURL', 'GURL', NULL, kAutoGenerateReturnID, kAnyTransactionID, &ae);
+    AEDesc urlDesc, got;
+    AECreateDesc('utf8', "steam://open", 12, &urlDesc);
+    AEPutParamDesc(&ae, '----', &urlDesc);
+    CHECK(AEGetParamDesc(&ae, '----', typeWildCard, &got) == noErr && got.descriptorType == 'utf8', "Apple Event parameter reads back");
+    AEDisposeDesc(&got); AEDisposeDesc(&urlDesc); AEDisposeDesc(&ae);
+    CHECK(LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL) == NULL, "no login items on iOS");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");
