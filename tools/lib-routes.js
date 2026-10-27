@@ -138,9 +138,12 @@ function walkFiles(dir, out = []) {
   return out;
 }
 
-// Every system library path the client's arm64 slices load, with how many binaries load it.
+// Every system library path the client's arm64 slices load, with how many binaries load it,
+// and the symbols they import from each. Read from the binaries being shipped, so routing
+// can't miss a library or symbol that a committed snapshot (imports.json) predates.
 function systemLoadPaths(client) {
   const uses = new Map();
+  const symbols = new Map(); // library path -> Set(imported symbol)
   for (const f of walkFiles(client)) {
     const fd = fs.openSync(f, 'r');
     const head = Buffer.alloc(8);
@@ -151,11 +154,19 @@ function systemLoadPaths(client) {
     if (m !== 0xcafebabe && m !== 0xcafebabf && head.readUInt32LE(0) !== 0xfeedfacf) continue;
     const arm = mg.slices(fs.readFileSync(f)).find(s => s.cpu === mg.CPU_ARM64);
     if (!arm) continue;
-    for (const d of mg.parseSlice(arm.buf).dylibs) {
+    const r = mg.parseSlice(arm.buf);
+    for (const d of r.dylibs) {
       if (d.path.startsWith('/')) uses.set(d.path, (uses.get(d.path) || 0) + 1);
     }
+    for (const imp of r.imports) {
+      const lib = mg.libFor(r, imp.ord);
+      if (!lib.startsWith('/')) continue; // self, flat lookup, bundled code
+      let s = symbols.get(lib);
+      if (!s) symbols.set(lib, (s = new Set()));
+      s.add(imp.name);
+    }
   }
-  return uses;
+  return { uses, symbols };
 }
 
 function route() {
@@ -173,13 +184,14 @@ function route() {
   // Pass 1: each library's action, judged by what its iOS counterpart reaches through its
   // own re-exports, exactly as dyld's two-level lookup would.
   const routes = {}, needFromShim = {}, lackingOf = {}, reexports = new Set();
-  const uses = systemLoadPaths(client);
+  const { uses, symbols } = systemLoadPaths(client);
   for (const p of [...uses.keys()].sort()) {
     const found = resolveIos(p, reach, byFile);
     const present = !!found;
     const ios = found || iosPath(p);
     if (found && found !== p && found !== iosPath(p)) console.log(`note: ${p} is ${found} on iOS`);
-    const syms = (imports[p] && imports[p].symbols) || [];
+    // What the shipped binaries import from it, plus anything the committed snapshot lists.
+    const syms = [...new Set([...(symbols.get(p) || []), ...((imports[p] && imports[p].symbols) || [])])];
     const atRuntime = new Set((runtime[p] && runtime[p].presentAtRuntime) || []);
     // What the library at the iOS path can't provide. Symbols the device has at runtime but
     // the SDK doesn't list still resolve when the real library is reached, so they only

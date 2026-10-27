@@ -88,7 +88,12 @@ function main() {
     const repoint = [];
     for (const d of r.dylibs) {
       let to = null;
-      if (routes) {
+      // The packager flattens every bundled deep framework (Versions/A/... -> top level),
+      // so a reference into one (crashhandler -> Breakpad.framework/Versions/A/Breakpad)
+      // must lose the Versions/<v>/ part too.
+      const intoVersions = d.path.match(/^(@[^/]+\/.*\.framework)\/Versions\/[^/]+\/(.+)$/);
+      if (intoVersions) to = `${intoVersions[1]}/${intoVersions[2]}`;
+      else if (routes) {
         const route = routes[d.path];
         if (route && route.to !== d.path) to = route.to;
       } else if (isMissing(d.path)) {

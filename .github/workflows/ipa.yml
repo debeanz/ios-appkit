@@ -35,6 +35,9 @@ jobs:
       - name: Fetch + rebuild the macOS client from Valve's CDN
         run: bash tools/fetch-client.sh client .pkgcache
 
+      - name: Reshape the client for iOS (flatten frameworks, drop stale signatures and helpers)
+        run: bash tools/prepare-client.sh client
+
       - name: Route every system library against the iOS SDK
         run: |
           mkdir -p build

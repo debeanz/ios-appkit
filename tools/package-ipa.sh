@@ -35,30 +35,12 @@ work="$(mktemp -d)"
 app="$work/Payload/Steam.app"
 mkdir -p "$app/Frameworks" "$app/client"
 
-# macOS frameworks are deep bundles (X.framework/Versions/A/... reached through symlinks);
-# iOS frameworks are shallow. Collapse each one so its binary sits at X.framework/X — the
-# path Steam loads CEF by — and give it a root Info.plist so a sideloader can sign it.
-flatten_frameworks() {
-  find "$1" -type d -name '*.framework' -prune | while IFS= read -r fw; do
-    [ -d "$fw/Versions" ] || continue
-    ver="$fw/Versions/A"
-    [ -d "$ver" ] || ver="$(find "$fw/Versions" -mindepth 1 -maxdepth 1 -type d ! -name Current | head -1)"
-    [ -n "$ver" ] && [ -d "$ver" ] || continue
-    # The top level only holds symlinks into Versions/ (or nothing, if they were lost).
-    find "$fw" -mindepth 1 -maxdepth 1 ! -name Versions -exec rm -rf {} +
-    mv "$ver"/* "$fw"/
-    rm -rf "$fw/Versions"
-    if [ -f "$fw/Resources/Info.plist" ] && [ ! -f "$fw/Info.plist" ]; then
-      cp "$fw/Resources/Info.plist" "$fw/Info.plist"
-    fi
-    echo "  flattened ${fw#"$1"/}"
-  done
-}
-
 echo "=== Lay out Steam.app ==="
-# Client payload under client/ (the app's own executable is named Steam).
+# Client payload under client/ (the app's own executable is named Steam), reshaped for iOS
+# (flattened frameworks, no stale signatures or Breakpad helpers). CI already ran this on
+# the fetched client before routing; running it again here is a no-op then.
 cp -R "$CLIENT"/. "$app/client/"
-flatten_frameworks "$app/client"
+bash "$here/prepare-client.sh" "$app/client"
 # The iOS host executable is the bundle's main binary.
 cp "$HOST" "$app/Steam"; chmod +x "$app/Steam"
 cp "$repo/host/Info.plist" "$app/Info.plist"
@@ -146,6 +128,9 @@ echo "  load commands rewritten: $rewrites   rewrite failures: $rewritefail   ad
 
 # The host sits at the app root, so its own Frameworks rpath is @loader_path/Frameworks.
 install_name_tool -add_rpath "@loader_path/Frameworks" "$app/Steam" 2>/dev/null || true
+
+echo "=== Check every bundled dependency resolves ==="
+node "$here/check-deps.js" "$app" || { echo "ERROR: a bundled dependency doesn't resolve (see above)"; exit 1; }
 
 echo "=== Zip the unsigned IPA ==="
 rm -f "$OUT"
