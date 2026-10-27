@@ -16,7 +16,7 @@
 static UITextView *gLog;
 static NSMutableString *gBuf;
 
-static void logf(NSString *fmt, ...) {
+static void hostlog(NSString *fmt, ...) {
   va_list ap; va_start(ap, fmt);
   NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
   va_end(ap);
@@ -36,18 +36,18 @@ static NSString *inApp(NSString *rel) {
 // dlopen one image and log the outcome. Returns the handle (or NULL).
 static void *probe(NSString *label, NSString *path) {
   if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
-    logf(@"  skip  %@  (not bundled: %@)", label, path.lastPathComponent);
+    hostlog(@"  skip  %@  (not bundled: %@)", label, path.lastPathComponent);
     return NULL;
   }
   void *h = dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
-  if (h) logf(@"  OK    %@", label);
-  else   logf(@"  FAIL  %@  -> %s", label, dlerror());
+  if (h) hostlog(@"  OK    %@", label);
+  else   hostlog(@"  FAIL  %@  -> %s", label, dlerror());
   return h;
 }
 
 static void bringUpClient(void) {
-  logf(@"Steam-on-iOS host starting");
-  logf(@"bundle: %@", [[NSBundle mainBundle] bundlePath]);
+  hostlog(@"Steam-on-iOS host starting");
+  hostlog(@"bundle: %@", [[NSBundle mainBundle] bundlePath]);
 
   // Environment the client reads. Keep JIT on (StikDebug enables it); force the single
   // CEF process since iOS forbids spawning the helper processes Steam normally forks;
@@ -61,7 +61,7 @@ static void bringUpClient(void) {
   // app's own executable is named Steam).
   setenv("STEAM_CLIENT_DIR", inApp(@"client").fileSystemRepresentation, 1);
 
-  logf(@"loaded images at start: %u", _dyld_image_count());
+  hostlog(@"loaded images at start: %u", _dyld_image_count());
 
   // The shim first, so its macOS symbols are in the global pool (RTLD_GLOBAL) before any
   // Steam dylib that was repointed to it resolves.
@@ -78,8 +78,8 @@ static void bringUpClient(void) {
   probe(@"steamclient",   inApp([c stringByAppendingPathComponent:@"steamclient.dylib"]));
   probe(@"steamui",       inApp([c stringByAppendingPathComponent:@"steamui.dylib"]));
 
-  logf(@"loaded images now:     %u", _dyld_image_count());
-  logf(@"--- probe complete ---");
+  hostlog(@"loaded images now:     %u", _dyld_image_count());
+  hostlog(@"--- probe complete ---");
 
   // Persist for pulling off the device.
   NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
