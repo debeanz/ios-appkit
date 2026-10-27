@@ -24,6 +24,19 @@ LIB     := $(BUILD)/libAppKitShim.a
 
 all: $(LIB)
 
+# Frameworks the shim's own code calls into on iOS. A dynamiclib of ALL objects
+# references more than the smoke test pulls from the static lib, so link a superset;
+# -undefined dynamic_lookup defers any straggler (and the macOS-only names the shim
+# exports) to flat runtime lookup inside the Steam process, which has them all loaded.
+SHIM_FRAMEWORKS := -framework UIKit -framework Foundation -framework CoreFoundation \
+  -framework CoreGraphics -framework CoreText -framework QuartzCore -framework CoreVideo \
+  -framework Metal -framework MetalKit -framework AudioToolbox -framework AVFoundation \
+  -framework ImageIO -framework Security -framework LocalAuthentication \
+  -framework AuthenticationServices -framework SafariServices -framework GameController \
+  -framework SystemConfiguration -framework Network -framework Accelerate \
+  -framework VideoToolbox -framework UniformTypeIdentifiers
+FRAMEWORK := $(BUILD)/AppKitShim.framework
+
 $(BUILD):
 	mkdir -p $(BUILD)
 
@@ -43,10 +56,23 @@ test: $(LIB)
 	  -o $(BUILD)/smoke
 	@echo "linked $(BUILD)/smoke"
 
+# The dynamic shim the retagged Steam binaries load in place of macOS AppKit/Carbon/etc.
+# Install name is @rpath/... so dyld finds it via the LC_RPATH the packager adds to each
+# binary. Exports every global the objects define, including the macOS symbol names the
+# src tags with asm labels; that export set is exactly what package-ipa.sh repoints to.
+framework: $(OBJS)
+	mkdir -p $(FRAMEWORK)
+	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/AppKitShim.framework/AppKitShim \
+	  -compatibility_version 1.0 -current_version 1.0 \
+	  $(OBJS) $(SHIM_FRAMEWORKS) -undefined dynamic_lookup \
+	  -o $(FRAMEWORK)/AppKitShim
+	cp framework/Info.plist $(FRAMEWORK)/Info.plist
+	@echo "built $(FRAMEWORK)/AppKitShim"
+
 coverage:
 	node tools/gen-coverage.js data/ios-gap.json src/implemented.json COVERAGE.md coverage.json
 
 clean:
 	rm -rf build
 
-.PHONY: all test coverage clean
+.PHONY: all test framework coverage clean

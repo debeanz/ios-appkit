@@ -41,5 +41,7 @@ jobs:
             runtime-gap.json
             build/device/libAppKitShim.a
             build/sim/libAppKitShim.a
+            build/device/AppKitShim.framework/**
+            build/sim/AppKitShim.framework/**
             build/sim/smoke
           if-no-files-found: ignore

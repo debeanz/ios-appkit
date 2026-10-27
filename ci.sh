@@ -17,6 +17,27 @@ make SDK=device || fail "build device"
 step "Build simulator (arm64)"
 make SDK=sim || fail "build simulator"
 
+step "Build dynamic framework (device + simulator)"
+make framework SDK=device || fail "build framework device"
+make framework SDK=sim || fail "build framework simulator"
+
+step "Verify the framework exports the macOS names CEF binds to"
+# These are imported by the Steam binaries from macOS AppKit/CoreGraphics; the shim must
+# export them under the exact macOS symbol names or the repointed load commands resolve
+# to nothing. nm -gU lists defined external symbols.
+EXPORTS=$(nm -gU build/device/AppKitShim.framework/AppKitShim 2>/dev/null)
+missing=0
+for sym in '_OBJC_CLASS_$_NSApplication' '_OBJC_CLASS_$_NSWindow' '_OBJC_CLASS_$_NSView' \
+           '_OBJC_CLASS_$_NSEvent' '_NSApp' '_CGDisplayBounds' '_RegisterEventHotKey'; do
+  if echo "$EXPORTS" | grep -q -- "$sym\$"; then
+    echo "  export OK   $sym"
+  else
+    echo "  MISSING     $sym"; missing=1
+  fi
+done
+echo "total exported symbols: $(echo "$EXPORTS" | grep -c .)"
+[ $missing -eq 0 ] || fail "framework missing expected exports"
+
 step "Link smoke test"
 make test SDK=sim || fail "link smoke test"
 
