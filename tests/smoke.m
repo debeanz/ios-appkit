@@ -625,6 +625,14 @@ int main(int argc, const char *argv[]) {
     CHECK(strcmp(cupsGetOption("COPIES", 2, opts), "2") == 0, "option lookup is case-insensitive");
     CHECK(strcmp(pwgMediaForSize(21000, 29700)->ppd, "A4") == 0 && strcmp(pwgMediaForSize(21590, 27940)->ppd, "Letter") == 0, "PWG media sizes");
 
+    // libSystem: loading code from memory is refused; the rest behave.
+    void *ofi = (void *)1;
+    CHECK(AKNSCreateObjectFileImageFromMemory("\xcf\xfa\xed\xfe", 4, &ofi) == AKNSObjectFileImageInappropriateFile && ofi == NULL,
+          "loading a Mach-O image from memory is refused");
+    CHECK(AKNSLinkModule(NULL, "m", 0) == NULL && AKNSLookupSymbolInModule(NULL, "s") == NULL, "no module links or resolves");
+    AKPthreadJitWriteProtectNp(0); // no-op, must not crash
+    CHECK(AKResponsibilityGetPidResponsibleForPid(getpid()) == getpid(), "this process is its own responsible process");
+
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
     CHECK(c.CGColor != NULL, "color has a CGColor");

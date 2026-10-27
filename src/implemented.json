@@ -438,7 +438,16 @@
     "ppdLastError",
     "ppdMarkDefaults",
     "ppdOpenFd",
-    "pwgMediaForSize"
+    "pwgMediaForSize",
+    "NSAddressOfSymbol",
+    "NSCreateObjectFileImageFromMemory",
+    "NSDestroyObjectFileImage",
+    "NSLinkModule",
+    "NSLookupSymbolInModule",
+    "NSUnLinkModule",
+    "responsibility_get_pid_responsible_for_pid",
+    "responsibility_spawnattrs_setdisclaim",
+    "syslog$DARWIN_EXTSN"
   ],
   "constants": [
     "NSApp",
