@@ -16,6 +16,7 @@
 @property (nonatomic, strong) _AKShimBackingView *backing;
 @property (nonatomic, weak, readwrite) NSView *superview;
 @property (nonatomic, strong) NSMutableArray<NSView *> *mutableSubviews;
+@property (nonatomic, weak) NSWindow *owningWindow; // set only on a window's content view
 @end
 
 @implementation NSView
@@ -62,7 +63,9 @@
   self.superview = nil;
 }
 
-- (NSWindow *)window { return self.superview.window; }
+// A content view knows its window directly; every other view asks its superview.
+- (NSWindow *)window { return self.owningWindow ?: self.superview.window; }
+- (void)_setOwningWindow:(NSWindow *)window { self.owningWindow = window; }
 
 - (void)setNeedsDisplay:(BOOL)flag { if (flag) [_backing setNeedsDisplay]; }
 - (void)setNeedsDisplayInRect:(NSRect)rect { [_backing setNeedsDisplayInRect:rect]; }

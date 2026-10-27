@@ -6,7 +6,7 @@
 
 @interface NSScreen : NSObject
 @property (class, readonly, copy) NSArray<NSScreen *> *screens;
-@property (class, readonly, nullable, strong) NSScreen *mainScreen;
+@property (class, readonly, strong) NSScreen *mainScreen;
 @property (nonatomic, readonly) NSRect frame;
 @property (nonatomic, readonly) NSRect visibleFrame;
 @property (nonatomic, readonly) CGFloat backingScaleFactor;

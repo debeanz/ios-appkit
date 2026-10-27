@@ -40,6 +40,9 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
                            dequeue:(BOOL)dequeue;
 - (void)sendEvent:(NSEvent *)event;
 - (void)finishLaunching;
+
+// Process-wide first responder; NSWindow's -makeFirstResponder: routes here.
+- (void)makeFirstResponder:(NSResponder *)responder;
 @end
 
 // The AppKit global. Set when +sharedApplication first runs.

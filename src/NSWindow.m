@@ -2,7 +2,13 @@
 #import "AppKitShim/NSView.h"
 #import "AppKitShim/NSScreen.h"
 #import "AppKitShim/NSApplication.h"
+#import "AppKitShim/NSEvent.h"
 #import <UIKit/UIKit.h>
+
+// Private hook in NSView.m that tells a content view which window owns it.
+@interface NSView (AKShimWindowOwner)
+- (void)_setOwningWindow:(NSWindow *)window;
+@end
 
 // The single UIWindow every NSWindow mounts its content into. Created lazily so the
 // shim works whether the host app sets up its own scene or lets us make one.
@@ -41,13 +47,16 @@ static UIWindow *AKSharedUIWindow(void) {
     _frame = rect;
     _alphaValue = 1.0;
     _contentView = [[NSView alloc] initWithFrame:(NSRect){{0, 0}, rect.size}];
+    [_contentView _setOwningWindow:self];
   }
   return self;
 }
 
 - (void)setContentView:(NSView *)contentView {
   [_contentView removeFromSuperview];
+  [_contentView _setOwningWindow:nil];
   _contentView = contentView;
+  [contentView _setOwningWindow:self];
   contentView.frame = (NSRect){{0, 0}, _frame.size};
 }
 
