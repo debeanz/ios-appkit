@@ -9,6 +9,7 @@
 
 static AKShimSoftwareKeyboardPolicy gKeyboardPolicy = AKShimSoftwareKeyboardAutomatic;
 static BOOL gKeyboardWanted;
+static CFAbsoluteTime gLastTouch;   // when a finger last went down on or lifted off an app view
 
 static NSView *AKFocusedView(void) {
   NSWindow *w = NSApp.keyWindow;
@@ -48,10 +49,9 @@ void AKShimUpdateSoftwareKeyboard(void) {
     poll = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) { AKShimUpdateSoftwareKeyboard(); }];
     [NSRunLoop.mainRunLoop addTimer:poll forMode:NSRunLoopCommonModes];
   }
-  // Act only once the answer has held for a moment: while a page loads, focus hops between
-  // fields and elements, and following every hop opened and closed the keyboard repeatedly.
   static BOOL pendingWant, shownSecure;
   static CFAbsoluteTime pendingSince;
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
   BOOL want = AKKeyboardShouldShow();
   if (want == gKeyboardWanted) {
     pendingWant = want;
@@ -61,9 +61,16 @@ void AKShimUpdateSoftwareKeyboard(void) {
     if (want && secure != shownSecure) { shownSecure = secure; [AKFocusedView().backingView reloadInputViews]; }
     return;
   }
-  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  // Act only once the answer has held for a moment: focus hops between fields and elements.
+  // Showing waits for it to settle; hiding waits longer, so a field that loses focus for an
+  // instant doesn't drop the keyboard.
   if (want != pendingWant) { pendingWant = want; pendingSince = now; return; }
-  if (now - pendingSince < 0.4) return;
+  if (now - pendingSince < (want ? 0.15 : 0.6)) return;
+  // Only a tap brings the keyboard up, as on iOS: a touch shortly before the field took focus
+  // (the renderer can take a few seconds to report it) or any time since. Pages also focus
+  // fields on their own - while loading, when a menu opens, as Big Picture moves its
+  // selection - and following those flashed the keyboard up and straight back down.
+  if (want && gLastTouch < pendingSince - 4.0) return;
   gKeyboardWanted = want;
   shownSecure = IsSecureEventInputEnabled();
   [AKFocusedView().backingView reloadInputViews];
@@ -121,6 +128,7 @@ static NSPoint AKWindowPoint(UIView *content, CGPoint uikitPoint) {
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+  gLastTouch = CFAbsoluteTimeGetCurrent();
   if (objc_getAssociatedObject(self, &kActiveTouchKey)) return; // one pointer at a time
   UITouch *t = touches.anyObject;
   BOOL right = (event.buttonMask & UIEventButtonMaskSecondary) != 0;
@@ -137,6 +145,7 @@ static NSPoint AKWindowPoint(UIView *content, CGPoint uikitPoint) {
 }
 
 - (void)_ak_endTouches:(NSSet<UITouch *> *)touches {
+  gLastTouch = CFAbsoluteTimeGetCurrent();
   UITouch *t = objc_getAssociatedObject(self, &kActiveTouchKey);
   if (![touches containsObject:t]) return;
   BOOL right = [objc_getAssociatedObject(self, &kRightButtonKey) boolValue];
