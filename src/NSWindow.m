@@ -365,8 +365,6 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)setFrameTopLeftPoint:(NSPoint)point {
   if (!_gameWindow) self.frame = (NSRect){{point.x, point.y - _frame.size.height}, _frame.size};
 }
-- (void)setFrame:(NSRect)frame display:(BOOL)display { self.frame = frame; }
-- (void)setFrame:(NSRect)frame display:(BOOL)display animate:(BOOL)animate { self.frame = frame; }
 - (id)standardWindowButton:(NSInteger)button { return nil; }   // no title bar here
 - (void)setIsVisible:(BOOL)visible { if (visible) [self orderFront:nil]; else [self orderOut:nil]; }
 - (void)zoom:(id)sender { /* already fills the screen */ }
