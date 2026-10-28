@@ -194,6 +194,9 @@ static void noopPerform(void *info) {}
 - (void)changeWindowsItem:(NSWindow *)win title:(NSString *)title filename:(BOOL)isFilename {}
 - (void)removeWindowsItem:(NSWindow *)win {}
 
+// No Dock: nil, so badge labels and display requests sent to the tile do nothing.
+- (id)dockTile { return nil; }
+
 #pragma mark Activation / visibility (single foreground app on iOS)
 
 - (void)hide:(id)sender {}

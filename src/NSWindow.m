@@ -154,6 +154,17 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   self.visible = YES;
 }
 
+// Steam brings its window up with this rather than -orderFront: (AppKit's variant that works
+// even when the app isn't active — on iOS the app is always the active one).
+- (void)orderFrontRegardless { [self orderFront:nil]; }
+
+// Front-to-back position among visible windows (0 = frontmost), as AppKit numbers them.
+- (NSInteger)orderedIndex {
+  NSArray<UIView *> *views = AKSharedUIWindow().rootViewController.view.subviews;
+  NSUInteger i = [views indexOfObject:_contentView.backingView];
+  return i == NSNotFound ? -1 : (NSInteger)(views.count - 1 - i);
+}
+
 - (void)orderOut:(id)sender {
   [_contentView.backingView removeFromSuperview];
   _contentView.backingView.translatesAutoresizingMaskIntoConstraints = YES;

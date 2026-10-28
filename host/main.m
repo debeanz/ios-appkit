@@ -398,6 +398,16 @@ static void launchSteam(void *steamui, void *launcher) {
     hostlog(@"FAIL  SteamDllMainEx not found: %s", dlerror());
     return;
   }
+  // Steam's process pipes publish their real address in an environment variable named after
+  // the pipe once the server is listening; its UI connects to them. Record what they hold
+  // once Steam has had time to start, since a pipe that never comes up leaves the UI blank.
+  for (int64_t delay = 15; delay <= 45; delay += 30) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+      const char *master = getenv("Steam3Master"), *service = getenv("SteamClientService");
+      hostlog(@"after %llds: Steam3Master=%s SteamClientService=%s", delay,
+              master ? master : "(unset)", service ? service : "(unset)");
+    });
+  }
   hostlog(@"calling SteamDllMainEx (%p) with: %@", entry, [args componentsJoinedByString:@" "]);
   hostlog(@"(Steam's own output goes to steam-console.log; a crash goes to crash.log)");
   int rc = entry(argc, argv, launcherPump);
