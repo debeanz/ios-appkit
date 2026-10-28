@@ -3,8 +3,9 @@
 // Steam downloads a game's Mac build and starts it with -[NSWorkspace launchApplicationAtURL:
 // options:configuration:error:]. iOS starts no second process, so the game runs in this one,
 // the way Steam Helper does (InProcessExec.m): its program is loaded as a library and its
-// main() runs on a thread of its own, with a stand-in pid Steam can watch. Before that, every
-// Mach-O in the game's .app gets the edits the IPA build gives Steam's own binaries
+// main() runs on a thread of its own, with a stand-in pid Steam can watch. It runs from a copy
+// of its .app (the download itself must stay as Steam installed it: see "The game's converted
+// copy"), in which every Mach-O gets the edits the IPA build gives Steam's own binaries
 // (tools/package-ipa.sh, exec-to-dylib.js), here on the device because the game only arrives
 // here:
 //   - the arm64 code alone (an Intel-only game can't run: iOS has no x86 translation);
@@ -346,15 +347,163 @@ static BOOL isMachO(NSString *path) {
   return yes;
 }
 
+#pragma mark The game's converted copy
+
+static NSString *sha256Hex(NSData *data);
+
+// Steam's own checks must keep seeing the game exactly as it was downloaded: before a launch it
+// verifies the signature Valve embeds in some games' universal binaries (the app's
+// "signaturescheckedonlaunch" files; an edited file fails with "Corrupt file signature"), and
+// validation flags any changed file. So the download is never touched. The game runs from a
+// copy of its .app in which every Mach-O is a converted, signed copy and everything else is a
+// symlink to the original (a folder with no code in it is one symlink). Each launch brings the
+// copy up to date: files Steam updated are copied again, files it removed go.
+static NSString *convertedGamesRoot(void) {
+  NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+  return [support stringByAppendingPathComponent:@"Steam games for iOS"];
+}
+
+static NSString *const kManifest = @"manifest.plist";   // next to the copy: {source, files: {rel: "size mtime"}}
+
+// A thin binary already labelled iOS: converted.
+static BOOL labelledIOS(NSString *path) {
+  NSData *file = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+  const struct mach_header_64 *mh = file.bytes;
+  if (file.length < sizeof *mh || mh->magic != MH_MAGIC_64 || mh->sizeofcmds > file.length - sizeof *mh) return NO;
+  const uint8_t *lc = (const uint8_t *)(mh + 1);
+  for (uint32_t i = 0, off = 0; i < mh->ncmds && off + sizeof(struct load_command) <= mh->sizeofcmds; i++) {
+    const struct load_command *c = (const void *)(lc + off);
+    if (!c->cmdsize) break;
+    if (c->cmd == LC_VERSION_MIN_IPHONEOS) return YES;
+    if (c->cmd == LC_BUILD_VERSION) return ((const struct build_version_command *)c)->platform == PLATFORM_IOS;
+    off += c->cmdsize;
+  }
+  return NO;
+}
+
+// A binary has no extension, or one of these; anything else isn't opened to look.
+static BOOL mayBeMachO(NSString *path) {
+  NSString *ext = path.pathExtension.lowercaseString;
+  return (!ext.length || [@[ @"dylib", @"so", @"bundle", @"plugin" ] containsObject:ext]) && isMachO(path);
+}
+
+static NSString *fileStamp(NSDictionary *attributes) {
+  return [NSString stringWithFormat:@"%llu %.0f", [attributes[NSFileSize] unsignedLongLongValue],
+          [attributes[NSFileModificationDate] timeIntervalSince1970]];
+}
+
+// `dst` made a symlink to `target` (whatever was there goes).
+static BOOL linkTo(NSString *dst, NSString *target) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSString *now = [fm destinationOfSymbolicLinkAtPath:dst error:nil];
+  if ([now isEqualToString:target]) return YES;
+  [fm removeItemAtPath:dst error:nil];
+  return [fm createSymbolicLinkAtPath:dst withDestinationPath:target error:nil];
+}
+
+typedef struct {
+  NSSet<NSString *> *code;           // relative paths of the Mach-O files
+  NSSet<NSString *> *codeDirs;       // and of every folder holding one
+  NSMutableDictionary *oldFiles, *newFiles;
+  unsigned copied;
+} ak_mirror;
+
+static NSString *mirrorDir(NSString *src, NSString *dst, NSString *rel, ak_mirror *m) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSError *error;
+  NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:src error:&error];
+  if (!entries) return error.localizedDescription;
+  NSSet *wanted = [NSSet setWithArray:entries];
+  for (NSString *gone in [fm contentsOfDirectoryAtPath:dst error:nil])
+    if (![wanted containsObject:gone]) [fm removeItemAtPath:[dst stringByAppendingPathComponent:gone] error:nil];
+  for (NSString *name in entries) {
+    NSString *s = [src stringByAppendingPathComponent:name], *d = [dst stringByAppendingPathComponent:name];
+    NSString *r = rel.length ? [rel stringByAppendingPathComponent:name] : name;
+    NSDictionary *attributes = [fm attributesOfItemAtPath:s error:nil];
+    NSString *type = attributes[NSFileType];
+    if ([type isEqualToString:NSFileTypeSymbolicLink]) {
+      // Frameworks' Versions/Current and the like: the same (relative) link.
+      NSString *target = [fm destinationOfSymbolicLinkAtPath:s error:nil];
+      if (target && !linkTo(d, target)) return [NSString stringWithFormat:@"can't link %@", r];
+    } else if ([type isEqualToString:NSFileTypeDirectory]) {
+      if ([m->codeDirs containsObject:r]) {
+        NSDictionary *have = [fm attributesOfItemAtPath:d error:nil];
+        if (have && ![have[NSFileType] isEqualToString:NSFileTypeDirectory]) [fm removeItemAtPath:d error:nil];
+        if (![fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:&error]) return error.localizedDescription;
+        NSString *why = mirrorDir(s, d, r, m);
+        if (why) return why;
+      } else if (!linkTo(d, s)) {
+        return [NSString stringWithFormat:@"can't link %@", r];
+      }
+    } else if ([m->code containsObject:r]) {
+      NSString *stamp = fileStamp(attributes);
+      NSDictionary *have = [fm attributesOfItemAtPath:d error:nil];
+      if (![m->oldFiles[r] isEqualToString:stamp] || ![have[NSFileType] isEqualToString:NSFileTypeRegular]) {
+        [fm removeItemAtPath:d error:nil];
+        if (![fm copyItemAtPath:s toPath:d error:&error]) return error.localizedDescription;
+        m->copied++;
+      }
+      m->newFiles[r] = stamp;
+    } else if (!linkTo(d, s)) {
+      return [NSString stringWithFormat:@"can't link %@", r];
+    }
+  }
+  return nil;
+}
+
+// The game's copy brought up to date; nil with *copy set, else why not.
+static NSString *mirrorApp(NSString *source, NSString **copy) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSString *key = [sha256Hex([source dataUsingEncoding:NSUTF8StringEncoding]) substringToIndex:16];
+  NSString *home = [convertedGamesRoot() stringByAppendingPathComponent:key];
+  NSString *dst = [home stringByAppendingPathComponent:source.lastPathComponent];
+  NSString *manifestPath = [home stringByAppendingPathComponent:kManifest];
+
+  // Which files are code (and so copied), found by a walk over the download.
+  NSMutableSet *code = [NSMutableSet set], *codeDirs = [NSMutableSet set];
+  NSDirectoryEnumerator *walk = [fm enumeratorAtPath:source];
+  for (NSString *rel in walk) {
+    if (![walk.fileAttributes[NSFileType] isEqualToString:NSFileTypeRegular]) continue;
+    if (!mayBeMachO([source stringByAppendingPathComponent:rel])) continue;
+    [code addObject:rel];
+    for (NSString *dir = rel.stringByDeletingLastPathComponent; dir.length; dir = dir.stringByDeletingLastPathComponent)
+      [codeDirs addObject:dir];
+  }
+  NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:manifestPath];
+  ak_mirror m = { code, codeDirs, [manifest[@"files"] mutableCopy] ?: [NSMutableDictionary dictionary], [NSMutableDictionary dictionary], 0 };
+  NSError *error;
+  if (![fm createDirectoryAtPath:dst withIntermediateDirectories:YES attributes:nil error:&error]) return error.localizedDescription;
+  NSString *why = mirrorDir(source, dst, @"", &m);
+  if (why) return why;
+  [@{ @"source": source, @"files": m.newFiles } writeToFile:manifestPath atomically:YES];
+  gameLog(@"its converted copy: %@ (%lu code files, %u copied fresh from the download)", dst, (unsigned long)code.count, m.copied);
+  *copy = dst;
+  return nil;
+}
+
+// Copies of games no longer installed (their download is gone) are removed.
+static void removeOrphanCopies(void) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSString *root = convertedGamesRoot();
+  for (NSString *key in [fm contentsOfDirectoryAtPath:root error:nil]) {
+    NSString *home = [root stringByAppendingPathComponent:key];
+    NSString *source = [NSDictionary dictionaryWithContentsOfFile:[home stringByAppendingPathComponent:kManifest]][@"source"];
+    if ([source isKindOfClass:NSString.class] && ![fm fileExistsAtPath:source]) {
+      gameLog(@"removing the converted copy of %@ (no longer installed)", source.lastPathComponent);
+      [fm removeItemAtPath:home error:nil];
+    }
+  }
+}
+
 #pragma mark Signing
 
 // LiveContainer runs this app, and since iOS 26 only in its JIT-less mode: every binary signed
 // with the certificate imported into it (from SideStore/AltStore), which it does itself for
-// the apps it installs and their tweaks. A game's binaries change here after install, so they
-// are signed the same way: LiveContainer's signer (ZSign.dylib, class ZSigner) with its
-// certificate, both found in this process. The certificate's hash is kept in the game's
-// bundle, so a new certificate (they're renewed) means signing everything again.
-static NSString *const kSignedStamp = @"Contents/.steam-ios-signed";
+// the apps it installs and their tweaks. A game's binaries are converted here after install,
+// so they are signed the same way: LiveContainer's signer (ZSign.dylib, class ZSigner) with its
+// certificate, both found in this process. The certificate's hash is kept next to the game's
+// copy, so a new certificate (they're renewed) means signing everything again.
+static NSString *const kSignedStamp = @"signed-with";
 
 static NSString *sha256Hex(NSData *data) {
   unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -448,7 +597,7 @@ static NSString *signApp(NSBundle *app, NSArray<NSString *> *ready, NSArray<NSSt
     gameLog(@"no certificate in LiveContainer%@: not signing, loading relies on JIT", lc ? @"" : @" (not running in LiveContainer?)");
     return nil;
   }
-  NSString *stampPath = [app.bundlePath stringByAppendingPathComponent:kSignedStamp];
+  NSString *stampPath = [app.bundlePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:kSignedStamp];
   NSString *stamp = [NSString stringWithContentsOfFile:stampPath encoding:NSUTF8StringEncoding error:nil];
   NSString *hash = sha256Hex(certificate);
   NSArray<NSString *> *toSign = [stamp isEqualToString:hash] ? changed : ready;
@@ -579,7 +728,8 @@ static void logLibraries(NSString *program) {
 #pragma mark The running game
 
 static pthread_mutex_t gGameLock = PTHREAD_MUTEX_INITIALIZER;
-static NSBundle *gGameBundle;
+static NSBundle *gGameBundle;         // its converted copy, which the game itself sees
+static NSBundle *gGameSourceBundle;   // the download, which Steam sees
 static NSString *gGameProgram;
 static NSString *gGameBundlePath;   // with a trailing slash
 static NSString *gGameBundleReal;   // the same through realpath (/var is /private/var), as dyld may name it
@@ -588,7 +738,7 @@ static CFRunLoopRef gGameRunLoop;
 
 BOOL AKGameIsRunning(void) { return gGameProgram != nil; }
 pid_t AKGamePid(void) { return gGamePid; }
-NSBundle *AKGameBundleForPid(pid_t pid) { return pid && pid == gGamePid ? gGameBundle : nil; }
+NSBundle *AKGameBundleForPid(pid_t pid) { return pid && pid == gGamePid ? gGameSourceBundle : nil; }
 
 // The game's main thread: the stand-in process thread running its program.
 BOOL AKIsGameThread(void) {
@@ -748,7 +898,7 @@ static void gameEnded(pid_t pid, int status) {
   pthread_mutex_lock(&gGameLock);
   gGamePid = 0;
   gGameProgram = nil;
-  gGameBundle = nil;
+  gGameBundle = gGameSourceBundle = nil;
   gGameBundlePath = gGameBundleReal = nil;
   gGameImageCount = 0;
   if (gGameRunLoop) CFRelease(gGameRunLoop);
@@ -772,18 +922,34 @@ static NSString *programOf(NSBundle *app, NSURL *appURL) {
 pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
                              NSError **error) {
   appURL = appURL.URLByStandardizingPath;
-  NSBundle *app = [NSBundle bundleWithURL:appURL];
-  NSString *program = programOf(app, appURL);
+  NSBundle *source = [NSBundle bundleWithURL:appURL];
+  NSString *sourceProgram = programOf(source, appURL);
   void (^fail)(NSString *) = ^(NSString *why) {
     gameLog(@"can't start %@: %@", appURL.lastPathComponent, why);
     if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOEXEC userInfo:@{ NSLocalizedDescriptionKey: why }];
   };
-  if (!app || !program) { fail(@"no program in it"); return -1; }
+  if (!source || !sourceProgram) { fail(@"no program in it"); return -1; }
   if (gGameProgram) { fail(@"a game is already running"); return -1; }
-  gameLog(@"starting %@ (%@), program %@, resources %@", appURL.lastPathComponent, app.bundleIdentifier ?: @"no bundle id",
-          program.lastPathComponent, app.resourcePath ?: @"not found");
-  NSString *why = convertApp(app, program);
+  gameLog(@"starting %@ (%@), program %@", appURL.lastPathComponent, source.bundleIdentifier ?: @"no bundle id", sourceProgram.lastPathComponent);
+  if (labelledIOS(sourceProgram))
+    gameLog(@"its download was changed by an earlier build of this app (which converted it in place); Steam's checks fail "
+            @"on it until it's restored: in Steam, the game's Properties > Installed Files > Verify integrity");
+
+  // It runs from its converted copy; the download stays as Steam installed it.
+  static dispatch_once_t tidy;
+  dispatch_once(&tidy, ^{ removeOrphanCopies(); });
+  NSString *copy;
+  NSString *why = mirrorApp(appURL.path, &copy);
+  if (why) { fail([NSString stringWithFormat:@"couldn't make its converted copy: %@", why]); return -1; }
+  NSString *rel = [sourceProgram hasPrefix:[appURL.path stringByAppendingString:@"/"]]
+                      ? [sourceProgram substringFromIndex:appURL.path.length + 1]
+                      : [@"Contents/MacOS" stringByAppendingPathComponent:sourceProgram.lastPathComponent];
+  NSString *program = [copy stringByAppendingPathComponent:rel];
+  NSBundle *app = [NSBundle bundleWithPath:copy];
+  if (!app || ![NSFileManager.defaultManager fileExistsAtPath:program]) { fail(@"its converted copy has no program"); return -1; }
+  why = convertApp(app, program);
   if (why) { fail(why); return -1; }
+  gameLog(@"resources: %@", app.resourcePath ?: @"not found");
   logLibraries(program);
   NSUInteger missing = reportMissingImports(program, app.bundlePath);
   NSDirectoryEnumerator *walk = [NSFileManager.defaultManager enumeratorAtPath:app.bundlePath];
@@ -804,6 +970,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   });
   pthread_mutex_lock(&gGameLock);
   gGameBundle = app;
+  gGameSourceBundle = source;
   gGameBundlePath = [app.bundlePath stringByAppendingString:@"/"];
   char real[PATH_MAX];
   gGameBundleReal = realpath(app.bundlePath.fileSystemRepresentation, real) ? [@(real) stringByAppendingString:@"/"] : nil;
@@ -819,7 +986,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
 
   // Loaded here first, so its main-bundle calls are redirected before its main() runs.
   void (^undo)(void) = ^{
-    gGameBundle = nil;
+    gGameBundle = gGameSourceBundle = nil;
     gGameBundlePath = gGameBundleReal = nil;
     gGameProgram = nil;
     gGameImageCount = 0;
