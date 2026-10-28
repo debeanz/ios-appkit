@@ -337,7 +337,16 @@ static void installProcessLauncher(void) {
     hostlog(@"  FAIL  the shim has no in-process launcher; the web helper can't start");
     return;
   }
-  NSArray<NSString *> *extra = webHelperArguments();
+  // Where CEF's framework and the main app bundle are. Unset, CEF derives both from the
+  // executable as <first .app>/Contents/Frameworks/Chromium Embedded Framework.framework —
+  // on a Mac that's inside Steam.app; here the first .app is this app, which has no
+  // Contents/, so [NSBundle bundleWithURL:] came back nil and Chromium's CHECK fired inside
+  // cef_initialize. On a Mac the helper's main bundle is the outer Steam.app: this app.
+  NSString *cefFramework = [clientDir() stringByAppendingPathComponent:@"Frameworks/Chromium Embedded Framework.framework"];
+  NSArray<NSString *> *extra = [webHelperArguments() arrayByAddingObjectsFromArray:@[
+    [@"--framework-dir-path=" stringByAppendingString:cefFramework],
+    [@"--main-bundle-path=" stringByAppendingString:[[NSBundle mainBundle] bundlePath]],
+  ]];
   const char **argv = calloc(extra.count + 1, sizeof(char *));
   for (NSUInteger i = 0; i < extra.count; i++) argv[i] = strdup(extra[i].UTF8String);
   setExtra("Steam Helper", argv);
