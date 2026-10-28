@@ -16,6 +16,7 @@
 #import <execinfo.h>
 #import <fcntl.h>
 #import <mach-o/dyld.h>
+#import <pthread.h>
 #import <signal.h>
 #import <sys/resource.h>
 #import <sys/ucontext.h>
@@ -24,6 +25,7 @@
 static UITextView *gLog;
 static NSMutableString *gBuf;
 static char gCrashPath[1024];
+static char gBundlePath[1024];
 
 static NSString *docsDir(void) {
   return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -99,13 +101,25 @@ static void onFatalSignal(int sig, siginfo_t *info, void *uap) {
     }
     return;
   }
-  snprintf(line, sizeof line, "\n*** crashed: signal %d (SIG%s), fault address %p\n",
-           sig, sig < NSIG ? sys_signame[sig] : "?", info ? info->si_addr : NULL);
+  char thread[64] = "";
+  pthread_getname_np(pthread_self(), thread, sizeof thread);
+  snprintf(line, sizeof line, "\n*** crashed: signal %d (SIG%s), fault address %p, thread \"%s\"%s\n",
+           sig, sig < NSIG ? sys_signame[sig] : "?", info ? info->si_addr : NULL, thread,
+           sig == SIGTRAP ? " (a trap: Chromium's CHECK/NOTREACHED, or a Swift/ObjC runtime trap)" : "");
   writeStr(fd, line); writeStr(2, line);
   void *frames[96];
   int n = backtrace(frames, 96);
   backtrace_symbols_fd(frames, n, fd);
   backtrace_symbols_fd(frames, n, 2);
+  // Every image from the app, including ones loaded after startup (the web helper), so each
+  // frame's address maps to image + offset.
+  writeStr(fd, "images:\n");
+  for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+    const char *name = _dyld_get_image_name(i);
+    if (!name || !strstr(name, gBundlePath)) continue;
+    snprintf(line, sizeof line, "  %p  %s\n", (void *)_dyld_get_image_header(i), strrchr(name, '/') + 1);
+    writeStr(fd, line);
+  }
   if (fd >= 0) close(fd);
   signal(sig, SIG_DFL);
   raise(sig);
@@ -131,6 +145,10 @@ static void installCrashReporting(void) {
   NSString *crash = [docsDir() stringByAppendingPathComponent:@"crash.log"];
   [[NSFileManager defaultManager] removeItemAtPath:crash error:nil];
   strlcpy(gCrashPath, crash.fileSystemRepresentation, sizeof gCrashPath);
+  strlcpy(gBundlePath, [[NSBundle mainBundle] bundlePath].fileSystemRepresentation, sizeof gBundlePath);
+  // Steam's Breakpad and Chromium would otherwise replace these handlers (and claim the Mach
+  // exception ports), and a crash would leave no log; the shim keeps them (SignalGuard.m).
+  setenv("AK_KEEP_FATAL_SIGNALS", "1", 1);
 
   static char altStack[64 * 1024];
   stack_t ss = { .ss_sp = altStack, .ss_size = sizeof altStack, .ss_flags = 0 };
@@ -139,7 +157,7 @@ static void installCrashReporting(void) {
   sa.sa_sigaction = onFatalSignal;
   sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
   sigemptyset(&sa.sa_mask);
-  const int fatal[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGSYS };
+  const int fatal[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGSYS, SIGTRAP };
   for (size_t i = 0; i < sizeof fatal / sizeof fatal[0]; i++) sigaction(fatal[i], &sa, NULL);
   NSSetUncaughtExceptionHandler(onUncaughtException);
 }
