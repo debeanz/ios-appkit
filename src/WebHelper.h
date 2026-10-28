@@ -18,6 +18,7 @@ enum {
   kAKWHJSRaiseException = 35,
   kAKWHJSRegisterMethod = 36,
   kAKWHJSReleaseCallback = 37,
+  kAKWHPopupCreated = 44,
   kAKWHPostURL = 45,
   kAKWHReload = 46,
   kAKWHSetBrowserViewDomainRequestMapping = 54,
@@ -29,8 +30,10 @@ enum {
   kAKWHWasHidden = 83,
   kAKWHBrowserCreateResponse = 88,
   kAKWHBrowserReady = 90,
+  kAKWHClose = 93,
   kAKWHFinishedRequest = 99,
   kAKWHJSMethodCall = 110,
+  kAKWHPopupHTMLWindow = 122,
   kAKWHSetHTMLTitle = 131,
   kAKWHURLChanged = 144,
 };

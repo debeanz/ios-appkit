@@ -32,7 +32,8 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic) uint32_t index;          // also what Browser.GetBrowserID returns
 @property(nonatomic) uint32_t handle;         // Steam's handle (Browser.GetSteamBrowserID)
 @property(nonatomic) uint32_t type;
-@property(nonatomic) BOOL createdBySteam;     // CMsgBrowserCreate, so Steam gets its events
+@property(nonatomic) BOOL createdBySteam;     // made by CMsgBrowserCreate
+@property(nonatomic) BOOL knownToSteam;       // created by Steam or announced to it: Steam gets its events
 @property(nonatomic, copy) NSString *name;
 @property(nonatomic, copy) NSString *userAgentFamily;
 @property(nonatomic, strong) WKWebView *webView;
@@ -184,6 +185,11 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
   }
   if (@available(iOS 14.0, *)) wv.pageZoom = b.zoom;
   if (@available(iOS 16.4, *)) wv.inspectable = YES;
+  // WebKit asks this before a focused field brings up the keyboard (logged, see
+  // _webView:decidePolicyForFocusedElement:).
+  SEL setInputDelegate = NSSelectorFromString(@"_setInputDelegate:");
+  if ([wv respondsToSelector:setInputDelegate])
+    ((void (*)(id, SEL, id))[wv methodForSelector:setInputDelegate])(wv, setInputDelegate, gDelegate);
   b.webView = wv;
   return wv;
 }
@@ -224,6 +230,9 @@ static void removeBrowser(AKWHBrowser *b) {
   for (AKWHBrowser *v in [gBrowsers copy])
     if (v.parent == b) removeBrowser(v);
   AKWHLog(YES, @"browser %u \"%@\" closed", b.index, b.name);
+  // A window Steam was told about and that closed on its own (window.close()).
+  if (b.knownToSteam && !b.createdBySteam) AKWHSend(kAKWHClose, b.handle, @{ @"browser_handle": @(b.handle) });
+  b.knownToSteam = NO;
   closeSockets(b);
   [b.webView stopLoading];
   [b.webView removeFromSuperview];
@@ -437,6 +446,7 @@ static void createSteamBrowser(uint32_t requestId, NSDictionary *msg) {
   uint32_t type = [msg[@"browser_type"] unsignedIntValue];
   AKWHBrowser *b = newBrowser(type, @"");
   b.createdBySteam = YES;
+  b.knownToSteam = YES;
   b.userAgentFamily = msg[@"useragent"];
   UIView *host = hostView();
   if (host) {
@@ -530,7 +540,13 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
       AKWHLog(YES, @"JSExecutePromise isn't handled yet: %@", AKHTMLDescribe(msg, 300));
       break;
     case kAKWHBrowserRemove:
-      if (b) removeBrowser(b);
+      if (b) {
+        b.knownToSteam = NO;   // Steam's own decision: no need to tell it
+        removeBrowser(b);
+      }
+      break;
+    case kAKWHPopupCreated:
+      AKWHLog(YES, @"Steam took window %u (%@) as browser %u", b.index, b.name, browser);
       break;
     case kAKWHReload: [b.webView reload]; break;
     case kAKWHGoBack: [b.webView goBack]; break;
@@ -718,7 +734,44 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   if (b.parent) raiseBrowser(b.parent);
   AKWHLog(YES, @"%@ %u \"%@\" opened by %u (zoom %.2f): %@", isView ? @"BrowserView popup" : @"window", b.index, name,
           opener.index, b.zoom, url.absoluteString);
+  if (!isView && opener.knownToSteam) {
+    // Steam Helper tells the client about each window a page opens (BrowserView popups
+    // aside): browser_handle is the opener, popup_index the new window's handle. Steam then
+    // takes calls from it (it ignored them before) and answers with PopupCreated.
+    CGSize s = screenPoints();
+    AKWHSend(kAKWHPopupHTMLWindow, opener.handle, @{
+      @"browser_handle": @(opener.handle),
+      @"url": url.absoluteString ?: @"",
+      @"x": @0, @"y": @0,
+      @"wide": @((uint32_t)floor(s.width / b.zoom)),
+      @"tall": @((uint32_t)floor(s.height / b.zoom)),
+      @"popup_index": @(b.handle),
+      @"trusted_creator": @YES,
+      @"name": name ?: @"",
+      @"creation_flags": @((uint32_t)[q[@"createflags"] longLongValue]),
+    });
+    b.knownToSteam = YES;
+  }
   return wv;
+}
+
+// WebKit's private input delegate: asked before a focused field starts a keyboard session.
+// The answer stays WebKit's own (0, "automatic": only for focus the user caused); each
+// request is logged so focus that keeps bouncing shows up in the log.
+- (NSInteger)_webView:(WKWebView *)webView decidePolicyForFocusedElement:(id)info {
+  static unsigned logged;
+  if (++logged <= 200) {
+    id type = nil, byUser = nil, placeholder = nil;
+    @try {
+      type = [info valueForKey:@"type"];
+      byUser = [info valueForKey:@"userInitiated"];
+      placeholder = [info valueForKey:@"placeholder"];
+    } @catch (NSException *e) {
+    }
+    AKWHLog(YES, @"page %u: keyboard asked for a focused field (input type %@, by the user %@, placeholder \"%@\")",
+            browserForWebView(webView).index, type, byUser, placeholder ?: @"");
+  }
+  return 0;
 }
 
 - (void)webViewDidClose:(WKWebView *)webView {
@@ -776,7 +829,7 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   AKWHBrowser *b = browserForWebView(webView);
   NSString *url = webView.URL.absoluteString ?: @"";
   closeSockets(b);   // the previous document's
-  if (b.createdBySteam)
+  if (b.knownToSteam)
     AKWHSend(kAKWHURLChanged, b.handle, @{ @"browser_handle": @(b.handle), @"url": url, @"bNewNavigation": @YES });
   viewEvent(b, @"history-changed", @[ url ]);
 }
@@ -786,7 +839,7 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   NSString *url = webView.URL.absoluteString ?: @"";
   NSString *title = webView.title ?: @"";
   AKWHLog(YES, @"page %u loaded: %@ \"%@\"", b.index, url, title);
-  if (b.createdBySteam) {
+  if (b.knownToSteam) {
     AKWHSend(kAKWHFinishedRequest, b.handle, @{ @"browser_handle": @(b.handle), @"url": url, @"pageTitle": title });
     AKWHSend(kAKWHSetHTMLTitle, b.handle, @{ @"browser_handle": @(b.handle), @"title": title });
   }

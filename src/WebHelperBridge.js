@@ -515,6 +515,25 @@ function akwhInstall(win, config) {
         meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
         doc.head.insertBefore(meta, doc.head.firstChild);
       }
+      // What takes focus (the first few times per document), for the log: a field that keeps
+      // gaining and losing focus makes the keyboard come and go.
+      const root = doc.documentElement;
+      if (root && !root.__akwhFocusLog) {
+        root.__akwhFocusLog = true;
+        let count = 0;
+        const describe = (el) => {
+          if (!el || !el.tagName) return String(el);
+          let s = el.tagName.toLowerCase();
+          if (el.id) s += '#' + el.id;
+          if (typeof el.className === 'string' && el.className.trim()) s += '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.');
+          if (el.type) s += '[type=' + el.type + ']';
+          if (el.isContentEditable) s += '[contenteditable]';
+          return s;
+        };
+        doc.addEventListener('focusin', (e) => {
+          if (count++ < 60) post({ op: 'console', level: 'focus', text: 'focus -> ' + describe(e.target) });
+        }, true);
+      }
       if (!doc.getElementById('__akwh_style')) {
         const style = doc.createElement('style');
         style.id = '__akwh_style';
