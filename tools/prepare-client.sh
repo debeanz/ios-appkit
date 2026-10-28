@@ -36,6 +36,14 @@ done
 rm -rf "$root/Frameworks/Breakpad.framework/Resources/crash_report_sender.app" \
        "$root/Frameworks/Breakpad.framework/Resources/Inspector"
 
+# The in-game overlay's renderer, which the Mac client injects into games it starts
+# (DYLD_INSERT_LIBRARIES). Before every launch steamclient checks the signature Valve
+# embeds in this file (FUN_005b6020 -> FUN_005b7154 "gameoverlayrenderer.dylib") and fails
+# the launch with AppError 49, "Corrupt file signature", when it doesn't match, which it
+# never does once the file is thinned and retagged here. A missing file passes that check.
+# Games run inside this process, so there is nothing to inject it into anyway.
+rm -f "$root/gameoverlayrenderer.dylib" "$root/gameoverlayrenderer32.dylib"
+
 # Steam's own switches (steam.cfg, read from the client directory) for a client that must
 # never update itself or check its files: an update would replace the patched binaries with
 # stock Mac ones. The host's launch flags say the same; this also covers the client's own
