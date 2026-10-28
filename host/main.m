@@ -598,6 +598,8 @@ static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
   ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
 }
 
+static thread_act_t gMainThread;   // set at launch (iOS has no pthread_main_thread_np)
+
 // A thread's call stack right now (return addresses, innermost first). The thread is stopped
 // only while its frame pointers are copied: nothing that takes a lock happens meanwhile.
 static int captureStack(thread_act_t thread, uintptr_t *frames, int max) {
@@ -651,7 +653,7 @@ static void profileBusyThreads(void) {
     mach_msg_type_number_t count = 0;
     if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return;
     thread_act_t me = mach_thread_self();
-    thread_act_t mainThread = pthread_mach_thread_np(pthread_main_thread_np());
+    thread_act_t mainThread = gMainThread;
     NSMutableArray<NSArray *> *picked = [NSMutableArray array];   // [thread, name, percent]
     for (mach_msg_type_number_t i = 0; i < count; i++) {
       thread_extended_info_data_t info;
@@ -898,6 +900,7 @@ static void bringUpClient(void) {
 }
 
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
+  gMainThread = pthread_mach_thread_np(pthread_self());
   self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
   UIViewController *vc = [HostViewController new];
   vc.view.backgroundColor = [UIColor colorWithRed:0.09 green:0.10 blue:0.12 alpha:1.0];
