@@ -315,6 +315,13 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (BOOL)inLiveResize { return NO; }
 - (NSUInteger)occlusionState { return 1u << 1; }  // NSWindowOcclusionStateVisible
 - (void)center {}
+- (void)setIsVisible:(BOOL)visible { if (visible) [self orderFront:nil]; else [self orderOut:nil]; }
+- (void)zoom:(id)sender { /* already fills the screen */ }
+// Size limits, color space and tab grouping: a window here always fills the one screen.
+- (void)setContentMinSize:(NSSize)size {}
+- (void)setContentMaxSize:(NSSize)size {}
+- (void)setColorSpace:(id)colorSpace {}
+- (void)setTabbingMode:(NSInteger)mode {}
 - (NSWindow *)parentWindow { return nil; }
 - (NSArray<NSWindow *> *)childWindows { return @[]; }
 

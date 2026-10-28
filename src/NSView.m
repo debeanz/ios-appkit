@@ -39,6 +39,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
   CALayer *_hostedLayer; // the client's layer
   CGSize _lastSize;
   BOOL _applyingLayout;
+  CFRunLoopRef _ownerLoop; // run loop of the thread that made this view (Chromium's UI thread for its views)
 }
 
 - (instancetype)init { return [self initWithFrame:NSZeroRect]; }
@@ -53,8 +54,13 @@ static void AKViewDidMoveToWindow(NSView *view) {
     _mutableTrackingAreas = [NSMutableArray array];
     _lastSize = frame.size;
     _layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+    _ownerLoop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());
   }
   return self;
+}
+
+- (void)dealloc {
+  if (_ownerLoop) CFRelease(_ownerLoop);
 }
 
 - (UIView *)backingView { return _backing; }
@@ -90,9 +96,22 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 // UIKit resized the backing view (rotation, safe-area or constraint changes): tell the NSView
 // through -setFrameSize: so overrides see it, without writing the size back to UIKit.
+// UIKit lays out on the main thread, but a view made on another thread (Chromium's, on its
+// UI thread) must hear about it there: Chromium stops the app when called off that thread.
 - (void)_ak_backingDidLayout {
   [self _ak_layoutLayers];
   CGSize size = _backing.bounds.size;
+  if (CGSizeEqualToSize(size, _lastSize)) return;
+  if (!_ownerLoop || _ownerLoop == CFRunLoopGetCurrent()) {
+    [self _ak_applyBackingSize:size];
+    return;
+  }
+  __weak NSView *weakSelf = self;
+  CFRunLoopPerformBlock(_ownerLoop, kCFRunLoopCommonModes, ^{ [weakSelf _ak_applyBackingSize:size]; });
+  CFRunLoopWakeUp(_ownerLoop);
+}
+
+- (void)_ak_applyBackingSize:(CGSize)size {
   if (CGSizeEqualToSize(size, _lastSize)) return;
   _applyingLayout = YES;
   [self setFrameSize:size];
