@@ -284,8 +284,24 @@ static NSArray<NSString *> *webHelperArguments(void) {
 
 typedef pid_t (*AKSpawnInProcessFn)(const char *path, char *const argv[], char *const envp[], const char *cwd);
 typedef int (*AKIsInProcessExecutableFn)(const char *path);
+typedef pid_t (*AKSpawnInProcessFunctionFn)(const char *name, int (*function)(int, char **), char *const argv[]);
 static AKSpawnInProcessFn gSpawnInProcess;
 static AKIsInProcessExecutableFn gIsInProcess;
+static AKSpawnInProcessFunctionFn gSpawnFunction;
+static int (*gWebHelperMain)(int, char **);
+
+#pragma mark Which web engine
+
+// Steam's interface can be drawn by Chromium (Valve's Steam Helper, in-process: no JIT and no
+// GPU on iOS, so slow) or by Safari's engine (the shim's WebHelper.m stands in for Steam
+// Helper and shows pages in WKWebView). Chromium stays the default until the Safari engine
+// can show the whole interface; a three-finger long press switches (see AppDelegate). The
+// choice applies from the next launch.
+static NSString *const kEngineKey = @"SteamWebEngine";
+
+static BOOL safariEngine(void) {
+  return [[[NSUserDefaults standardUserDefaults] stringForKey:kEngineKey] isEqualToString:@"safari"];
+}
 
 // Steam computes the helper's path as <executable dir>/../Frameworks/..., which on a Mac is
 // Contents/Frameworks. The app keeps the client's Frameworks inside client/, so a path that
@@ -319,6 +335,15 @@ static pid_t hostCreateSimpleProcess(char **cmd, unsigned flags, char **envp, co
   NSMutableString *line = [NSMutableString string];
   for (int i = 0; cmd[i]; i++) [line appendFormat:@"%s%s", i ? " " : "", cmd[i]];
   NSString *path = resolveProgram(cmd[0], cwd);
+  if (safariEngine() && [path.lastPathComponent isEqualToString:@"Steam Helper"]) {
+    if (!gSpawnFunction || !gWebHelperMain) {
+      hostlog(@"Safari engine: the shim has no web helper; nothing will draw Steam's interface");
+      return 0;
+    }
+    pid_t pid = gSpawnFunction(path.fileSystemRepresentation, gWebHelperMain, cmd);
+    hostlog(@"Safari engine: web helper standing in for Steam Helper as pid %d", pid);
+    return pid > 0 ? pid : 0;
+  }
   if (!gIsInProcess || !gIsInProcess(path.fileSystemRepresentation)) {
     hostlog(@"process launch refused (not a program the app can run in-process): %@\n    %@", path, line);
     return 0;
@@ -458,6 +483,8 @@ static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
 static void installProcessLauncher(void) {
   gSpawnInProcess = (AKSpawnInProcessFn)dlsym(RTLD_DEFAULT, "AKSpawnInProcess");
   gIsInProcess = (AKIsInProcessExecutableFn)dlsym(RTLD_DEFAULT, "AKIsInProcessExecutable");
+  gSpawnFunction = (AKSpawnInProcessFunctionFn)dlsym(RTLD_DEFAULT, "AKSpawnInProcessFunction");
+  gWebHelperMain = (int (*)(int, char **))dlsym(RTLD_DEFAULT, "AKWebHelperMain");
   int (*rebind)(const char *, const char *, void *) = (int (*)(const char *, const char *, void *))dlsym(RTLD_DEFAULT, "AKRebindSymbol");
   void (*setExtra)(const char *, const char *const *) = (void (*)(const char *, const char *const *))dlsym(RTLD_DEFAULT, "AKInProcessSetExtraArgs");
   if (!gSpawnInProcess || !gIsInProcess || !rebind || !setExtra) {
@@ -639,7 +666,12 @@ static void bringUpClient(void) {
   ];
   void *steamui = NULL, *launcher = NULL;
   BOOL allLoaded = YES;
+  BOOL safari = safariEngine();
+  hostlog(@"web engine: %@ (three-finger long press to change)", safari ? @"Safari (WebKit)" : @"Chromium (CEF)");
   for (NSArray<NSString *> *image in images) {
+    // Only Steam Helper uses CEF; with the Safari engine it never loads (it is most of the
+    // client's code, so that also saves memory).
+    if (safari && [image[0] isEqualToString:@"CEF"]) continue;
     void *h = probe(image[0], inApp(image[1]));
     if (!h) allLoaded = NO;
     if ([image[0] isEqualToString:@"steamui"]) steamui = h;
@@ -679,11 +711,61 @@ static void bringUpClient(void) {
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
 @end
 
-@interface AppDelegate : UIResponder <UIApplicationDelegate>
+@interface AppDelegate : UIResponder <UIApplicationDelegate, UIGestureRecognizerDelegate>
 @property(strong, nonatomic) UIWindow *window;
 @end
 
 @implementation AppDelegate
+
+// Three fingers held on the screen anywhere: choose the web engine for the next launch. The
+// recognizer only watches - Steam's views still get the touches.
+- (void)watchForEngineGesture {
+  UILongPressGestureRecognizer *g = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(engineGesture:)];
+  g.numberOfTouchesRequired = 3;
+  g.minimumPressDuration = 0.8;
+  g.cancelsTouchesInView = NO;
+  g.delaysTouchesBegan = NO;
+  g.delaysTouchesEnded = NO;
+  g.delegate = self;
+  [self.window addGestureRecognizer:g];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+  return YES;
+}
+
+- (void)engineGesture:(UILongPressGestureRecognizer *)g {
+  if (g.state != UIGestureRecognizerStateBegan) return;
+  UIViewController *top = self.window.rootViewController;
+  while (top.presentedViewController) top = top.presentedViewController;
+  if ([top isKindOfClass:UIAlertController.class]) return;
+  BOOL safari = safariEngine();
+  UIAlertController *menu = [UIAlertController
+      alertControllerWithTitle:@"Web engine"
+                       message:[NSString stringWithFormat:@"Steam's interface is drawn by %@. A change applies the next time Steam starts.",
+                                                          safari ? @"Safari's engine (WebKit)" : @"Chromium"]
+                preferredStyle:UIAlertControllerStyleAlert];
+  void (^choose)(NSString *, NSString *) = ^(NSString *engine, NSString *label) {
+    [[NSUserDefaults standardUserDefaults] setObject:engine forKey:kEngineKey];
+    hostlog(@"web engine set to %@ for the next launch", label);
+    UIAlertController *restart = [UIAlertController
+        alertControllerWithTitle:@"Restart Steam"
+                         message:[NSString stringWithFormat:@"Quit now and open Steam again to use %@.", label]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [restart addAction:[UIAlertAction actionWithTitle:@"Quit Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) { exit(0); }]];
+    [restart addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [top presentViewController:restart animated:YES completion:nil];
+  };
+  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Safari (WebKit) - current" : @"Safari (WebKit) - experimental"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) { if (!safari) choose(@"safari", @"Safari's engine"); }]];
+  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Chromium" : @"Chromium - current"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) { if (safari) choose(@"chromium", @"Chromium"); }]];
+  [menu addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+  [top presentViewController:menu animated:YES completion:nil];
+}
+
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
   self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
   UIViewController *vc = [HostViewController new];
@@ -698,6 +780,7 @@ static void bringUpClient(void) {
   [vc.view addSubview:gLog];
   self.window.rootViewController = vc;
   [self.window makeKeyAndVisible];
+  [self watchForEngineGesture];
 
   // Run the client bring-up off the first runloop tick so the window is up to show logs.
   // From a timer, not a main-queue block: Steam's loop never returns, and while a main-queue

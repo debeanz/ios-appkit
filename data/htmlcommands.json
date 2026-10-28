@@ -1,0 +1,741 @@
+{
+ "1": {
+  "name": "AckSharedPaintBuffers",
+  "message": "CMsgAckSharedPaintBuffers",
+  "to": "helper"
+ },
+ "2": {
+  "name": "AddHeader",
+  "message": "CMsgAddHeader",
+  "to": "helper"
+ },
+ "3": {
+  "name": "BrowserCreate",
+  "message": "CMsgBrowserCreate",
+  "to": "helper"
+ },
+ "4": {
+  "name": "BrowserErrorStrings",
+  "message": "CMsgBrowserErrorStrings",
+  "to": "helper"
+ },
+ "5": {
+  "name": "BrowserPosition",
+  "message": "CMsgBrowserPosition",
+  "to": "helper"
+ },
+ "6": {
+  "name": "BrowserRemove",
+  "message": "CMsgBrowserRemove",
+  "to": "helper"
+ },
+ "7": {
+  "name": "BrowserSetMinSize",
+  "message": "CMsgBrowserSetMinSize",
+  "to": "helper"
+ },
+ "8": {
+  "name": "BrowserSetName",
+  "message": "CMsgBrowserSetName",
+  "to": "helper"
+ },
+ "9": {
+  "name": "BrowserSize",
+  "message": "CMsgBrowserSize",
+  "to": "helper"
+ },
+ "10": {
+  "name": "CanGoBackandForward",
+  "message": "CMsgCanGoBackAndForward",
+  "to": "client"
+ },
+ "11": {
+  "name": "ClearAllBrowsingData",
+  "message": "CMsgClearAllBrowsingData",
+  "to": "helper"
+ },
+ "12": {
+  "name": "ClearAllCookies",
+  "message": "CMsgClearAllCookies",
+  "to": "helper"
+ },
+ "13": {
+  "name": "ClearHistory",
+  "message": "CMsgClearHistory",
+  "to": "helper"
+ },
+ "14": {
+  "name": "CloseDevTools",
+  "message": "CMsgCloseDevTools",
+  "to": "helper"
+ },
+ "15": {
+  "name": "Copy",
+  "message": "CMsgCopy",
+  "to": "helper"
+ },
+ "16": {
+  "name": "DisableBackgroundThrottling",
+  "message": "CMsgDisableBackgroundThrottling",
+  "to": "helper"
+ },
+ "17": {
+  "name": "DisableF5",
+  "message": "CMsgDisableF5",
+  "to": "helper"
+ },
+ "18": {
+  "name": "ExecuteJavaScript",
+  "message": "CMsgExecuteJavaScript",
+  "to": "helper"
+ },
+ "19": {
+  "name": "ExitFullScreen",
+  "message": "CMsgExitFullScreen",
+  "to": "both"
+ },
+ "20": {
+  "name": "FileLoadDialogResponse",
+  "message": "CMsgFileLoadDialogResponse",
+  "to": "helper"
+ },
+ "21": {
+  "name": "Find",
+  "message": "CMsgFind",
+  "to": "helper"
+ },
+ "22": {
+  "name": "FullRepaint",
+  "message": "CMsgFullRepaint",
+  "to": "helper"
+ },
+ "23": {
+  "name": "GetCookiesForURL",
+  "message": "CMsgGetCookiesForURL",
+  "to": "helper"
+ },
+ "25": {
+  "name": "GetZoom",
+  "message": "CMsgGetZoom",
+  "to": "helper"
+ },
+ "26": {
+  "name": "GoBack",
+  "message": "CMsgGoBack",
+  "to": "helper"
+ },
+ "27": {
+  "name": "GoForward",
+  "message": "CMsgGoForward",
+  "to": "helper"
+ },
+ "28": {
+  "name": "HandleContextMenuCommand",
+  "message": "CMsgHandleContextMenuCommand",
+  "to": "helper"
+ },
+ "29": {
+  "name": "HorizontalScrollBarSize",
+  "message": "CMsgHorizontalScrollBarSize",
+  "to": "helper"
+ },
+ "30": {
+  "name": "InspectElement",
+  "message": "CMsgInspectElement",
+  "to": "helper"
+ },
+ "31": {
+  "name": "JSAlert",
+  "message": "CMsgJSAlert",
+  "to": "client"
+ },
+ "32": {
+  "name": "JSConfirm",
+  "message": "CMsgJSConfirm",
+  "to": "client"
+ },
+ "33": {
+  "name": "JSExecuteCallback",
+  "message": "CMsgJSExecuteCallback",
+  "to": "helper"
+ },
+ "34": {
+  "name": "JSExecutePromise",
+  "message": "CMsgJSExecutePromise",
+  "to": "helper",
+  "guessed": true
+ },
+ "35": {
+  "name": "JSRaiseException",
+  "message": "CMsgJSRaiseException",
+  "to": "helper"
+ },
+ "36": {
+  "name": "JSRegisterMethod",
+  "message": "CMsgJSRegisterMethod",
+  "to": "helper"
+ },
+ "37": {
+  "name": "JSReleaseCallback",
+  "message": "CMsgJSReleaseCallback",
+  "to": "both"
+ },
+ "38": {
+  "name": "LinkAtPosition",
+  "message": "CMsgLinkAtPosition",
+  "to": "helper"
+ },
+ "39": {
+  "name": "NotifyUserActivation",
+  "message": "CMsgNotifyUserActivation",
+  "to": "helper"
+ },
+ "40": {
+  "name": "OpenDevTools",
+  "message": "CMsgOpenDevTools",
+  "to": "helper"
+ },
+ "41": {
+  "name": "OpenSteamURL",
+  "message": "CMsgOpenSteamURL",
+  "to": "client"
+ },
+ "42": {
+  "name": "Paste",
+  "message": "CMsgPaste",
+  "to": "helper"
+ },
+ "43": {
+  "name": "PauseRepaint",
+  "message": "CMsgPauseRepaint",
+  "to": "helper"
+ },
+ "44": {
+  "name": "PopupCreated",
+  "message": "CMsgPopupCreated",
+  "to": "helper"
+ },
+ "45": {
+  "name": "PostURL",
+  "message": "CMsgPostURL",
+  "to": "helper"
+ },
+ "46": {
+  "name": "Reload",
+  "message": "CMsgReload",
+  "to": "helper"
+ },
+ "47": {
+  "name": "RequestFullScreen",
+  "message": "CMsgRequestFullScreen",
+  "to": "client"
+ },
+ "48": {
+  "name": "RequestProcessInfo",
+  "message": "CMsgRequestProcessInfo",
+  "to": "helper"
+ },
+ "49": {
+  "name": "SavePageToJPEG",
+  "message": "CMsgSavePageToJPEG",
+  "to": "helper"
+ },
+ "50": {
+  "name": "ScreenInformationChanged",
+  "message": "CMsgScreenInformationChanged",
+  "to": "helper"
+ },
+ "51": {
+  "name": "SetAccessibilitySettings",
+  "message": "CMsgSetAccessibilitySettings",
+  "to": "helper"
+ },
+ "52": {
+  "name": "AuthedSteamDomains",
+  "message": "CMsgAuthedSteamDomains",
+  "to": "helper"
+ },
+ "53": {
+  "name": "SetBlockInput",
+  "message": "CMsgSetBlockInput",
+  "to": "helper"
+ },
+ "54": {
+  "name": "SetBrowserViewDomainRequestMapping",
+  "message": "CMsgSetBrowserViewDomainRequestMapping",
+  "to": "helper"
+ },
+ "55": {
+  "name": "BuildID",
+  "message": "CMsgBuildID",
+  "to": "helper"
+ },
+ "56": {
+  "name": "SetCookie",
+  "message": "CMsgSetCookie",
+  "to": "helper"
+ },
+ "57": {
+  "name": "SetFocus",
+  "message": "CMsgSetFocus",
+  "to": "helper"
+ },
+ "58": {
+  "name": "SetForceDeviceScaleFactors",
+  "message": "CMsgSetForceDeviceScaleFactors",
+  "to": "helper"
+ },
+ "59": {
+  "name": "SetHorizontalScroll",
+  "message": "CMsgSetHorizontalScroll",
+  "to": "helper"
+ },
+ "60": {
+  "name": "SetLocalFileRequestMapping",
+  "message": "CMsgSetLocalFileRequestMapping",
+  "to": "helper"
+ },
+ "61": {
+  "name": "SetNetFakeLocalSystemState",
+  "message": "CMsgSetNetFakeLocalSystemState",
+  "to": "helper"
+ },
+ "62": {
+  "name": "SetPIDShuttingDown",
+  "message": "CMsgSetPIDShuttingDown",
+  "to": "helper"
+ },
+ "63": {
+  "name": "ScalePageToValue",
+  "message": "CMsgScalePageToValue",
+  "to": "helper"
+ },
+ "64": {
+  "name": "SetProtocolBlockList",
+  "message": "CMsgSetProtocolBlockList",
+  "to": "helper"
+ },
+ "65": {
+  "name": "ScreenDPI",
+  "message": "CMsgScreenDPI",
+  "to": "helper"
+ },
+ "66": {
+  "name": "SetSteamBetaName",
+  "message": "CMsgSetSteamBetaName",
+  "to": "helper"
+ },
+ "67": {
+  "name": "SetSteamID",
+  "message": "CMsgSetSteamID",
+  "to": "helper"
+ },
+ "68": {
+  "name": "SetTouchGesturesToCancel",
+  "message": "CMsgSetTouchGesturesToCancel",
+  "to": "helper"
+ },
+ "69": {
+  "name": "SetUIMode",
+  "message": "CMsgSetUIMode",
+  "to": "helper"
+ },
+ "70": {
+  "name": "SetVRKeyboardVisibility",
+  "message": "CMsgSetVRKeyboardVisibility",
+  "to": "helper"
+ },
+ "71": {
+  "name": "SetVerticalScroll",
+  "message": "CMsgSetVerticalScroll",
+  "to": "helper"
+ },
+ "72": {
+  "name": "SetWindowStackingOrder",
+  "message": "CMsgSetWindowStackingOrder",
+  "to": "helper"
+ },
+ "73": {
+  "name": "SetWindowVisibility",
+  "message": "CMsgSetWindowVisibility",
+  "to": "helper"
+ },
+ "74": {
+  "name": "SetZoomLevel",
+  "message": "CMsgSetZoomLevel",
+  "to": "helper"
+ },
+ "75": {
+  "name": "SizePopup",
+  "message": "CMsgSizePopup",
+  "to": "client"
+ },
+ "76": {
+  "name": "StartDownload",
+  "message": "CMsgStartDownload",
+  "to": "helper"
+ },
+ "77": {
+  "name": "SteamAuthCookiesSet",
+  "message": "CMsgSteamAuthCookiesSet",
+  "to": "helper"
+ },
+ "78": {
+  "name": "StopFind",
+  "message": "CMsgStopFind",
+  "to": "helper"
+ },
+ "79": {
+  "name": "StopLoad",
+  "message": "CMsgStopLoad",
+  "to": "helper"
+ },
+ "80": {
+  "name": "UnlockH264",
+  "message": "CMsgUnlockH264",
+  "to": "helper"
+ },
+ "81": {
+  "name": "VerticalScrollBarSize",
+  "message": "CMsgVerticalScrollBarSize",
+  "to": "helper"
+ },
+ "82": {
+  "name": "ViewSource",
+  "message": "CMsgViewSource",
+  "to": "helper"
+ },
+ "83": {
+  "name": "WasHidden",
+  "message": "CMsgWasHidden",
+  "to": "helper"
+ },
+ "84": {
+  "name": "AckPIDShuttingDown",
+  "message": "CMsgAckPIDShuttingDown",
+  "to": "client"
+ },
+ "85": {
+  "name": "AckScreenDPI",
+  "message": "CMsgAckScreenDPI",
+  "to": "client"
+ },
+ "87": {
+  "name": "BringWindowToFront",
+  "message": "CMsgBringWindowToFront",
+  "to": "client"
+ },
+ "88": {
+  "name": "BrowserCreateResponse",
+  "message": "CMsgBrowserCreateResponse",
+  "to": "client"
+ },
+ "90": {
+  "name": "BrowserReady",
+  "message": "CMsgBrowserReady",
+  "to": "client"
+ },
+ "91": {
+  "name": "BrowserResized",
+  "message": "CMsgBrowserResized",
+  "to": "client"
+ },
+ "93": {
+  "name": "Close",
+  "message": "CMsgClose",
+  "to": "client"
+ },
+ "94": {
+  "name": "ComboNeedsPaint",
+  "message": "CMsgComboNeedsPaint",
+  "to": "client"
+ },
+ "96": {
+  "name": "DraggableRegionsChanged",
+  "message": "CMsgDraggableRegionsChanged",
+  "to": "client"
+ },
+ "98": {
+  "name": "FileLoadDialog",
+  "message": "CMsgFileLoadDialog",
+  "to": "client"
+ },
+ "99": {
+  "name": "FinishedRequest",
+  "message": "CMsgFinishedRequest",
+  "to": "client"
+ },
+ "100": {
+  "name": "GetCookiesForURLResponse",
+  "message": "CMsgGetCookiesForURLResponse",
+  "to": "client"
+ },
+ "102": {
+  "name": "GetZoomResponse",
+  "message": "CMsgGetZoomResponse",
+  "to": "client"
+ },
+ "103": {
+  "name": "HidePopup",
+  "message": "CMsgHidePopup",
+  "to": "both"
+ },
+ "104": {
+  "name": "HideToolTip",
+  "message": "CMsgHideToolTip",
+  "to": "client"
+ },
+ "105": {
+  "name": "HideWindow",
+  "message": "CMsgHideWindow",
+  "to": "client"
+ },
+ "107": {
+  "name": "HorizontalScrollBarSizeResponse",
+  "message": "CMsgHorizontalScrollBarSizeResponse",
+  "to": "client"
+ },
+ "109": {
+  "name": "JSDialogResponse",
+  "message": "CMsgJSDialogResponse",
+  "to": "helper"
+ },
+ "110": {
+  "name": "JSMethodCall",
+  "message": "CMsgJSMethodCall",
+  "to": "client"
+ },
+ "111": {
+  "name": "LinkAtPositionResponse",
+  "message": "CMsgLinkAtPositionResponse",
+  "to": "client"
+ },
+ "113": {
+  "name": "LoadedRequest",
+  "message": "CMsgLoadedRequest",
+  "to": "client"
+ },
+ "114": {
+  "name": "LoadingResource",
+  "message": "CMsgLoadingResource",
+  "to": "client"
+ },
+ "115": {
+  "name": "MaximizeRestoreWindow",
+  "message": "CMsgMaximizeRestoreWindow",
+  "to": "client"
+ },
+ "116": {
+  "name": "MinimizeWindow",
+  "message": "CMsgMinimizeWindow",
+  "to": "client"
+ },
+ "117": {
+  "name": "NeedsPaint",
+  "message": "CMsgNeedsPaint",
+  "to": "client",
+  "guessed": true
+ },
+ "118": {
+  "name": "NeedsSharedTexturePaint",
+  "message": "CMsgNeedsSharedTexturePaint",
+  "to": "client",
+  "guessed": true
+ },
+ "119": {
+  "name": "NodeGotFocus",
+  "message": "CMsgNodeHasFocus",
+  "to": "client"
+ },
+ "120": {
+  "name": "OpenNewTab",
+  "message": "CMsgOpenNewTab",
+  "to": "client"
+ },
+ "121": {
+  "name": "PageSecurity",
+  "message": "CMsgPageSecurity",
+  "to": "client"
+ },
+ "122": {
+  "name": "PopupHTMLWindow",
+  "message": "CMsgPopupHTMLWindow",
+  "to": "client"
+ },
+ "123": {
+  "name": "ProcessInfoNotification",
+  "message": "CMsgProcessInfoNotification",
+  "to": "client"
+ },
+ "124": {
+  "name": "RenderProcessTerminated",
+  "message": "CMsgRenderProcessTerminated",
+  "to": "client"
+ },
+ "125": {
+  "name": "ResizeGripChanged",
+  "message": "CMsgResizeGripChanged",
+  "to": "client"
+ },
+ "126": {
+  "name": "SavePageToJPEGResponse",
+  "message": "CMsgSavePageToJPEGResponse",
+  "to": "client"
+ },
+ "128": {
+  "name": "SearchResults",
+  "message": "CMsgSearchResults",
+  "to": "client"
+ },
+ "129": {
+  "name": "SetCursor",
+  "message": "CMsgSetCursor",
+  "to": "client"
+ },
+ "130": {
+  "name": "SetForegroundWindow",
+  "message": "CMsgSetForegroundWindow",
+  "to": "client"
+ },
+ "131": {
+  "name": "SetHTMLTitle",
+  "message": "CMsgSetHTMLTitle",
+  "to": "client"
+ },
+ "132": {
+  "name": "SetSharedPaintBuffers",
+  "message": "CMsgSetSharedPaintBuffers",
+  "to": "client",
+  "guessed": true
+ },
+ "133": {
+  "name": "SetWindowPosition",
+  "message": "CMsgSetWindowPosition",
+  "to": "client"
+ },
+ "134": {
+  "name": "ShowBrowserContextMenu",
+  "message": "CMsgShowBrowserContextMenu",
+  "to": "client"
+ },
+ "135": {
+  "name": "ShowPopup",
+  "message": "CMsgShowPopup",
+  "to": "client"
+ },
+ "136": {
+  "name": "ShowToolTip",
+  "message": "CMsgShowToolTip",
+  "to": "client"
+ },
+ "137": {
+  "name": "ShowWindow",
+  "message": "CMsgShowWindow",
+  "to": "client"
+ },
+ "138": {
+  "name": "StartRequest",
+  "message": "CMsgStartRequest",
+  "to": "client"
+ },
+ "140": {
+  "name": "StatusText",
+  "message": "CMsgStatusText",
+  "to": "client"
+ },
+ "141": {
+  "name": null,
+  "message": null,
+  "to": "client"
+ },
+ "142": {
+  "name": "ToggleFindInPageDialog",
+  "message": "CMsgToggleFindInPageDialog",
+  "to": "client"
+ },
+ "143": {
+  "name": "TouchGesture",
+  "message": "CMsgTouchGesture",
+  "to": "client"
+ },
+ "144": {
+  "name": "URLChanged",
+  "message": "CMsgURLChanged",
+  "to": "client"
+ },
+ "145": {
+  "name": "UpdateToolTip",
+  "message": "CMsgUpdateToolTip",
+  "to": "client"
+ },
+ "146": {
+  "name": "VerticalScrollBarSizeResponse",
+  "message": "CMsgVerticalScrollBarSizeResponse",
+  "to": "client"
+ },
+ "147": {
+  "name": "KeyUp",
+  "message": "CMsgKeyUp",
+  "to": "helper"
+ },
+ "148": {
+  "name": "KeyDown",
+  "message": "CMsgKeyDown",
+  "to": "helper"
+ },
+ "149": {
+  "name": "KeyChar",
+  "message": "CMsgKeyChar",
+  "to": "helper"
+ },
+ "150": {
+  "name": "MouseDown",
+  "message": "CMsgMouseDown",
+  "to": "helper"
+ },
+ "151": {
+  "name": "MouseUp",
+  "message": "CMsgMouseUp",
+  "to": "helper"
+ },
+ "152": {
+  "name": "MouseDblClick",
+  "message": "CMsgMouseDblClick",
+  "to": "helper"
+ },
+ "153": {
+  "name": "MouseWheel",
+  "message": "CMsgMouseWheel",
+  "to": "helper"
+ },
+ "154": {
+  "name": "MouseMove",
+  "message": "CMsgMouseMove",
+  "to": "helper"
+ },
+ "155": {
+  "name": "MouseLeave",
+  "message": "CMsgMouseLeave",
+  "to": "helper"
+ },
+ "156": {
+  "name": "ImeSetComposition",
+  "message": "CMsgImeSetComposition",
+  "to": "helper"
+ },
+ "157": {
+  "name": "ImeCommitText",
+  "message": "CMsgImeCommitText",
+  "to": "helper"
+ },
+ "158": {
+  "name": "ImeCancelComposition",
+  "message": "CMsgImeCancelComposition",
+  "to": "helper"
+ },
+ "159": {
+  "name": "IME_CompositionRangeChanged",
+  "message": "CMsgImeCompositionRangeChanged",
+  "to": "client"
+ }
+}

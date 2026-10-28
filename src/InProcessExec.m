@@ -51,6 +51,7 @@ typedef struct {
   char **argv;
   char **envp;
   int (*entry)(int, char **, char **, char **);
+  int (*function)(int, char **);   // AKSpawnInProcessFunction's stand-in, instead of entry
 } ak_vproc;
 
 static ak_vproc gProcs[AK_VPROC_MAX];
@@ -64,6 +65,7 @@ static struct { char name[256]; char *args[AK_MAX_EXTRA]; int count; } gExtra[8]
 static int gExtraCount;
 
 pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[], const char *cwd);
+pid_t AKSpawnInProcessFunction(const char *name, int (*function)(int, char **), char *const argv[]);
 int AKIsInProcessExecutable(const char *path);
 void AKInProcessSetExtraArgs(const char *name, const char *const *args);
 int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement);
@@ -189,10 +191,49 @@ static void *procMain(void *arg) {
   char *apple[] = { execPath, NULL };
   int status;
   @autoreleasepool {
-    status = p->entry(p->argc, p->argv, p->envp, apple);
+    status = p->function ? p->function(p->argc, p->argv) : p->entry(p->argc, p->argv, p->envp, apple);
   }
   finishProc(p, status);
   return NULL;
+}
+
+// Run a function of this app as if it were the named program: on a thread of its own, with
+// a stand-in pid that kill/waitpid/waitid answer for. The Safari-engine web helper stands in
+// for Steam Helper this way.
+pid_t AKSpawnInProcessFunction(const char *name, int (*function)(int, char **), char *const argv[]) {
+  pthread_mutex_lock(&gProcLock);
+  ak_vproc *p = NULL;
+  for (int i = 0; i < AK_VPROC_MAX; i++) if (!gProcs[i].inUse) { p = &gProcs[i]; break; }
+  if (!p) { pthread_mutex_unlock(&gProcLock); errno = EAGAIN; return -1; }
+  memset(p, 0, sizeof *p);
+  p->inUse = 1;
+  p->running = 1;
+  p->pid = gNextPid++;
+  p->function = function;
+  strlcpy(p->path, name, sizeof p->path);
+  int argc = 0;
+  while (argv && argv[argc]) argc++;
+  p->argv = calloc(argc + 2, sizeof(char *));
+  p->argv[0] = strdup(argc ? argv[0] : name);
+  for (int i = 1; i < argc; i++) p->argv[i] = strdup(argv[i]);
+  p->argc = argc ? argc : 1;
+  pthread_mutex_unlock(&gProcLock);
+  shimLog("in-process stand-in for %s started as pid %d", baseName(name), p->pid);
+
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 8 * 1024 * 1024);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  int rc = pthread_create(&p->thread, &attr, procMain, p);
+  pthread_attr_destroy(&attr);
+  if (rc != 0) {
+    pthread_mutex_lock(&gProcLock);
+    p->inUse = 0;
+    pthread_mutex_unlock(&gProcLock);
+    errno = rc;
+    return -1;
+  }
+  return p->pid;
 }
 
 pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[], const char *cwd) {

@@ -5,7 +5,14 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+#import "../src/HTMLMessages.h"
+#import "../src/SteamIPC.h"
+#import <fcntl.h>
+#import <pthread.h>
+#import <sys/mman.h>
+
 unsigned short AKMacKeyCodeForHIDUsage(long usage); // private, in KeyCodes.m
+int AKWebHelperMain(int argc, char **argv);           // private, in WebHelper.m
 BOOL AKCarbonDispatchHotKey(unsigned short keyCode, NSEventModifierFlags flags, BOOL down); // private, in Carbon.m
 
 static int gCarbonTrace;
@@ -124,6 +131,25 @@ static int AKCountClassCollisions(const char *ourImage) {
 - (void)viewDidMoveToWindow { _movedToWindow++; }
 - (void)setFrameSize:(NSSize)size { [super setFrameSize:size]; _lastSize = size; }
 @end
+
+// The Safari-engine web helper, run the way Steam starts Steam Helper.
+static void *AKTestRunWebHelper(void *arg) {
+  char *argv[] = { "Steam Helper", (char *)arg, NULL };
+  AKWebHelperMain(2, argv);
+  return NULL;
+}
+
+// Read one helper -> client command (u32 length, u32 command, u32 browser, protobuf).
+static NSDictionary *AKTestReadCommand(AKSteamStream *s, uint32_t *cmd) {
+  uint32_t head[3] = { 0 };
+  for (int i = 0; i < 200 && AKSteamStreamAvailable(s) < sizeof head; i++) usleep(10000);
+  if (AKSteamStreamGet(s, head, sizeof head) != sizeof head) return nil;
+  NSMutableData *body = [NSMutableData dataWithLength:head[0]];
+  if (head[0] && AKSteamStreamGet(s, body.mutableBytes, head[0]) != head[0]) return nil;
+  *cmd = head[1];
+  const AKHTMLCommandInfo *info = AKHTMLCommand(head[1]);
+  return AKHTMLDecode(info ? info->message : -1, body.bytes, body.length);
+}
 
 static int gDisplayLinkTicks;
 static CVReturn AKTestDisplayLinkCallback(CVDisplayLinkRef link, const CVTimeStamp *now, const CVTimeStamp *out,
@@ -661,6 +687,95 @@ int main(int argc, const char *argv[]) {
     PMRelease(pageFmt);
     CHECK(PMSessionBeginCGDocumentNoDialog(NULL, NULL, NULL) == kPMNoDefaultPrinter, "printing finds no printer");
     CHECK(!UAZoomEnabled(), "screen zoom not reachable");
+
+    // Steam's web-helper transport (SteamIPC.m): names, events, the shared ring.
+    CHECK(AKSteamCRC32("123456789") == 0xCBF43926u, "Steam's object names hash with CRC32");
+    AKSteamEvent *ev = AKSteamEventCreate("AKTest_Event", false, false, true);
+    CHECK(ev && !AKSteamEventWait(ev, 0), "a new event isn't signaled");
+    AKSteamEventSet(ev);
+    AKSteamEventSet(ev);
+    CHECK(AKSteamEventWait(ev, 0) && !AKSteamEventWait(ev, 0), "an auto-reset event wakes one wait, however often it was set");
+    AKSteamEventFree(ev);
+    AKSteamStream *writer = AKSteamStreamOpen("AKTest_Stream", 0x200, 1000, AKSteamStreamForceCreate);
+    AKSteamStream *reader = AKSteamStreamOpen("AKTest_Stream", 0x200, 1000, AKSteamStreamOpenExisting);
+    CHECK(writer && reader && AKSteamStreamCreated(writer) && !AKSteamStreamCreated(reader), "a stream is created once and attached to");
+    BOOL ringOK = YES;
+    for (int i = 0; i < 300 && ringOK; i++) {   // 300 x 37 bytes through a 512-byte ring: it wraps many times
+      uint8_t out[37], in[37];
+      for (int k = 0; k < 37; k++) out[k] = (uint8_t)(i * 7 + k);
+      ringOK = AKSteamStreamPut(writer, out, 37) == 37 && AKSteamStreamAvailable(reader) == 37 &&
+               AKSteamStreamGet(reader, in, 37) == 37 && memcmp(in, out, 37) == 0;
+    }
+    CHECK(ringOK && AKSteamStreamAvailable(reader) == 0, "bytes come out of the ring as they went in, across wrap-arounds");
+    AKSteamStreamClose(reader);
+    AKSteamStreamClose(writer);
+
+    // The protocol's messages round-trip through the schema.
+    int createMsg = AKHTMLMessageNamed("CMsgBrowserCreate"), valueMsg = AKHTMLMessageNamed("CMsgJSValue");
+    NSDictionary *create = @{ @"request_id": @7, @"initial_url": @"https://steamloopback.host/index.html", @"initial_left": @(-5), @"dpi_scaling": @1.5 };
+    NSData *createBytes = AKHTMLEncode(createMsg, create);
+    CHECK([AKHTMLDecode(createMsg, createBytes.bytes, createBytes.length) isEqual:create], "a message decodes to what was encoded");
+    NSDictionary *jsValue = @{ @"is_object": @YES, @"object_properties": @[ @{ @"name": @"n", @"value": @{ @"double_value": @2.5 } },
+                                                                          @{ @"name": @"s", @"value": @{ @"string_value": @"hi" } } ] };
+    NSData *jsBytes = AKHTMLEncode(valueMsg, jsValue);
+    CHECK([AKHTMLDecode(valueMsg, jsBytes.bytes, jsBytes.length) isEqual:jsValue], "nested and repeated messages round-trip");
+    CHECK(AKHTMLCommand(3) && strcmp(AKHTMLCommand(3)->name, "BrowserCreate") == 0 && AKHTMLCommandNamed("JSMethodCall") == 110,
+          "command numbers map to names");
+
+    // The helper itself, from the client's side, the way chromehtml connects: master stream,
+    // connect request, the reply, then a browser.
+    char pidArg[32];
+    snprintf(pidArg, sizeof pidArg, "-steampid=%u", 4242u);
+    pthread_t helperThread;
+    pthread_create(&helperThread, NULL, AKTestRunWebHelper, pidArg);
+    char masterName[96], eventName[96], masterMem[128], masterShm[32];
+    snprintf(masterName, sizeof masterName, "SteamChrome_MasterStream_uid%d_spid%u", (int)getuid(), 4242u);
+    snprintf(eventName, sizeof eventName, "SteamChrome_MasterStream_Event_uid%d_spid%u", (int)getuid(), 4242u);
+    // As chromehtml does, wait for the stream's shared memory (made last) before attaching.
+    snprintf(masterMem, sizeof masterMem, "%s_mem", masterName);
+    snprintf(masterShm, sizeof masterShm, "/Shm/%x", AKSteamCRC32(masterMem));
+    for (int i = 0, fd; i < 300; i++) {
+      if ((fd = shm_open(masterShm, O_RDWR)) >= 0) { close(fd); break; }
+      usleep(10000);
+    }
+    AKSteamStream *master = AKSteamStreamOpen(masterName, 0x2000, 500, AKSteamStreamOpenExisting);
+    AKSteamEvent *masterEvent = master ? AKSteamEventCreate(eventName, false, false, false) : NULL;
+    CHECK(master && masterEvent, "the helper puts up its master stream");
+    AKSteamStream *replies = AKSteamStreamOpen("SteamChrome_MasterStream_4242_1", 0x2000, 500, AKSteamStreamForceCreate);
+    struct { uint32_t cmd, version, pid; char name[64]; } connectReq = { 1, 1, 4242, "SteamChrome_MasterStream_4242_1" };
+    CHECK(replies && master && AKSteamStreamPut(master, &connectReq, sizeof connectReq) == sizeof connectReq, "connect request written");
+    if (masterEvent) AKSteamEventSet(masterEvent);
+    struct { uint32_t cmd, pid; char name[64]; } answer = { 0 };
+    for (int i = 0; i < 300 && replies && AKSteamStreamAvailable(replies) < sizeof answer; i++) usleep(10000);
+    CHECK(replies && AKSteamStreamGet(replies, &answer, sizeof answer) == sizeof answer && answer.cmd == 2 &&
+          strncmp(answer.name, "SteamChrome_ClientStream_", 25) == 0, "the helper answers with the client's stream names");
+    char streamName[96];
+    snprintf(streamName, sizeof streamName, "%.64s_client", answer.name);
+    AKSteamStream *toHelper = AKSteamStreamOpen(streamName, 0x1900000, 1000, AKSteamStreamOpenExisting);
+    snprintf(streamName, sizeof streamName, "%.64s_server", answer.name);
+    AKSteamStream *fromHelper = AKSteamStreamOpen(streamName, 0x1900000, 1000, AKSteamStreamOpenExisting);
+    CHECK(toHelper && fromHelper, "the client attaches to the command streams");
+    NSData *body = AKHTMLEncode(createMsg, @{ @"request_id": @9, @"initial_url": @"about:blank" });
+    uint32_t head[3] = { (uint32_t)body.length, 3, 0 };
+    NSMutableData *command = [NSMutableData dataWithBytes:head length:sizeof head];
+    [command appendData:body];
+    CHECK(toHelper && AKSteamStreamPut(toHelper, command.bytes, (uint32_t)command.length) == command.length, "BrowserCreate sent");
+    if (masterEvent) AKSteamEventSet(masterEvent);
+    uint32_t got1 = 0, got2 = 0;
+    NSDictionary *response = fromHelper ? AKTestReadCommand(fromHelper, &got1) : nil;
+    NSDictionary *ready = fromHelper ? AKTestReadCommand(fromHelper, &got2) : nil;
+    CHECK(got1 == 88 && [response[@"request_id"] isEqual:@9] && [response[@"browser_handle"] unsignedIntValue] != 0,
+          "the helper answers BrowserCreate with BrowserCreateResponse");
+    CHECK(got2 == 90 && [ready[@"browser_handle"] isEqual:response[@"browser_handle"]], "... and then BrowserReady");
+    uint32_t shutdown = 4;
+    if (master) AKSteamStreamPut(master, &shutdown, 4);
+    if (masterEvent) AKSteamEventSet(masterEvent);
+    pthread_join(helperThread, NULL);
+    AKSteamStreamClose(toHelper);
+    AKSteamStreamClose(fromHelper);
+    AKSteamStreamClose(replies);
+    AKSteamStreamClose(master);
+    AKSteamEventFree(masterEvent);
 
     // Odds and ends.
     NSColor *c = [NSColor colorWithRed:1 green:0 blue:0 alpha:1];
