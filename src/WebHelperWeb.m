@@ -260,6 +260,34 @@ static WKWebViewConfiguration *webConfiguration(void) {
        "})();";
   [c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:focus injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                              forMainFrameOnly:YES]];
+  // Steam's own sites get the two calls Steam Helper gives every page in a BrowserView to
+  // talk with the window it sits in (SteamClient.BrowserView.PostMessageToParent and
+  // RegisterForMessageFromParent). Over them the store joins Big Picture's controller
+  // navigation: it says it takes controller input, Big Picture forwards the buttons into it
+  // and tells it when to take the focus. Without them Big Picture moved past the page as a
+  // whole (down scrolled it, up left it for the top bar). Nothing else is exposed, and not to
+  // other sites.
+  NSString *messaging =
+      @"(function () {"
+       "  if (!/(^|\\.)(steampowered\\.com|steamcommunity\\.com|steam-chat\\.com|steamchina\\.com)$/.test(location.hostname)) return;"
+       "  if (window.SteamClient) return;"
+       "  var listeners = [];"
+       "  window.SteamClient = { BrowserView: {"
+       "    PostMessageToParent: function (message, args) {"
+       "      try { window.webkit.messageHandlers.akwhview.postMessage({ op: 'to-parent', message: String(message),"
+       "        args: args === undefined ? '' : String(args) }); } catch (e) {}"
+       "    },"
+       "    RegisterForMessageFromParent: function (fn) {"
+       "      if (typeof fn === 'function') listeners.push(fn);"
+       "      return { unregister: function () { var i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } };"
+       "    }"
+       "  } };"
+       "  Object.defineProperty(window, '__akwhFromParent', { value: function (message, args) {"
+       "    listeners.slice().forEach(function (fn) { try { fn(message, args); } catch (e) {} });"
+       "  } });"
+       "})();";
+  [c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:messaging injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                             forMainFrameOnly:YES]];
   return c;
 }
 
@@ -867,7 +895,14 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     // only a view that doesn't have the focus yet takes it.
     if ([args.firstObject boolValue] && focusedWebView() != v.webView) [v.webView becomeFirstResponder];
   } else if ([name isEqualToString:@"PostMessage"]) {
-    enqueue(v, @{ @"t": @"parent-message", @"a": args ?: @[] });
+    if (v.isPopupView) {
+      enqueue(v, @{ @"t": @"parent-message", @"a": args ?: @[] });
+    } else {
+      // A web page (the store): to the listeners its SteamClient.BrowserView registered.
+      NSString *json = jsonString(@[ args.count > 0 ? args[0] : @"", args.count > 1 ? args[1] : @"" ]);
+      [v.webView evaluateJavaScript:[NSString stringWithFormat:@"window.__akwhFromParent && window.__akwhFromParent.apply(null, %@)", json]
+                  completionHandler:nil];
+    }
   } else {
     AKWHLog(NO, @"BrowserView %@ isn't supported yet", name);
   }
@@ -884,6 +919,8 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
   if ([message.name isEqualToString:@"akwhview"]) {
     if ([op isEqualToString:@"focus"] && [m[@"tag"] isKindOfClass:NSString.class] && [m[@"type"] isKindOfClass:NSString.class])
       viewEvent(b, @"node-has-focus", @[ message.webView.URL.absoluteString ?: @"", m[@"tag"], m[@"type"], @"", @NO ]);
+    else if ([op isEqualToString:@"to-parent"] && [m[@"message"] isKindOfClass:NSString.class] && [m[@"args"] isKindOfClass:NSString.class])
+      viewEvent(b, @"message", @[ m[@"message"], m[@"args"] ]);
     return;
   }
   if ([op isEqualToString:@"call"]) {
