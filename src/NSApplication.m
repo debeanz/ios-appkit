@@ -189,6 +189,11 @@ static void noopPerform(void *info) {}
 // SDL's Mac app setup assigns all of these while building the menu bar; keeping them avoids
 // log noise. mainMenu is a property in the header.
 
+// The Window menu's list of open windows (SDL keeps it current); there's no menu to update.
+- (void)addWindowsItem:(NSWindow *)win title:(NSString *)title filename:(BOOL)isFilename {}
+- (void)changeWindowsItem:(NSWindow *)win title:(NSString *)title filename:(BOOL)isFilename {}
+- (void)removeWindowsItem:(NSWindow *)win {}
+
 #pragma mark Activation / visibility (single foreground app on iOS)
 
 - (void)hide:(id)sender {}

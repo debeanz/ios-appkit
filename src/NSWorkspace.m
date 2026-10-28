@@ -92,8 +92,18 @@ completionHandler:(void (^)(NSRunningApplication *, NSError *))completionHandler
 - (BOOL)openFile:(NSString *)fullPath withApplication:(NSString *)appName { return [self openFile:fullPath]; }
 - (BOOL)selectFile:(NSString *)fullPath inFileViewerRootedAtPath:(NSString *)rootFullPath { return NO; }
 
+// AppKit answers with the file URL of the app bundle that opens `url`, and callers open it
+// with NSBundle (which throws on any other kind of URL — Chromium's default-browser check did
+// exactly that on a background thread). iOS can't name another app, so: this app's own
+// bundle for a scheme it registers itself (CFBundleURLTypes), otherwise nil.
 - (NSURL *)URLForApplicationToOpenURL:(NSURL *)url {
-  return [UIApplication.sharedApplication canOpenURL:url] ? url : nil;
+  NSString *scheme = url.scheme.lowercaseString;
+  if (!scheme) return nil;
+  for (NSDictionary *type in [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleURLTypes"]) {
+    for (NSString *s in type[@"CFBundleURLSchemes"])
+      if ([s.lowercaseString isEqualToString:scheme]) return NSBundle.mainBundle.bundleURL;
+  }
+  return nil;
 }
 - (NSURL *)URLForApplicationWithBundleIdentifier:(NSString *)bundleIdentifier { return nil; }
 - (NSImage *)iconForFile:(NSString *)fullPath { return nil; }

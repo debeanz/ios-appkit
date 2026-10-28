@@ -113,6 +113,11 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   [self makeKeyWindow];
 }
 
+// With one screen and no inspector panels, the key window is also the main window.
+- (BOOL)isMainWindow { return self.isKeyWindow; }
+- (BOOL)canBecomeMainWindow { return YES; }
+- (void)makeMainWindow { [self makeKeyWindow]; }
+
 - (void)makeKeyWindow {
   NSWindow *previous = NSApp.keyWindow;
   if (previous == self) return;
