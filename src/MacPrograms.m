@@ -11,23 +11,28 @@
 //   - platform macOS relabelled iOS (LC_BUILD_VERSION / LC_VERSION_MIN);
 //   - each system library it links routed as the client's are (client/routes.json from the
 //     build; a library Steam doesn't use goes to iOS's own copy if there is one, else to the
-//     shim), @executable_path made absolute (in this process it would mean Steam's program);
-//   - its code signature dropped (the edits void it; loading unsigned code takes JIT, which
-//     LiveContainer uses to bypass the check);
+//     shim), @executable_path made @loader_path-relative (in this process it would mean
+//     Steam's program);
 //   - the program made a library (exec-to-dylib: MH_DYLIB, a one-page __PAGEZERO, the
-//     dynamic-linker command become an rpath, an id), keeping LC_MAIN for its main().
-// A file already done (thin, labelled iOS) is left alone, so a game is converted once per
-// download. Before it loads, everything it imports that isn't here yet is logged at once.
+//     dynamic-linker command become an rpath, an id), keeping LC_MAIN for its main();
+//   - signed again, with LiveContainer's own signer and the certificate imported into it, as
+//     LiveContainer signs the apps it installs (since iOS 26 it runs apps only that way, its
+//     JIT-less mode: JIT no longer lets unsigned code load).
+// A file already done is left alone, so a game is converted and signed once per download (and
+// signed again if the certificate changes). Before it loads, everything it imports that isn't
+// here yet is logged at once.
 // While the game runs, NSBundle's and CoreFoundation's main bundle and _NSGetExecutablePath
 // are the game's when the game asks, its main thread gets an app delegate and event loop of
 // its own (NSApplication.m), and its windows go above Steam's interface (NSWindow.m).
 #import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <dlfcn.h>
 #import <limits.h>
 #import <mach-o/dyld.h>
 #import <mach-o/fat.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #import <pthread.h>
 #import "AKShimPrivate.h"
@@ -189,7 +194,7 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
   if (mh->sizeofcmds > code.length - sizeof *mh) return @"bad load commands";
   BOOL thin = code == file;
   BOOL exec = mh->filetype == MH_EXECUTE;
-  if (exec && !isProgram) return nil;   // another program inside the app (a helper): not ours to run
+  if (exec && !isProgram) return @"a helper program, not run here";
   NSString *fileDir = path.stringByDeletingLastPathComponent;
   NSString *frameworks = frameworksDir();
 
@@ -231,8 +236,7 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
     NSData *original = [NSData dataWithBytes:lc length:lc->cmdsize];
     off += lc->cmdsize;
     switch (lc->cmd) {
-      case LC_CODE_SIGNATURE:
-        continue;   // voided by these edits
+      // LC_CODE_SIGNATURE stays: the edits void the signature, and the signer replaces it.
       case LC_BUILD_VERSION: {
         NSMutableData *c = [original mutableCopy];
         struct build_version_command *bv = c.mutableBytes;
@@ -342,14 +346,129 @@ static BOOL isMachO(NSString *path) {
   return yes;
 }
 
-// Every Mach-O in the app converted; nil when the program can run, else why not.
+#pragma mark Signing
+
+// LiveContainer runs this app, and since iOS 26 only in its JIT-less mode: every binary signed
+// with the certificate imported into it (from SideStore/AltStore), which it does itself for
+// the apps it installs and their tweaks. A game's binaries change here after install, so they
+// are signed the same way: LiveContainer's signer (ZSign.dylib, class ZSigner) with its
+// certificate, both found in this process. The certificate's hash is kept in the game's
+// bundle, so a new certificate (they're renewed) means signing everything again.
+static NSString *const kSignedStamp = @"Contents/.steam-ios-signed";
+
+static NSString *sha256Hex(NSData *data) {
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+  NSMutableString *hex = [NSMutableString string];
+  for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [hex appendFormat:@"%02x", digest[i]];
+  return hex;
+}
+
+// LiveContainer's shared settings (its +[NSUserDefaults lcSharedDefaults]), where it keeps the
+// certificate and its password.
+static NSUserDefaults *liveContainerDefaults(void) {
+  SEL sel = NSSelectorFromString(@"lcSharedDefaults");
+  if (![NSUserDefaults respondsToSelector:sel]) return nil;
+  id defaults = ((id (*)(id, SEL))objc_msgSend)(NSUserDefaults.class, sel);
+  return [defaults isKindOfClass:NSUserDefaults.class] ? defaults : nil;
+}
+
+// LiveContainer's own bundle: its signer is in Frameworks there.
+static NSBundle *liveContainerBundle(void) {
+  Class shared = NSClassFromString(@"LCSharedUtils");
+  return shared ? [NSBundle bundleForClass:shared] : nil;
+}
+
+static Class zSigner(void) {
+  Class signer = NSClassFromString(@"ZSigner");
+  if (signer) return signer;
+  NSString *lc = liveContainerBundle().bundlePath;
+  for (NSString *rel in @[ @"Frameworks/ZSign.dylib", @"../../Frameworks/ZSign.dylib" ]) {
+    NSString *path = [lc stringByAppendingPathComponent:rel].stringByStandardizingPath;
+    if (!lc || ![NSFileManager.defaultManager fileExistsAtPath:path]) continue;
+    if (!dlopen(path.fileSystemRepresentation, RTLD_GLOBAL)) gameLog(@"LiveContainer's signer doesn't load: %s", dlerror());
+    if ((signer = NSClassFromString(@"ZSigner"))) return signer;
+  }
+  return Nil;
+}
+
+// Signs the files; nil when done (or when there's nothing to sign with), else why not.
+static NSString *signFiles(NSArray<NSString *> *paths, NSData *certificate, NSString *password) {
+  Class signer = zSigner();
+  SEL sel = NSSelectorFromString(@"signMachOPathArr:bundleId:cert:pass:completionHandler:");
+  if (!signer || ![signer respondsToSelector:sel]) return @"LiveContainer's signer isn't here (update LiveContainer?)";
+  NSString *bundleId = liveContainerBundle().bundleIdentifier ?: @"com.kdt.livecontainer";
+  __block BOOL ok = NO;
+  __block NSString *failure;
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  void (^finished)(BOOL, NSError *) = ^(BOOL success, NSError *error) {
+    ok = success;
+    failure = error.localizedDescription;
+    dispatch_semaphore_signal(done);
+  };
+  CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
+  ((id (*)(id, SEL, NSArray *, NSString *, NSData *, NSString *, void (^)(BOOL, NSError *)))objc_msgSend)(
+      signer, sel, paths, bundleId, certificate, password ?: @"", finished);
+  // It reports on the main queue: the main thread keeps turning while it waits.
+  if (NSThread.isMainThread) {
+    while (dispatch_semaphore_wait(done, DISPATCH_TIME_NOW) != 0) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+  } else {
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+  }
+  gameLog(@"signed %lu binaries with LiveContainer's certificate in %.1fs: %@", (unsigned long)paths.count,
+          CFAbsoluteTimeGetCurrent() - start, ok ? @"ok" : failure ?: @"failed");
+  return ok ? nil : (failure ?: @"signing failed");
+}
+
+// The same settings read from their file in LiveContainer's app group, in case the defaults
+// object can't be had (LiveContainer points a guest's own preferences at the guest's folder).
+static NSDictionary *liveContainerSettingsFile(void) {
+  Class shared = NSClassFromString(@"LCSharedUtils");
+  SEL pathSel = NSSelectorFromString(@"appGroupPath"), idSel = NSSelectorFromString(@"appGroupID");
+  if (![shared respondsToSelector:pathSel] || ![shared respondsToSelector:idSel]) return nil;
+  NSURL *group = ((id (*)(id, SEL))objc_msgSend)(shared, pathSel);
+  NSString *groupID = ((id (*)(id, SEL))objc_msgSend)(shared, idSel);
+  if (![group isKindOfClass:NSURL.class] || ![groupID isKindOfClass:NSString.class]) return nil;
+  NSString *plist = [NSString stringWithFormat:@"Library/Preferences/%@.plist", groupID];
+  return [NSDictionary dictionaryWithContentsOfURL:[group URLByAppendingPathComponent:plist]];
+}
+
+static NSString *signApp(NSBundle *app, NSArray<NSString *> *ready, NSArray<NSString *> *changed) {
+  NSUserDefaults *lc = liveContainerDefaults();
+  NSData *certificate = [lc objectForKey:@"LCCertificateData"];
+  NSString *password = [lc objectForKey:@"LCCertificatePassword"];
+  if (![certificate isKindOfClass:NSData.class] || !certificate.length) {
+    NSDictionary *file = liveContainerSettingsFile();
+    certificate = file[@"LCCertificateData"];
+    password = file[@"LCCertificatePassword"];
+  }
+  if (![certificate isKindOfClass:NSData.class] || !certificate.length) {
+    // No JIT-less certificate: LiveContainer is running on JIT (before iOS 26), which lets
+    // unsigned code load.
+    gameLog(@"no certificate in LiveContainer%@: not signing, loading relies on JIT", lc ? @"" : @" (not running in LiveContainer?)");
+    return nil;
+  }
+  NSString *stampPath = [app.bundlePath stringByAppendingPathComponent:kSignedStamp];
+  NSString *stamp = [NSString stringWithContentsOfFile:stampPath encoding:NSUTF8StringEncoding error:nil];
+  NSString *hash = sha256Hex(certificate);
+  NSArray<NSString *> *toSign = [stamp isEqualToString:hash] ? changed : ready;
+  if (!toSign.count) return nil;
+  NSString *why = signFiles(toSign, certificate, [password isKindOfClass:NSString.class] ? password : nil);
+  if (why) return why;
+  [hash writeToFile:stampPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  return nil;
+}
+
+// Every Mach-O in the app converted and signed; nil when the program can run, else why not.
 static NSString *convertApp(NSBundle *app, NSString *program) {
   NSString *programDir = program.stringByDeletingLastPathComponent;
-  unsigned converted = 0, kept = 0, skipped = 0;
+  NSMutableArray<NSString *> *ready = [NSMutableArray array], *changedFiles = [NSMutableArray array];
+  unsigned skipped = 0;
   BOOL changed;
   NSString *why = convertFile(program, programDir, app.bundlePath, YES, &changed);
   if (why) return [NSString stringWithFormat:@"its program can't run here: %@", why];
-  converted += changed;
+  [ready addObject:program];
+  if (changed) [changedFiles addObject:program];
   NSDirectoryEnumerator *walk = [NSFileManager.defaultManager enumeratorAtPath:app.bundlePath];
   for (NSString *rel in walk) {
     if (![walk.fileAttributes[NSFileType] isEqualToString:NSFileTypeRegular]) continue;
@@ -361,10 +480,13 @@ static NSString *convertApp(NSBundle *app, NSString *program) {
       if (++skipped <= 20) gameLog(@"  left out %@: %@", rel, why);
       continue;
     }
-    if (changed) converted++; else kept++;
+    [ready addObject:path];
+    if (changed) [changedFiles addObject:path];
   }
-  gameLog(@"%@: %u binaries converted for iOS, %u already were, %u left out", app.bundlePath.lastPathComponent, converted, kept, skipped);
-  return nil;
+  gameLog(@"%@: %lu binaries converted for iOS, %lu already were, %u left out", app.bundlePath.lastPathComponent,
+          (unsigned long)changedFiles.count, (unsigned long)(ready.count - changedFiles.count), skipped);
+  why = signApp(app, ready, changedFiles);
+  return why ? [NSString stringWithFormat:@"couldn't sign it: %@", why] : nil;
 }
 
 #pragma mark What it still needs
