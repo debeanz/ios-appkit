@@ -327,6 +327,12 @@ void AKOnMainSync(dispatch_block_t block) {
 - (void)unhideAllApplications:(id)sender {}
 - (BOOL)isHidden { return NO; }
 - (BOOL)isActive { return YES; }
+
+// A game is in full screen (its windows cover the screen, NSWindow.m), with no Dock or menu
+// bar: NSApplicationPresentationFullScreen | HideDock | HideMenuBar. Steam gets what it set.
+- (NSUInteger)currentSystemPresentationOptions {
+  return AKIsGameThread() ? (1u << 10) | (1u << 1) | (1u << 3) : self.presentationOptions;
+}
 - (void)activate {}
 - (void)updateWindows {}
 - (void)setWindowsNeedUpdate:(BOOL)needUpdate {}

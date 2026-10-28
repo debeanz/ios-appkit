@@ -925,6 +925,8 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   Dl_info info;
   if (!bundlePath || !dladdr(header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundlePath) || hasPrefix(info.dli_fname, real)))
     return;
+  // Its IOKit HID calls (gamepads) are answered from GameController.
+  AKGameBindControllers(header, slide, info.dli_fname);
   const struct mach_header_64 *mh = (const void *)header;
   const uint8_t *lc = (const uint8_t *)(mh + 1);
   for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {

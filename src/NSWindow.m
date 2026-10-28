@@ -55,6 +55,10 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 @property (nonatomic, assign, getter=isReleasedWhenClosed) BOOL releasedWhenClosed;
 @property (nonatomic, assign, getter=isOneShot) BOOL oneShot;
 @property (nonatomic, assign) BOOL cursorRectsDisabled;
+@property (nonatomic, assign) NSSize minSize, maxSize, contentMinSize, contentMaxSize, contentAspectRatio;
+@property (nonatomic, assign) BOOL showsResizeIndicator;
+@property (nonatomic, assign, getter=isRestorable) BOOL restorable;
+@property (nonatomic, strong) id backgroundColor;
 @end
 
 @implementation NSWindow {
@@ -83,6 +87,12 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     _movable = YES;
     _releasedWhenClosed = YES;
     _gameWindow = AKGameIsRunning() && (AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0)));
+    // A game's window is the screen from the start: a game sizes its picture from its window
+    // and view, and they are what it gets once shown (it covers the screen, as in full screen).
+    if (_gameWindow) {
+      _frame = NSScreen.mainScreen.frame;
+      _contentView.frame = (NSRect){{0, 0}, _frame.size};
+    }
     [NSApplication.sharedApplication _registerWindow:self];
   }
   return self;
@@ -109,6 +119,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 
 - (NSRect)frame { return _frame; }
 - (void)setFrame:(NSRect)frame {
+  if (_gameWindow) { [self _ak_keepScreenSize]; return; }
   _frame = frame;
   if (!self.visible) AKOnMainSync(^{ self->_contentView.backingView.frame = (NSRect){{0, 0}, frame.size}; });
 }
@@ -333,11 +344,33 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (BOOL)inLiveResize { return NO; }
 - (NSUInteger)occlusionState { return 1u << 1; }  // NSWindowOcclusionStateVisible
 - (void)center {}
+
+// A game asking for another size gets the screen still, and is told its window was resized,
+// as a Mac tells a full-screen window's app.
+- (void)_ak_keepScreenSize {
+  _frame = NSScreen.mainScreen.frame;
+  NSNotification *n = [NSNotification notificationWithName:NSWindowDidResizeNotification object:self];
+  id delegate = self.delegate;
+  if ([delegate respondsToSelector:@selector(windowDidResize:)]) [delegate performSelector:@selector(windowDidResize:) withObject:n];
+  [NSNotificationCenter.defaultCenter postNotification:n];
+}
+
+- (void)setContentSize:(NSSize)size {
+  if (_gameWindow) [self _ak_keepScreenSize];
+  else self.frame = (NSRect){_frame.origin, size};
+}
+- (void)setFrameOrigin:(NSPoint)origin {
+  if (!_gameWindow) self.frame = (NSRect){origin, _frame.size};
+}
+- (void)setFrameTopLeftPoint:(NSPoint)point {
+  if (!_gameWindow) self.frame = (NSRect){{point.x, point.y - _frame.size.height}, _frame.size};
+}
+- (void)setFrame:(NSRect)frame display:(BOOL)display { self.frame = frame; }
+- (void)setFrame:(NSRect)frame display:(BOOL)display animate:(BOOL)animate { self.frame = frame; }
+- (id)standardWindowButton:(NSInteger)button { return nil; }   // no title bar here
 - (void)setIsVisible:(BOOL)visible { if (visible) [self orderFront:nil]; else [self orderOut:nil]; }
 - (void)zoom:(id)sender { /* already fills the screen */ }
-// Size limits, color space and tab grouping: a window here always fills the one screen.
-- (void)setContentMinSize:(NSSize)size {}
-- (void)setContentMaxSize:(NSSize)size {}
+// Color space and tab grouping: a window here always fills the one screen.
 - (void)setColorSpace:(id)colorSpace {}
 - (void)setTabbingMode:(NSInteger)mode {}
 - (NSWindow *)parentWindow { return nil; }

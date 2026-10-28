@@ -419,6 +419,12 @@ static void AKOnMainLater(dispatch_block_t block) {
 - (void)displayIfNeeded {}
 - (void)displayRect:(NSRect)rect { [self setNeedsDisplayInRect:rect]; }
 
+// Full-screen mode: a game's windows fill the screen from the start (NSWindow.m), so its views
+// are in it already — GameMaker fits its picture to the screen only when they say so.
+- (BOOL)isInFullScreenMode { return self.window._ak_gameWindow; }
+- (BOOL)enterFullScreenMode:(NSScreen *)screen withOptions:(NSDictionary *)options { return YES; }
+- (void)exitFullScreenModeWithOptions:(NSDictionary *)options {}
+
 // The part of the view its superviews don't clip away.
 - (NSRect)visibleRect {
   UIView *backing = _backing;

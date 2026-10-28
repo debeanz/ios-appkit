@@ -392,6 +392,7 @@ CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint index, CGLPixelForm
   __weak UIView *view;
   double scale;
   volatile int wantedWidth, wantedHeight;   // set on the main thread, read when drawing
+  volatile BOOL measuring;                  // a measure queued on the main thread
   // The IOSurfaces frames are drawn into, and the one bound now.
   IOSurfaceRef surfaces[3];
   int slot, width, height, rowPixels;
@@ -564,11 +565,24 @@ static void measure(AKGLContext *c) {
   c->wantedHeight = (int)lround(bounds.size.height * c->scale);
 }
 
+// Measured again on the main thread, without waiting for it: a game may ask every frame
+// (-[NSOpenGLContext update]), and waiting on Steam's busy main thread each time cost frames.
+static void measureLater(AKGLContext *c) {
+  if (c->measuring) return;
+  c->measuring = YES;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    c->measuring = NO;
+    measure(c);
+  });
+}
+
 void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
   if (!ctx) return;
   AKGLContext *c = context(ctx);
   UIView *view = (__bridge UIView *)uiView;
-  c->scale = scale > 0 ? scale : 1;
+  double s = scale > 0 ? scale : 1;
+  if (view && view == c->view && s == c->scale && c->layer) { measureLater(c); return; }
+  c->scale = s;
   onMain(^{
     if (c->view != view) {
       [c->layer removeFromSuperlayer];
@@ -591,8 +605,7 @@ void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
 
 CGLError CGLUpdateContext(CGLContextObj ctx) {
   if (!ctx) return kCGLBadContext;
-  AKGLContext *c = context(ctx);
-  onMain(^{ measure(c); });
+  measureLater(context(ctx));
   return kCGLNoError;
 }
 

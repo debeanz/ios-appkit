@@ -104,7 +104,11 @@ UIView *AKWHStageView(void);
 
 // InProcessExec.m: programs run in this process as stand-in processes (see there).
 pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[], const char *cwd);
+struct mach_header;
 int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement);
+// One loaded image's imports (names with their leading underscore), each pointed at what the
+// block answers for it (NULL: left alone). Returns how many were changed.
+int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol));
 const char *AKInProcessCurrentPath(void);   // the program this thread is the main thread of, or NULL
 void AKInProcessDetach(pid_t pid);
 void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
@@ -172,3 +176,7 @@ void AKPrepareGameOpenGLViews(void);
 @interface NSOpenGLView (AKShimDisplay)
 - (void)_ak_display;   // UIKit asked the view to draw: context current, then -drawRect:
 @end
+
+// GameHID.m: a game library's IOKit HID imports, answered from GameController (called for each
+// of the game's images as it loads).
+void AKGameBindControllers(const struct mach_header *header, intptr_t slide, const char *name);

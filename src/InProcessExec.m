@@ -613,6 +613,59 @@ void _exit(int status) {
 
 #pragma mark Rebinding a library's imports
 
+// Every import of one loaded image (its symbol name, with the leading underscore), pointed at
+// what `replacement` answers for it; NULL leaves it alone. Returns how many slots changed.
+int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol)) {
+  const struct mach_header_64 *mh = (const struct mach_header_64 *)header;
+  if (!mh || mh->magic != MH_MAGIC_64) return 0;
+  const struct segment_command_64 *linkedit = NULL;
+  const struct symtab_command *symtab = NULL;
+  const struct dysymtab_command *dysymtab = NULL;
+  const uint8_t *lc = (const uint8_t *)(mh + 1);
+  for (uint32_t c = 0; c < mh->ncmds; c++, lc += ((const struct load_command *)lc)->cmdsize) {
+    const struct load_command *l = (const struct load_command *)lc;
+    if (l->cmd == LC_SEGMENT_64 && strcmp(((const struct segment_command_64 *)l)->segname, SEG_LINKEDIT) == 0)
+      linkedit = (const struct segment_command_64 *)l;
+    else if (l->cmd == LC_SYMTAB) symtab = (const struct symtab_command *)l;
+    else if (l->cmd == LC_DYSYMTAB) dysymtab = (const struct dysymtab_command *)l;
+  }
+  if (!linkedit || !symtab || !dysymtab || !dysymtab->nindirectsyms) return 0;
+  uintptr_t base = (uintptr_t)slide + linkedit->vmaddr - linkedit->fileoff;
+  const struct nlist_64 *syms = (const struct nlist_64 *)(base + symtab->symoff);
+  const char *strs = (const char *)(base + symtab->stroff);
+  const uint32_t *indirect = (const uint32_t *)(base + dysymtab->indirectsymoff);
+  int changed = 0;
+  lc = (const uint8_t *)(mh + 1);
+  for (uint32_t c = 0; c < mh->ncmds; c++, lc += ((const struct load_command *)lc)->cmdsize) {
+    const struct load_command *l = (const struct load_command *)lc;
+    if (l->cmd != LC_SEGMENT_64) continue;
+    const struct segment_command_64 *seg = (const struct segment_command_64 *)l;
+    const struct section_64 *sect = (const struct section_64 *)(seg + 1);
+    for (uint32_t s = 0; s < seg->nsects; s++, sect++) {
+      uint32_t type = sect->flags & SECTION_TYPE;
+      if (type != S_LAZY_SYMBOL_POINTERS && type != S_NON_LAZY_SYMBOL_POINTERS) continue;
+      void **slots = (void **)((uintptr_t)slide + sect->addr);
+      uint32_t count = (uint32_t)(sect->size / sizeof(void *));
+      for (uint32_t k = 0; k < count; k++) {
+        uint32_t idx = indirect[sect->reserved1 + k];
+        if (idx & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS) || idx >= symtab->nsyms) continue;
+        void *to = replacement(strs + syms[idx].n_un.n_strx);
+        if (!to || slots[k] == to) continue;
+        uintptr_t page = (uintptr_t)&slots[k] & ~(uintptr_t)(PAGE_SIZE - 1);
+        int ro = seg->initprot == VM_PROT_READ || strcmp(seg->segname, "__DATA_CONST") == 0 ||
+                 strcmp(seg->segname, "__AUTH_CONST") == 0;
+        if (ro && mprotect((void *)page, PAGE_SIZE, PROT_READ | PROT_WRITE) != 0 &&
+            vm_protect(mach_task_self(), page, PAGE_SIZE, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS)
+          continue;
+        slots[k] = to;
+        if (ro) mprotect((void *)page, PAGE_SIZE, PROT_READ);
+        changed++;
+      }
+    }
+  }
+  return changed;
+}
+
 // Point every import of `symbol` in the images whose path starts with pathPrefix at
 // `replacement` — the indirect-symbol walk fishhook does: each lazy and non-lazy symbol
 // pointer section names, through the indirect symbol table, the symbol each slot binds to.
