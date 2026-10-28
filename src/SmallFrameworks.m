@@ -65,6 +65,9 @@ void VTRegisterProfessionalVideoWorkflowVideoDecoders(void) {}
 }
 - (id)interface { return nil; }
 - (NSArray<NSString *> *)interfaceNames { return nil; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark SecurityInterface / LocalAuthenticationEmbeddedUI
@@ -72,9 +75,15 @@ void VTRegisterProfessionalVideoWorkflowVideoDecoders(void) {}
 @implementation SFCertificatePanel
 + (SFCertificatePanel *)sharedCertificatePanel { return [SFCertificatePanel new]; }
 - (NSInteger)runModalForCertificates:(NSArray *)certificates showGroup:(BOOL)showGroup { return 0; } // NSModalResponseCancel
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation LAAuthenticationView
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark AuthenticationServices
@@ -87,6 +96,9 @@ void VTRegisterProfessionalVideoWorkflowVideoDecoders(void) {}
   return shared;
 }
 - (BOOL)wasLaunchedByAuthenticationServices { return NO; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark SafariServices
@@ -96,6 +108,9 @@ void VTRegisterProfessionalVideoWorkflowVideoDecoders(void) {}
   if ((self = [super init])) { _webpageURL = [url copy]; _enabled = NO; }
   return self;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark OpenDirectory
@@ -118,6 +133,15 @@ static NSError *AKUnsupportedDirectoryError(void) {
   dispatch_once(&once, ^{ session = [ODSession new]; });
   return session;
 }
+// No directory nodes are reachable, which callers read as "not bound to a directory
+// domain" (Chromium asks this at startup to decide whether the machine is managed).
+- (NSArray<NSString *> *)nodeNamesAndReturnError:(NSError **)error {
+  if (error) *error = nil;
+  return @[];
+}
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation ODNode
@@ -129,6 +153,9 @@ static NSError *AKUnsupportedDirectoryError(void) {
   if (error) *error = AKUnsupportedDirectoryError();
   return nil;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation ODQuery
@@ -136,6 +163,9 @@ static NSError *AKUnsupportedDirectoryError(void) {
   if (error) *error = AKUnsupportedDirectoryError();
   return nil;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation ODRecord
@@ -143,6 +173,9 @@ static NSError *AKUnsupportedDirectoryError(void) {
   if (error) *error = AKUnsupportedDirectoryError();
   return nil;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark IOBluetooth
@@ -153,26 +186,47 @@ int IOBluetoothPreferenceSetControllerPowerState(int powered) { return -1; }
 @implementation IOBluetoothHostController
 + (IOBluetoothHostController *)defaultController { return nil; }
 - (uint8_t)powerState { return 0; } // powered off
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation IOBluetoothDevice
 + (NSArray *)pairedDevices { return @[]; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation IOBluetoothDeviceInquiry
 - (int)start { return -1; } // kIOReturnUnsupported-style failure
 - (int)stop { return 0; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation IOBluetoothSDPUUID
 + (instancetype)uuid16:(uint16_t)uuid16 { return [self new]; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation IOBluetoothSDPServiceRecord
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 @implementation IOBluetoothL2CAPChannel
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 @implementation IOBluetoothRFCOMMChannel
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark ScreenCaptureKit
@@ -192,15 +246,30 @@ NSString *const SCStreamFrameInfoContentRect = @"SCStreamFrameInfoContentRect";
 - (NSArray *)displays { return @[]; }
 - (NSArray *)windows { return @[]; }
 - (NSArray *)applications { return @[]; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation SCContentFilter
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 @implementation SCStreamConfiguration
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 @implementation SCStream
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 @implementation SCScreenshotManager
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark ForceFeedback

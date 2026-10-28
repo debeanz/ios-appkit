@@ -58,6 +58,18 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
 }
 - (CGFloat)maximumReferenceExtendedDynamicRangeColorComponentValue { return 1.0; }
 
+// The screen's color space: Display P3 on wide-gamut panels (every recent iPhone and iPad),
+// sRGB otherwise. Chromium builds its display color profile from this.
+- (NSColorSpace *)colorSpace {
+  return _screen.traitCollection.displayGamut == UIDisplayGamutP3 ? NSColorSpace.displayP3ColorSpace
+                                                                  : NSColorSpace.sRGBColorSpace;
+}
+
+- (BOOL)canRepresentDisplayGamut:(NSInteger)displayGamut {
+  // NSDisplayGamutSRGB = 1, NSDisplayGamutP3 = 2
+  return displayGamut == 1 || (displayGamut == 2 && _screen.traitCollection.displayGamut == UIDisplayGamutP3);
+}
+
 - (NSString *)localizedName {
   return _screen == UIScreen.mainScreen ? UIDevice.currentDevice.model : @"External Display";
 }
