@@ -19,6 +19,7 @@
 #import <execinfo.h>
 #import <fcntl.h>
 #import <mach-o/dyld.h>
+#import <mach/mach.h>
 #import <pthread.h>
 #import <signal.h>
 #import <sys/resource.h>
@@ -598,6 +599,32 @@ static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
   ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
 }
 
+// Where this process's CPU time goes right now: the total (100% = one core) and the busiest
+// threads by name. A phone that runs hot shows here which part is doing it. (WebKit's
+// pages run in their own process and aren't counted.)
+static NSString *cpuReport(void) {
+  thread_act_array_t threads;
+  mach_msg_type_number_t count = 0;
+  if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return @"(unavailable)";
+  NSMutableArray<NSArray *> *busy = [NSMutableArray array];
+  double total = 0;
+  for (mach_msg_type_number_t i = 0; i < count; i++) {
+    thread_extended_info_data_t info;
+    mach_msg_type_number_t n = THREAD_EXTENDED_INFO_COUNT;
+    if (thread_info(threads[i], THREAD_EXTENDED_INFO, (thread_info_t)&info, &n) == KERN_SUCCESS) {
+      double percent = info.pth_cpu_usage * 100.0 / TH_USAGE_SCALE;
+      total += percent;
+      if (percent >= 3) [busy addObject:@[ @(percent), info.pth_name[0] ? @(info.pth_name) : @"(unnamed)" ]];
+    }
+    mach_port_deallocate(mach_task_self(), threads[i]);
+  }
+  vm_deallocate(mach_task_self(), (vm_address_t)threads, count * sizeof(thread_t));
+  [busy sortUsingComparator:^NSComparisonResult(NSArray *a, NSArray *b) { return [b[0] compare:a[0]]; }];
+  NSMutableString *out = [NSMutableString stringWithFormat:@"%.0f%% across %u threads", total, count];
+  for (NSUInteger i = 0; i < busy.count && i < 6; i++) [out appendFormat:@"%@ %@ %.0f%%", i ? @"," : @";", busy[i][1], [busy[i][0] doubleValue]];
+  return out;
+}
+
 static void watchPageFrames(void) {
   Method m = class_getInstanceMethod(CALayer.class, @selector(setContents:));
   gSetContents = method_setImplementation(m, (IMP)hostSetContents);
@@ -789,13 +816,15 @@ static void bringUpClient(void) {
   // Called from a timer, the run loop turns Steam's loop makes still drain the queue.
   [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:NO block:^(NSTimer *t) { bringUpClient(); }];
   // A heartbeat in the log shows whether the main thread still gets a turn once Steam runs,
-  // and how many page frames Chromium handed over since the last one (its frame rate).
+  // how many page frames Chromium handed over since the last one (its frame rate), and where
+  // the CPU goes: every 10 s for the first minute, then every 30 s.
   __block int beats = 0, framesBefore = 0;
   NSTimer *heartbeat = [NSTimer timerWithTimeInterval:10 repeats:YES block:^(NSTimer *t) {
     int frames = gSurfaceFrames;
-    hostlog(@"main thread turning (%ds); page frames %.1f/s", (++beats) * 10, (frames - framesBefore) / 10.0);
+    ++beats;
+    if (beats <= 6 || beats % 3 == 0)
+      hostlog(@"main thread turning (%ds); page frames %.1f/s; CPU %@", beats * 10, (frames - framesBefore) / 10.0, cpuReport());
     framesBefore = frames;
-    if (beats >= 6) [t invalidate];
   }];
   [NSRunLoop.mainRunLoop addTimer:heartbeat forMode:NSRunLoopCommonModes];
   return YES;

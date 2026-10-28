@@ -180,9 +180,19 @@ function akwhInstall(win, config) {
   const tell = (op, name, args) => post({ op, name, args });
 
   // This window's ids: the small one Browser.GetBrowserID returns (CEF's identifier, used
-  // in popup names and URLs) and Steam's handle.
-  let ids;
-  const browserIds = () => ids || (ids = syncCall('browser-id') || { id: 0, handle: 0 });
+  // in popup names and URLs) and Steam's handle. The page Steam created gets them in the
+  // config; a popup gets them from the window.open below, which picks the number itself and
+  // puts it in the URL for the app, so nobody waits. Asking the app (a prompt, which blocks
+  // the page until it answers) is the last resort, and logged.
+  let ids = !win.opener && config.self ? config.self : undefined;
+  Object.defineProperty(win, '__akwhSetIds', { value: (v) => { ids = v; }, configurable: true });
+  const browserIds = () => {
+    if (ids) return ids;
+    post({ op: 'console', level: 'warn', text: "asking the app for this window's id (blocking)" });
+    ids = syncCall('browser-id') || { id: 0, handle: 0 };
+    post({ op: 'console', level: 'warn', text: 'the app answered ' + JSON.stringify(ids) });
+    return ids;
+  };
 
   // --- The helper's own functions ---
   const resolved = (v) => win.Promise.resolve(v);
@@ -546,16 +556,33 @@ function akwhInstall(win, config) {
   if (win.document.readyState !== 'loading') fitDocument(win.document);
   win.document.addEventListener('DOMContentLoaded', () => fitDocument(win.document));
 
-  // Popups: tell the app what is being opened (window.open's name doesn't reach it otherwise),
-  // make sure the new window has SteamClient even if WebKit didn't inject this script into
-  // its first document, and fit its document once Steam has written it.
+  // Popups: number Steam's own windows (about:blank?...) the way Chromium does - the first is
+  // 2, after the page that runs the interface - counting on the top window so every page
+  // shares one sequence, and pass the number in the URL; tell the app what is being opened
+  // (window.open's name doesn't reach it otherwise); make sure the new window has SteamClient
+  // even if WebKit didn't inject this script into its first document; fit its document once
+  // Steam has written it.
+  const topWindow = () => {
+    let w = win;
+    try { while (w.opener && w.opener !== w && w.opener.__akwhDispatch) w = w.opener; } catch (e) {}
+    return w;
+  };
   const realOpen = win.open;
   win.open = function (url, name, features) {
-    post({ op: 'will-open', url: url == null ? '' : String(url), name: name == null ? '' : String(name),
+    let target = url == null ? '' : String(url);
+    let id = 0;
+    if (/^about:blank/.test(target)) {
+      const top = topWindow();
+      id = top.__akwhNextId || 2;
+      top.__akwhNextId = id + 1;
+      target += (target.indexOf('?') >= 0 ? '&' : '?') + 'akwh_id=' + id;
+    }
+    post({ op: 'will-open', url: target, name: name == null ? '' : String(name),
            features: features == null ? '' : String(features) });
-    const popup = realOpen.call(win, url, name, features);
+    const popup = realOpen.call(win, target, name, features);
     if (popup) {
       try { akwhInstall(popup, config); } catch (e) { reportError(e); }
+      try { if (id && popup.__akwhSetIds) popup.__akwhSetIds({ id, handle: 0x10000 | id }); } catch (e) { reportError(e); }
       const fit = () => fitDocument(popup.document);
       win.queueMicrotask(fit);
       win.setTimeout(fit, 0);

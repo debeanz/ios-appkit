@@ -46,6 +46,8 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic) double zoom;
 @property(nonatomic, copy) NSString *loadedURL;
 @property(nonatomic, strong) NSMutableArray *outbox;   // messages for the page, sent together
+@property(nonatomic) CFAbsoluteTime pingSent;           // see startWatchingPages
+@property(nonatomic) unsigned stuckReports;
 @end
 @implementation AKWHBrowser
 @end
@@ -54,7 +56,7 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @end
 
 static NSMutableArray<AKWHBrowser *> *gBrowsers;
-static uint32_t gNextIndex = 1;
+static uint32_t gNextIndex = 0x4000;
 static NSMutableArray<NSArray *> *gMethods;          // [name, type] registered by Steam
 static uint32_t gMethodOwner;                        // the browser they were registered for
 static WKWebViewConfiguration *gSteamConfig;         // Steam's pages and their popups
@@ -118,10 +120,20 @@ static NSString *userAgent(NSString *family) {
                                     family.length ? family : @"Valve Steam Client", gBuildID];
 }
 
-static AKWHBrowser *newBrowser(uint32_t type, NSString *name) {
+// Browser numbers (what Browser.GetBrowserID returns, and the low half of Steam's handle).
+// Steam's pages number their own popups from 2 up (WebHelperBridge.js picks the number and
+// passes it as akwh_id); the page Steam creates first is 1, and everything else the app makes
+// counts from 0x4000, out of their way.
+static uint32_t freeIndex(uint32_t wanted) {
+  if (wanted > 0 && wanted < 0x10000 && !browserForIndex(wanted)) return wanted;
+  while (browserForIndex(gNextIndex)) gNextIndex++;
+  return gNextIndex++;
+}
+
+static AKWHBrowser *newBrowser(uint32_t type, NSString *name, uint32_t wantedIndex) {
   if (!gBrowsers) gBrowsers = [NSMutableArray array];
   AKWHBrowser *b = [AKWHBrowser new];
-  b.index = gNextIndex++;
+  b.index = freeIndex(wantedIndex);
   b.handle = (1u << 16) | b.index;   // like Steam Helper's: an index plus a serial
   b.type = type;
   b.name = name ?: @"";
@@ -423,9 +435,42 @@ static void closeSockets(AKWHBrowser *b) {
 
 @end
 
+#pragma mark Are the pages answering?
+
+// Every 5 s each of Steam's pages is asked to evaluate a trivial script. A page whose
+// JavaScript is stuck - busy in a loop, or blocked waiting on something - doesn't answer,
+// and that goes in the log with how long, so a frozen interface shows up as one.
+static void startWatchingPages(void) {
+  static NSTimer *timer;
+  if (timer) return;
+  timer = [NSTimer timerWithTimeInterval:5 repeats:YES block:^(NSTimer *t) {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    for (AKWHBrowser *b in [gBrowsers copy]) {
+      if (!b.webView || (b.viewId && !b.isPopupView)) continue;   // Steam's own pages only
+      if (b.pingSent > 0) {
+        unsigned n = ++b.stuckReports;
+        if (n <= 3 || n % 6 == 0)
+          AKWHLog(YES, @"page %u \"%@\" hasn't answered for %.0f s: its JavaScript is stuck", b.index, b.name, now - b.pingSent);
+        continue;
+      }
+      b.pingSent = now;
+      __weak AKWHBrowser *weak = b;
+      [b.webView evaluateJavaScript:@"0" completionHandler:^(id result, NSError *error) {
+        AKWHBrowser *page = weak;
+        if (!page) return;
+        double ms = (CFAbsoluteTimeGetCurrent() - page.pingSent) * 1000;
+        if (ms > 1000 || page.stuckReports) AKWHLog(YES, @"page %u answered after %.0f ms", page.index, ms);
+        page.pingSent = 0;
+        page.stuckReports = 0;
+      }];
+    }
+  }];
+  [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+}
+
 #pragma mark Steam's interface page
 
-static void installBridge(void) {
+static void installBridge(AKWHBrowser *b) {
   if (gBridgeInstalled) return;
   gBridgeInstalled = YES;
   double z = zoomFor(kMinWidth, kMinHeight);
@@ -433,6 +478,7 @@ static void installBridge(void) {
   NSDictionary *config = @{
     @"methods": gMethods ?: @[],
     @"screen": @{ @"width": @(floor(s.width / z)), @"height": @(floor(s.height / z)) },
+    @"self": @{ @"id": @(b.index), @"handle": @(b.handle) },   // popups get theirs from window.open
   };
   NSString *source = [[NSString stringWithUTF8String:kAKWHBridgeJS]
       stringByAppendingFormat:@"\nakwhInstall(window, %@);\n", jsonString(config)];
@@ -440,11 +486,12 @@ static void installBridge(void) {
   [steamConfiguration().userContentController addUserScript:script];
   AKWHLog(YES, @"SteamClient bridge ready: %lu methods from Steam, screen %.0fx%.0f CSS px (zoom %.2f)",
           (unsigned long)gMethods.count, floor(s.width / z), floor(s.height / z), z);
+  startWatchingPages();
 }
 
 static void createSteamBrowser(uint32_t requestId, NSDictionary *msg) {
   uint32_t type = [msg[@"browser_type"] unsignedIntValue];
-  AKWHBrowser *b = newBrowser(type, @"");
+  AKWHBrowser *b = newBrowser(type, @"", 1);
   b.createdBySteam = YES;
   b.knownToSteam = YES;
   b.userAgentFamily = msg[@"useragent"];
@@ -467,7 +514,7 @@ static void loadURL(AKWHBrowser *b, NSString *url) {
   if (!b.webView || !url.length) return;
   if ([url isEqualToString:b.loadedURL]) return;   // Steam sends its first URL twice
   b.loadedURL = url;
-  if (b.createdBySteam) installBridge();
+  if (b.createdBySteam) installBridge(b);
   AKWHLog(YES, @"browser %u loads %@", b.index, url);
   [b.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]];
 }
@@ -671,7 +718,7 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     }
   } else if ([op isEqualToString:@"bv-create"]) {
     NSDictionary *options = m[@"options"];
-    AKWHBrowser *v = newBrowser(0, options[@"strName"] ?: @"BrowserView");
+    AKWHBrowser *v = newBrowser(0, options[@"strName"] ?: @"BrowserView", 0);
     v.viewId = [m[@"id"] unsignedIntValue];
     v.viewOwner = b;
     v.parent = browserForIndex([options[@"parentPopupBrowserID"] unsignedIntValue]) ?: (b.type == kSharedJSContextType ? nil : b);
@@ -709,7 +756,10 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   if (gPendingOpen && [gPendingOpen[@"url"] isEqualToString:url.absoluteString]) name = gPendingOpen[@"name"];
   gPendingOpen = nil;
   BOOL isView = [q[@"browserviewpopup"] isEqualToString:@"1"];
-  AKWHBrowser *b = newBrowser(isView ? 6 : (q[@"browserType"] ? (uint32_t)[q[@"browserType"] intValue] : 3), name);
+  AKWHBrowser *b = newBrowser(isView ? 6 : (q[@"browserType"] ? (uint32_t)[q[@"browserType"] intValue] : 3), name,
+                              (uint32_t)[q[@"akwh_id"] intValue]);
+  if (q[@"akwh_id"] && b.index != (uint32_t)[q[@"akwh_id"] intValue])
+    AKWHLog(YES, @"window number %@ was already taken; this window is %u", q[@"akwh_id"], b.index);
   b.userAgentFamily = q[@"useragent"] ?: opener.userAgentFamily;
   if (isView) {
     b.viewId = (uint32_t)[q[@"requestid"] intValue];
