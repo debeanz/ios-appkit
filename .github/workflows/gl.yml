@@ -1,0 +1,52 @@
+# Build the desktop OpenGL stack for Mac games on iOS (MoltenVK + Mesa OSMesa/Zink, see
+# tools/gl/build.sh) and keep it in the Actions cache the ipa workflow restores, so an IPA
+# build doesn't pay for it. Runs by hand, or when tools/gl changes.
+name: gl
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/gl/**'
+      - '.github/workflows/gl.yml'
+
+concurrency:
+  group: gl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gl:
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the newest Xcode on the runner
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+
+      - name: Cache the OpenGL stack
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: build/gl
+          key: gl-${{ hashFiles('tools/gl/**') }}
+
+      - name: Build MoltenVK and Mesa (OSMesa + Zink) for iOS
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash tools/gl/build.sh build/gl
+
+      - name: Show what was built
+        run: |
+          ls -la build/gl
+          otool -L build/gl/libOSMesa.dylib | head -20
+          otool -L build/gl/libMoltenVK.dylib | head -20
+
+      - name: Upload the OpenGL stack
+        uses: actions/upload-artifact@v4
+        with:
+          name: gl-stack
+          path: build/gl
+          if-no-files-found: error
