@@ -188,7 +188,7 @@ AK_SEC(OSStatus, AKAuthorizationRightSet, AuthorizationRightSet,
 
 // Old Mac keychain searches (games look for root certificates or saved passwords this way).
 // iOS has no file keychains to open or search, so: no such keychain, nothing found.
-enum { AKErrSecNoSuchKeychain = -25294, AKErrSecItemNotFound = -25300, AKErrSecUnimplemented = -4 };
+enum { AKErrSecNoSuchKeychain = -25294 };   // AKErrSecItemNotFound and AKErrSecUnimplemented: SecurityMac.h
 
 AK_SEC(OSStatus, AKSecKeychainOpen, SecKeychainOpen, (const char *pathName, void **keychain)) {
   if (keychain) *keychain = NULL;
