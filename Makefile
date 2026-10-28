@@ -34,7 +34,7 @@ SHIM_FRAMEWORKS := -framework UIKit -framework Foundation -framework CoreFoundat
   -framework ImageIO -framework Security -framework LocalAuthentication \
   -framework AuthenticationServices -framework SafariServices -framework GameController \
   -framework SystemConfiguration -framework Network -framework Accelerate \
-  -framework VideoToolbox -framework UniformTypeIdentifiers
+  -framework VideoToolbox -framework UniformTypeIdentifiers -framework WebKit
 # Name of the framework 'make framework' builds. The IPA build names the code
 # AppKitShimCore and puts the AppKitShim umbrella (below) in front of it.
 SHIM_NAME ?= AppKitShim
@@ -64,7 +64,7 @@ $(LIB): $(OBJS)
 test: $(LIB)
 	$(CC) $(CFLAGS) tests/smoke.m -Lbuild/$(SDK) -lAppKitShim \
 	  -framework UIKit -framework Foundation -framework CoreGraphics \
-	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal -framework ImageIO \
+	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal -framework ImageIO -framework WebKit \
 	  -o $(BUILD)/smoke
 	@echo "linked $(BUILD)/smoke"
 

@@ -139,10 +139,11 @@ static void *AKTestRunWebHelper(void *arg) {
   return NULL;
 }
 
-// Read one helper -> client command (u32 length, u32 command, u32 browser, protobuf).
+// Read one helper -> client command (u32 length, u32 command, u32 browser, protobuf). The
+// helper handles commands on the main thread, so keep it turning while waiting.
 static NSDictionary *AKTestReadCommand(AKSteamStream *s, uint32_t *cmd) {
   uint32_t head[3] = { 0 };
-  for (int i = 0; i < 200 && AKSteamStreamAvailable(s) < sizeof head; i++) usleep(10000);
+  for (int i = 0; i < 200 && AKSteamStreamAvailable(s) < sizeof head; i++) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
   if (AKSteamStreamGet(s, head, sizeof head) != sizeof head) return nil;
   NSMutableData *body = [NSMutableData dataWithLength:head[0]];
   if (head[0] && AKSteamStreamGet(s, body.mutableBytes, head[0]) != head[0]) return nil;
