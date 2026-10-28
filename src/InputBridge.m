@@ -16,10 +16,15 @@ static NSView *AKFocusedView(void) {
   return [r isKindOfClass:NSView.class] ? (NSView *)r : w.contentView;
 }
 
+Boolean IsSecureEventInputEnabled(void); // Carbon.m
+
 static BOOL AKKeyboardShouldShow(void) {
   if (gKeyboardPolicy == AKShimSoftwareKeyboardNever || !NSApp.keyWindow) return NO;
   if (gKeyboardPolicy == AKShimSoftwareKeyboardAlways) return YES;
-  // Chromium's view returns nil from -inputContext unless a text field is focused.
+  // Chromium's view returns nil from -inputContext unless a text field is focused — and for
+  // a password field too (no input methods there). A focused password field is the one time
+  // it turns on secure keyboard input, so that counts as a text field as well.
+  if (IsSecureEventInputEnabled()) return YES;
   NSResponder *r = NSApp.keyWindow.firstResponder;
   return [r isKindOfClass:NSView.class] && ((NSView *)r).inputContext != nil;
 }
@@ -45,14 +50,22 @@ void AKShimUpdateSoftwareKeyboard(void) {
   }
   // Act only once the answer has held for a moment: while a page loads, focus hops between
   // fields and elements, and following every hop opened and closed the keyboard repeatedly.
-  static BOOL pendingWant;
+  static BOOL pendingWant, shownSecure;
   static CFAbsoluteTime pendingSince;
   BOOL want = AKKeyboardShouldShow();
-  if (want == gKeyboardWanted) { pendingWant = want; return; }
+  if (want == gKeyboardWanted) {
+    pendingWant = want;
+    // Moving between an account field and a password field keeps the keyboard up; reload it
+    // so it switches to (or out of) password entry.
+    BOOL secure = IsSecureEventInputEnabled();
+    if (want && secure != shownSecure) { shownSecure = secure; [AKFocusedView().backingView reloadInputViews]; }
+    return;
+  }
   CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
   if (want != pendingWant) { pendingWant = want; pendingSince = now; return; }
   if (now - pendingSince < 0.4) return;
   gKeyboardWanted = want;
+  shownSecure = IsSecureEventInputEnabled();
   [AKFocusedView().backingView reloadInputViews];
 }
 
@@ -164,6 +177,16 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
 #pragma mark Keyboard
 
 - (BOOL)canBecomeFirstResponder { return YES; }
+
+// Keystrokes go to the app as they're typed, so the iOS keyboard mustn't rewrite them:
+// no autocorrect or automatic capitals (account names are case-sensitive), and password
+// entry (no suggestions, nothing learned) while the app has a password field focused.
+- (UITextAutocorrectionType)autocorrectionType { return UITextAutocorrectionTypeNo; }
+- (UITextAutocapitalizationType)autocapitalizationType { return UITextAutocapitalizationTypeNone; }
+- (UITextSpellCheckingType)spellCheckingType { return UITextSpellCheckingTypeNo; }
+- (UITextSmartQuotesType)smartQuotesType { return UITextSmartQuotesTypeNo; }
+- (UITextSmartDashesType)smartDashesType { return UITextSmartDashesTypeNo; }
+- (BOOL)isSecureTextEntry { return IsSecureEventInputEnabled(); }
 
 // An empty input view hides the system keyboard while keeping hardware keys flowing.
 - (UIView *)inputView {

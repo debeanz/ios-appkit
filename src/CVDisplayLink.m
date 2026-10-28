@@ -31,9 +31,11 @@ static uint64_t AKHostTimeFromSeconds(CFTimeInterval seconds) {
   CADisplayLink *_link; // touched only on _thread
 }
 
+// At most 60: Mac apps that pace frames by the display link here draw on the CPU (Chromium
+// composites in software), and a ProMotion screen's 120 Hz doubled that work for no gain.
 - (NSInteger)framesPerSecond {
   NSInteger fps = AKScreenForDisplayID(self.display).maximumFramesPerSecond;
-  return fps > 0 ? fps : 60;
+  return fps > 0 ? MIN(fps, 60) : 60;
 }
 
 - (CVTimeStamp)timeStampForTime:(CFTimeInterval)t period:(CFTimeInterval)period {

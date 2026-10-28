@@ -255,11 +255,14 @@ static NSArray<NSString *> *launchArguments(void) {
 // this runs the helper in-process through the shim (the packager made it a loadable
 // library). Chromium normally splits itself into renderer/GPU/utility processes; here it
 // has to stay in one, which these flags ask for. JavaScript runs without a JIT (V8's
-// interpreter), since iOS only allows generating code under a debugger.
+// interpreter), since iOS only allows generating code under a debugger. Pages render at 2x,
+// not the screen's 3x: Chromium draws every pixel on the CPU here, and 3x is 2.25 times the
+// pixels per frame for text that already looks sharp at 2x on a phone.
 static NSArray<NSString *> *webHelperArguments(void) {
   return argumentsFromFile(@"webhelper-args", @[
     @"--single-process", @"--no-sandbox", @"--no-zygote", @"--in-process-gpu",
     @"--disable-gpu", @"--disable-gpu-compositing", @"--js-flags=--jitless",
+    @"--force-device-scale-factor=2",
     @"--use-mock-keychain", @"--enable-logging=stderr",
   ], @"extra web helper (CEF) arguments");
 }
@@ -648,6 +651,17 @@ static void bringUpClient(void) {
   launchSteam(steamui, launcher);
 }
 
+// Steam's windows fill the whole screen, like a game: no status bar, the home indicator fades
+// out, and edge swipes need a second swipe so a stray one doesn't leave the app.
+@interface HostViewController : UIViewController
+@end
+
+@implementation HostViewController
+- (BOOL)prefersStatusBarHidden { return YES; }
+- (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
+@end
+
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property(strong, nonatomic) UIWindow *window;
 @end
@@ -655,7 +669,7 @@ static void bringUpClient(void) {
 @implementation AppDelegate
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts {
   self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-  UIViewController *vc = [UIViewController new];
+  UIViewController *vc = [HostViewController new];
   vc.view.backgroundColor = [UIColor colorWithRed:0.09 green:0.10 blue:0.12 alpha:1.0];
   gLog = [[UITextView alloc] initWithFrame:vc.view.bounds];
   gLog.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;

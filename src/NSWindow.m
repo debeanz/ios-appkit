@@ -150,15 +150,16 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     UIView *bv = self->_contentView.backingView;
     [bv removeFromSuperview];
     [host addSubview:bv]; // last added is frontmost, i.e. ordered front
-    // iOS has no menu bar or title bar: a window fills the screen inside the safe area,
-    // which keeps content clear of the notch / Dynamic Island and the home indicator.
+    // iOS has no menu bar or title bar: a window fills the whole screen, edge to edge.
+    // Mac clients size their content to the screen they're told about (NSScreen is the full
+    // display), so insetting the window to the safe area left a bar down one side and cut
+    // the page off on the other.
     bv.translatesAutoresizingMaskIntoConstraints = NO;
-    UILayoutGuide *safe = host.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-      [bv.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
-      [bv.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
-      [bv.topAnchor constraintEqualToAnchor:safe.topAnchor],
-      [bv.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+      [bv.leadingAnchor constraintEqualToAnchor:host.leadingAnchor],
+      [bv.trailingAnchor constraintEqualToAnchor:host.trailingAnchor],
+      [bv.topAnchor constraintEqualToAnchor:host.topAnchor],
+      [bv.bottomAnchor constraintEqualToAnchor:host.bottomAnchor],
     ]];
     bv.alpha = self->_alphaValue;
   });
