@@ -102,6 +102,11 @@ void AKOnMainSync(dispatch_block_t block);
 // the app's top layer: NSWindow.m orders windows in below it and leaves UIKit focus to it.
 UIView *AKWHStageView(void);
 
+// WebHelperWeb.m: a key Steam typed (CGEventPost: its on-screen keyboard, driven by a
+// controller) for the focused page. `text` is what the key types; `command` is the Command
+// modifier. Main thread.
+void AKWHTypeKey(BOOL down, uint16_t keyCode, NSString *text, BOOL command);
+
 // CGEvents.m: Quartz's global display points (origin top-left, y down) <-> AppKit screen
 // points (origin bottom-left, y up), as +[NSEvent mouseLocation] reports them.
 CGPoint AKQuartzPointFromAppKit(NSPoint p);

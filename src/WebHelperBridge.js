@@ -330,7 +330,7 @@ function akwhInstall(win, config) {
     SetTouchGesturesToCancel() {}
     SetBlockInput() {}
     HandleContextMenuCommand() {}
-    SetSteamURLCallback() {}
+    SetSteamURLCallback(callback) { this.steamURLCallback = typeof callback === 'function' ? callback : undefined; }
     SetShowContextMenuCallback() {}
     SetBlockedProtocols() {}
     CanGoBackward() { return !!this.canGoBack; }
@@ -491,7 +491,8 @@ function akwhInstall(win, config) {
             const view = views.get(m.id);
             if (view) {
               if (m.ev === 'can-go-back-forward-changed') { view.canGoBack = !!m.a[0]; view.canGoForward = !!m.a[1]; }
-              view.emit(m.ev, m.a || []);
+              if (m.ev === 'steam-url' && view.steamURLCallback) view.steamURLCallback.apply(null, m.a || []);
+              else view.emit(m.ev, m.a || []);
             }
           } else if (m.t === 'ws') {
             const socket = sockets.get(m.id);
@@ -558,6 +559,87 @@ function akwhInstall(win, config) {
     }
   };
 
+  // Swipes WebKit doesn't scroll. Some of Big Picture's rows (the home screen's recent games)
+  // are overflow:auto/scroll boxes that a finger doesn't move here. A drag that moves its box
+  // by itself is left alone; one that doesn't, after a short way, is applied by hand, and the
+  // box keeps gliding when the finger lifts, slowing the way iOS lists do. A drag the page
+  // handled itself (it cancelled the move: a slider) is left alone too.
+  let swipeLogs = 0;
+  function attachTouchScroll(doc) {
+    const view = doc.defaultView;
+    let drag = null, glide = 0;
+    const scrollerFor = (el, axis) => {
+      for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+        const cs = view.getComputedStyle(e);
+        const overflow = axis === 'x' ? cs.overflowX : cs.overflowY;
+        const room = axis === 'x' ? e.scrollWidth - e.clientWidth : e.scrollHeight - e.clientHeight;
+        if ((overflow === 'auto' || overflow === 'scroll') && room > 1) return e;
+      }
+      return null;
+    };
+    const position = (box, axis) => (axis === 'x' ? box.scrollLeft : box.scrollTop);
+    const move = (box, axis, to) => { if (axis === 'x') box.scrollLeft = to; else box.scrollTop = to; };
+    const describe = (el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className.trim()
+      ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '');
+    doc.addEventListener('touchstart', (e) => {
+      if (glide) { view.cancelAnimationFrame(glide); glide = 0; }
+      const t = e.touches[0];
+      drag = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, target: e.target, axis: null } : null;
+    }, { capture: true, passive: true });
+    doc.addEventListener('touchmove', (e) => {
+      if (!drag || e.touches.length !== 1) return;
+      const t = e.touches[0], dx = t.clientX - drag.x, dy = t.clientY - drag.y;
+      if (!drag.axis) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
+        drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+        drag.box = scrollerFor(drag.target, drag.axis);
+        if (!drag.box) { drag = null; return; }
+        drag.from = drag.axis === 'x' ? dx : dy;
+        drag.start = position(drag.box, drag.axis);
+        drag.samples = [];
+        return;
+      }
+      const d = drag.axis === 'x' ? dx : dy;
+      if (!drag.manual) {
+        if (Math.abs(d - drag.from) < 16) return;
+        const native = position(drag.box, drag.axis) !== drag.start;
+        if (native || e.defaultPrevented) {
+          if (swipeLogs++ < 6) post({ op: 'console', level: 'touch', text: 'swipe ' + drag.axis + ' on ' + describe(drag.box) + (native ? ': WebKit scrolls it' : ': the page handles it') });
+          drag = null;
+          return;
+        }
+        drag.manual = true;
+        drag.start = position(drag.box, drag.axis) + (d - drag.from);   // catch up with the finger
+        if (swipeLogs++ < 6) post({ op: 'console', level: 'touch', text: 'swipe ' + drag.axis + ' on ' + describe(drag.box) + ': scrolled by the app' });
+      }
+      // Something else moved it since last time (WebKit caught up after all): leave it to that.
+      if (drag.set !== undefined && Math.abs(position(drag.box, drag.axis) - drag.set) > 2) { drag = null; return; }
+      move(drag.box, drag.axis, drag.start - (d - drag.from));
+      drag.set = position(drag.box, drag.axis);
+      drag.samples.push([e.timeStamp, d]);
+      if (drag.samples.length > 5) drag.samples.shift();
+    }, { passive: true });
+    const end = () => {
+      const g = drag;
+      drag = null;
+      if (!g || !g.manual || g.samples.length < 2) return;
+      const [t0, d0] = g.samples[0], [t1, d1] = g.samples[g.samples.length - 1];
+      let v = t1 > t0 ? -(d1 - d0) / (t1 - t0) : 0;   // scroll pixels per ms
+      let last = view.performance.now();
+      const step = (now) => {
+        const dt = now - last;
+        last = now;
+        v *= Math.pow(0.998, dt);
+        const before = position(g.box, g.axis);
+        move(g.box, g.axis, before + v * dt);
+        glide = Math.abs(v) > 0.02 && position(g.box, g.axis) !== before ? view.requestAnimationFrame(step) : 0;
+      };
+      if (Math.abs(v) > 0.05) glide = view.requestAnimationFrame(step);
+    };
+    doc.addEventListener('touchend', end, { passive: true });
+    doc.addEventListener('touchcancel', end, { passive: true });
+  }
+
   // A phone-sized page: the width of the window, no zooming, no text inflation, no long-press
   // callouts or text selection outside fields (an app, not a document). Steam writes its
   // popups' documents itself (document.write, which also drops listeners), so this runs again
@@ -610,6 +692,7 @@ function akwhInstall(win, config) {
       if (root && !root.__akwhPressClick) {
         root.__akwhPressClick = true;
         doc.addEventListener('click', swallowPressClick, true);
+        attachTouchScroll(doc);
         // One-line fields (account names, codes, search) are typed as they are: no automatic
         // capitals or corrections, unless the page asked for them. Chat boxes keep both.
         doc.addEventListener('focusin', (e) => {

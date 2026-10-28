@@ -47,6 +47,8 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic) BOOL viewVisible;
 @property(nonatomic) double zoom;
 @property(nonatomic, copy) NSString *loadedURL;
+@property(nonatomic, copy) NSString *startURL;               // the first page Steam loaded in it
+@property(nonatomic) BOOL lostPage;                          // its page process ended; not reloaded yet
 @property(nonatomic, strong) NSMutableArray *outbox;   // messages for the page, sent together
 @property(nonatomic) CFAbsoluteTime pingSent;           // see startWatchingPages
 @property(nonatomic) unsigned stuckReports;
@@ -73,6 +75,7 @@ static void closeSockets(AKWHBrowser *b);
 static void layoutBrowser(AKWHBrowser *b);
 static void watchTouchesAndKeyboard(UIWindow *window);
 static void logWindows(NSString *when);
+static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args);
 
 #pragma mark Browsers
 
@@ -229,11 +232,24 @@ static WKWebViewConfiguration *steamConfiguration(void) {
 static WKWebViewConfiguration *webConfiguration(void) {
   static WKWebViewConfiguration *c;
   if (c) return c;
+  if (!gDelegate) gDelegate = [AKWHWebDelegate new];
   c = [WKWebViewConfiguration new];
   playVideosInline(c);
   c.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
   c.websiteDataStore = WKWebsiteDataStore.defaultDataStore;
   c.userContentController = [WKUserContentController new];
+  // Which field has the focus, for the view's "node-has-focus" event: Big Picture shows its
+  // on-screen keyboard for a text field in the page (a store search box), hides it otherwise.
+  [c.userContentController addScriptMessageHandler:gDelegate name:@"akwhview"];
+  NSString *focus =
+      @"(function () {"
+       "  var post = function (el) { try { window.webkit.messageHandlers.akwhview.postMessage({ op: 'focus',"
+       "    tag: el && el.tagName ? el.tagName : '', type: el && el.type ? String(el.type) : '' }); } catch (e) {} };"
+       "  document.addEventListener('focusin', function (e) { post(e.target); }, true);"
+       "  document.addEventListener('focusout', function (e) { if (!e.relatedTarget) post(null); }, true);"
+       "})();";
+  [c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:focus injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                             forMainFrameOnly:YES]];
   return c;
 }
 
@@ -518,10 +534,35 @@ static void closeSockets(AKWHBrowser *b) {
 // Every 5 s each of Steam's pages is asked to evaluate a trivial script. A page whose
 // JavaScript is stuck - busy in a loop, or blocked waiting on something - doesn't answer,
 // and that goes in the log with how long, so a frozen interface shows up as one.
+// What keeps a window redrawing on its own: the CSS animations running in it, and the ones
+// that never end (a spinner, a glow). WebKit's page process (where that work happens) isn't
+// counted in the app's CPU figures, so this is how the log shows it. Every 30 s.
+static NSString *const kAnimationsScript =
+  @"(function () {"
+   "  if (!document.getAnimations) return null;"
+   "  var running = document.getAnimations().filter(function (a) { return a.playState === 'running'; });"
+   "  var endless = running.filter(function (a) { var t = a.effect && a.effect.getTiming && a.effect.getTiming(); return t && t.iterations === Infinity; });"
+   "  var name = function (a) { var el = a.effect && a.effect.target; var c = el && typeof el.className === 'string' ? el.className.split(' ')[0] : '';"
+   "    return (a.animationName || a.transitionProperty || 'script') + (c ? ' on .' + c : '') + (el && el.offsetParent === null ? ' (hidden)' : ''); };"
+   "  return running.length + ' running, ' + endless.length + ' endless' + (endless.length ? ': ' + endless.slice(0, 5).map(name).join(', ') : '');"
+   "})()";
+
+static void logAnimations(void) {
+  for (AKWHBrowser *b in [gBrowsers copy]) {
+    if (!b.webView || b.webView.hidden || b.type == kSharedJSContextType || (b.viewId && !b.isPopupView)) continue;
+    uint32_t index = b.index;
+    [b.webView evaluateJavaScript:kAnimationsScript completionHandler:^(id result, NSError *error) {
+      if ([result isKindOfClass:NSString.class] && ![result hasPrefix:@"0 running"]) AKWHLog(NO, @"page %u animations: %@", index, result);
+    }];
+  }
+}
+
 static void startWatchingPages(void) {
   static NSTimer *timer;
   if (timer) return;
+  static unsigned ticks;
   timer = [NSTimer timerWithTimeInterval:5 repeats:YES block:^(NSTimer *t) {
+    if (++ticks % 6 == 0) logAnimations();
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     for (AKWHBrowser *b in [gBrowsers copy]) {
       if (!b.webView || (b.viewId && !b.isPopupView)) continue;   // Steam's own pages only
@@ -543,6 +584,7 @@ static void startWatchingPages(void) {
       }];
     }
   }];
+  timer.tolerance = 1;   // lets iOS fold this wake-up in with others
   [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }
 
@@ -591,8 +633,10 @@ static void createSteamBrowser(uint32_t requestId, NSDictionary *msg) {
 
 static void loadURL(AKWHBrowser *b, NSString *url) {
   if (!b.webView || !url.length) return;
-  if ([url isEqualToString:b.loadedURL]) return;   // Steam sends its first URL twice
+  if ([url isEqualToString:b.loadedURL] && !b.lostPage) return;   // Steam sends its first URL twice
   b.loadedURL = url;
+  if (!b.startURL) b.startURL = url;
+  b.lostPage = NO;
   if (b.createdBySteam) installBridge(b);
   AKWHLog(YES, @"browser %u loads %@", b.index, url);
   [b.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]];
@@ -802,6 +846,12 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
   if (![message.body isKindOfClass:NSDictionary.class] || !b) return;
   NSDictionary *m = message.body;
   NSString *op = m[@"op"];
+  // A web page in a BrowserView (the store: anyone's page) only reports focus, nothing else.
+  if ([message.name isEqualToString:@"akwhview"]) {
+    if ([op isEqualToString:@"focus"] && [m[@"tag"] isKindOfClass:NSString.class] && [m[@"type"] isKindOfClass:NSString.class])
+      viewEvent(b, @"node-has-focus", @[ message.webView.URL.absoluteString ?: @"", m[@"tag"], m[@"type"], @"", @NO ]);
+    return;
+  }
   if ([op isEqualToString:@"call"]) {
     NSArray *args = globalizeHandles(m[@"args"] ?: @[], b);
     if ([m[@"name"] isEqualToString:@"System.UI.RegisterForSystemKeyEvents"]) {
@@ -852,7 +902,12 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     wv.hidden = YES;
     [hostView() addSubview:wv];
     layoutBrowser(v);
-    AKWHLog(YES, @"BrowserView %u (browser %u) created in window %u", v.viewId, v.index, v.parent.index);
+    // Its first page can come with it (the store's pages do) instead of in a LoadURL.
+    NSString *initial = [options[@"strInitialURL"] isKindOfClass:NSString.class] ? options[@"strInitialURL"] : nil;
+    NSURL *initialURL = initial.length ? [NSURL URLWithString:initial] : nil;
+    if (initialURL) [wv loadRequest:[NSURLRequest requestWithURL:initialURL]];
+    AKWHLog(YES, @"BrowserView %u (browser %u) created in window %u%@", v.viewId, v.index, v.parent.index,
+            initialURL ? [NSString stringWithFormat:@", loading %@", initial] : @"");
   } else if ([op isEqualToString:@"bv-createpopup"]) {
     AKWHLog(NO, @"BrowserView popup %@ requested: %@", m[@"id"], AKHTMLDescribe(m[@"options"], 300));
   } else if ([op isEqualToString:@"bv"]) {
@@ -875,11 +930,24 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
    forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {
   AKWHBrowser *opener = browserForWebView(openerView);
   NSURL *url = action.request.URL;
+  // A web page in a BrowserView (the store) opening a link in a new window: it opens in the
+  // same view, as in a single-window browser.
+  if (opener.viewId && !opener.isPopupView) {
+    AKWHLog(NO, @"page %u: new window for %@ opens in the same view", opener.index, url);
+    if (url && ![url.absoluteString isEqualToString:@"about:blank"]) [openerView loadRequest:action.request];
+    return nil;
+  }
   NSDictionary *q = queryOf(url);
   NSString *name = @"";
   if (gPendingOpen && [gPendingOpen[@"url"] isEqualToString:url.absoluteString]) name = gPendingOpen[@"name"];
   gPendingOpen = nil;
   BOOL isView = [q[@"browserviewpopup"] isEqualToString:@"1"];
+  // A window whose page process ended gives its number to the one replacing it.
+  AKWHBrowser *dead = browserForIndex((uint32_t)[q[@"akwh_id"] intValue]);
+  if (dead.lostPage && !dead.createdBySteam) {
+    dead.knownToSteam = NO;
+    removeBrowser(dead);
+  }
   AKWHBrowser *b = newBrowser(isView ? 6 : (q[@"browserType"] ? (uint32_t)[q[@"browserType"] intValue] : 3), name,
                               (uint32_t)[q[@"akwh_id"] intValue]);
   if (q[@"akwh_id"] && b.index != (uint32_t)[q[@"akwh_id"] intValue])
@@ -1021,12 +1089,21 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+  AKWHBrowser *b = browserForWebView(webView);
   NSString *scheme = action.request.URL.scheme.lowercaseString;
-  if (scheme && ![@[ @"https", @"http", @"about", @"blob", @"data" ] containsObject:scheme]) {
-    AKWHLog(YES, @"page %u: not following %@", browserForWebView(webView).index, action.request.URL);
+  // steam:// links in a BrowserView (the store's Install and Play buttons) go to the view's
+  // Steam URL callback, which hands them to Steam, as Steam Helper does.
+  if ([scheme isEqualToString:@"steam"] && b.viewOwner && b.viewId) {
+    enqueue(b.viewOwner, @{ @"t": @"bv", @"id": @(b.viewId), @"ev": @"steam-url", @"a": @[ action.request.URL.absoluteString ?: @"" ] });
     decisionHandler(WKNavigationActionPolicyCancel);
     return;
   }
+  if (scheme && ![@[ @"https", @"http", @"about", @"blob", @"data" ] containsObject:scheme]) {
+    AKWHLog(YES, @"page %u: not following %@", b.index, action.request.URL);
+    decisionHandler(WKNavigationActionPolicyCancel);
+    return;
+  }
+  if (action.targetFrame.isMainFrame) viewEvent(b, @"start-request", @[ action.request.URL.absoluteString ?: @"" ]);
   decisionHandler(WKNavigationActionPolicyAllow);
 }
 
@@ -1039,6 +1116,11 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   AKWHBrowser *b = browserForWebView(webView);
   NSString *url = webView.URL.absoluteString ?: @"";
   closeSockets(b);   // the previous document's
+  if (gNumberWindowsFrom && b.type == kSharedJSContextType) {
+    // After the app reloaded the interface itself: its windows' numbers carry on.
+    [webView evaluateJavaScript:[NSString stringWithFormat:@"window.__akwhNextId = %u", gNumberWindowsFrom] completionHandler:nil];
+    gNumberWindowsFrom = 0;
+  }
   if (b.knownToSteam)
     AKWHSend(kAKWHURLChanged, b.handle, @{ @"browser_handle": @(b.handle), @"url": url, @"bNewNavigation": @YES });
   viewEvent(b, @"history-changed", @[ url ]);
@@ -1068,10 +1150,58 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   AKWHLog(YES, @"page %u stopped loading: %@", browserForWebView(webView).index, error.localizedDescription);
 }
 
-- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+// A page process ended. Steam's pages share one (popups belong to the shared context), so
+// every window goes at once. As Chromium's Steam Helper does, Steam is told about each
+// browser it knows (CMsgRenderProcessTerminated) and decides what to rebuild; the shared
+// context then takes its next PostURL even if it is the same address. If Steam hasn't
+// reloaded it a few seconds later, the app does: the shared context's first address (not
+// the route it had moved to, which brought back the script but not its windows), with
+// window numbers carrying on past the dead windows', which are taken off the screen without
+// telling Steam they closed (Big Picture's window asked for Steam to quit with it).
+static uint32_t gNumberWindowsFrom;
+
+static NSString *terminationReason(NSInteger reason) {
+  switch (reason) {   // _WKProcessTerminationReason
+    case 0: return @"it went over its memory limit";
+    case 1: return @"it used too much CPU";
+    case 2: return @"the app asked";
+    case 3: return @"it crashed";
+    default: return [NSString stringWithFormat:@"WebKit reason %ld", (long)reason];
+  }
+}
+
+static void pageProcessEnded(WKWebView *webView, NSString *why) {
   AKWHBrowser *b = browserForWebView(webView);
-  AKWHLog(YES, @"page %u's web content process ended (out of memory, or a crash); reloading it", b.index);
-  if (b.createdBySteam) [webView reload];
+  if (!b || b.lostPage) return;
+  b.lostPage = YES;
+  AKWHLog(YES, @"page %u's web content process ended: %@", b.index, why);
+  closeSockets(b);
+  if (b.knownToSteam) AKWHSend(kAKWHRenderProcessTerminated, b.handle, @{ @"browser_handle": @(b.handle) });
+  if (b.type != kSharedJSContextType) return;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    if (!b.lostPage || !b.webView || ![gBrowsers containsObject:b]) return;   // Steam saw to it
+    uint32_t next = 2;
+    for (AKWHBrowser *other in [gBrowsers copy]) {
+      if (other.index < 0x4000) next = MAX(next, other.index + 1);
+      if (other != b && other.lostPage && !other.createdBySteam) {
+        other.knownToSteam = NO;
+        removeBrowser(other);
+      }
+    }
+    gNumberWindowsFrom = next;
+    AKWHLog(YES, @"Steam didn't reload its interface; reloading %@ (new windows from %u)", b.startURL, next);
+    b.lostPage = NO;
+    b.loadedURL = b.startURL;
+    [b.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:b.startURL ?: @"about:blank"]]];
+  });
+}
+
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason {
+  pageProcessEnded(webView, terminationReason(reason));
+}
+
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+  pageProcessEnded(webView, @"WebKit gave no reason");
 }
 
 @end
@@ -1160,5 +1290,98 @@ static void watchTouchesAndKeyboard(UIWindow *window) {
   }];
   [nc addObserverForName:UIKeyboardWillHideNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
     if (++logged <= 60) AKWHLog(NO, @"keyboard down; focus now on %@", firstResponderDescription());
+  }];
+}
+
+#pragma mark Keys Steam types
+
+// Steam's on-screen keyboard (Big Picture's, played with a controller) types through the
+// Steam client, which on a Mac posts key events to the focused app (CGEvents.m hands them
+// here). They go to the focused page's focused field: text as typed text
+// (execCommand('insertText'), which fires the same input events typing does), Backspace and
+// Delete as deletions, Enter as Enter (a one-line field's form is submitted, as a browser
+// does), the arrows move the caret; each key also reaches the page's key handlers first,
+// which may take it. The keyboard's paste (Command-V) pastes the clipboard.
+
+// The page with the keyboard focus: the web view that is first responder, else the front
+// visible one.
+static WKWebView *focusedWebView(void) {
+  gFoundResponder = nil;
+  [UIApplication.sharedApplication sendAction:@selector(akwh_reportFirstResponder:) to:nil from:nil forEvent:nil];
+  for (UIView *v = [gFoundResponder isKindOfClass:UIView.class] ? (UIView *)gFoundResponder : nil; v; v = v.superview)
+    if ([v isKindOfClass:WKWebView.class] && browserForWebView((WKWebView *)v)) return (WKWebView *)v;
+  for (UIView *v in gStage.subviews.reverseObjectEnumerator) {
+    if (![v isKindOfClass:WKWebView.class] || v.hidden || v.bounds.size.width < 2) continue;
+    AKWHBrowser *b = browserForWebView((WKWebView *)v);
+    if (b && b.type != kSharedJSContextType) return (WKWebView *)v;
+  }
+  return nil;
+}
+
+static NSString *namedKey(uint16_t code, NSString *text) {
+  switch (code) {   // Mac virtual key codes
+    case 0x33: return @"Backspace";
+    case 0x24: case 0x4C: return @"Enter";
+    case 0x30: return @"Tab";
+    case 0x35: return @"Escape";
+    case 0x75: return @"Delete";
+    case 0x7B: return @"ArrowLeft";
+    case 0x7C: return @"ArrowRight";
+    case 0x7D: return @"ArrowDown";
+    case 0x7E: return @"ArrowUp";
+    case 0x73: return @"Home";
+    case 0x77: return @"End";
+  }
+  if ([text isEqualToString:@"\b"] || [text isEqualToString:@"\x7f"]) return @"Backspace";
+  if ([text isEqualToString:@"\r"] || [text isEqualToString:@"\n"]) return @"Enter";
+  if ([text isEqualToString:@"\t"]) return @"Tab";
+  if ([text isEqualToString:@"\x1b"]) return @"Escape";
+  return nil;
+}
+
+static NSString *const kTypeKeyScript =
+  @"(function (down, key, text, paste) {"
+   "  var el = document.activeElement;"
+   "  if (!el || el === document.body) return 'nothing focused';"
+   "  var codes = { Backspace: 8, Tab: 9, Enter: 13, Escape: 27, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38,"
+   "                ArrowRight: 39, ArrowDown: 40, Delete: 46 };"
+   "  var kc = codes[key] || (text ? text.toUpperCase().charCodeAt(0) : 0);"
+   "  var ev = new KeyboardEvent(down ? 'keydown' : 'keyup', { key: key || text, bubbles: true, cancelable: true });"
+   "  try { Object.defineProperty(ev, 'keyCode', { get: function () { return kc; } });"
+   "        Object.defineProperty(ev, 'which', { get: function () { return kc; } }); } catch (e) {}"
+   "  if (!el.dispatchEvent(ev) || !down) return 'handled by the page';"
+   "  if (paste !== null) { document.execCommand('insertText', false, paste); return 'pasted'; }"
+   "  if (text) { document.execCommand('insertText', false, text); return 'typed'; }"
+   "  if (key === 'Backspace') document.execCommand('delete');"
+   "  else if (key === 'Delete') document.execCommand('forwardDelete');"
+   "  else if (key === 'Enter') {"
+   "    if (el.tagName === 'TEXTAREA' || el.isContentEditable) document.execCommand('insertLineBreak');"
+   "    else if (el.form) { if (el.form.requestSubmit) el.form.requestSubmit(); else el.form.submit(); }"
+   "  } else if ((key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Home' || key === 'End') &&"
+   "             typeof el.selectionStart === 'number' && el.value !== undefined) {"
+   "    var p = key === 'Home' ? 0 : key === 'End' ? el.value.length : el.selectionStart + (key === 'ArrowLeft' ? -1 : 1);"
+   "    p = Math.max(0, Math.min(el.value.length, p)); el.setSelectionRange(p, p);"
+   "  }"
+   "  return key;"
+   "})";
+
+void AKWHTypeKey(BOOL down, uint16_t keyCode, NSString *text, BOOL command) {
+  WKWebView *wv = focusedWebView();
+  if (!wv) return;
+  NSString *key = namedKey(keyCode, text);
+  id paste = NSNull.null;
+  if (command) {
+    if (keyCode != 0x09 || !down) return;   // V; the keyboard's other shortcuts aren't used here
+    paste = UIPasteboard.generalPasteboard.string ?: @"";
+  }
+  if (!key && !text.length && paste == NSNull.null) return;
+  NSArray *args = @[ @(down), key ?: @"", key ? @"" : (text ?: @""), paste ];
+  NSString *json = jsonString(args);
+  NSString *call = [NSString stringWithFormat:@"%@(%@)", kTypeKeyScript, [json substringWithRange:NSMakeRange(1, json.length - 2)]];
+  static unsigned logged;
+  BOOL log = down && ++logged <= 20;
+  uint32_t index = browserForWebView(wv).index;
+  [wv evaluateJavaScript:call completionHandler:^(id result, NSError *error) {
+    if (log) AKWHLog(NO, @"key %@ for page %u: %@", key ?: @"(text)", index, error ? error.localizedDescription : result);
   }];
 }

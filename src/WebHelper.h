@@ -34,6 +34,7 @@ enum {
   kAKWHFinishedRequest = 99,
   kAKWHJSMethodCall = 110,
   kAKWHPopupHTMLWindow = 122,
+  kAKWHRenderProcessTerminated = 124,
   kAKWHSetHTMLTitle = 131,
   kAKWHTouchGesture = 143,
   kAKWHURLChanged = 144,

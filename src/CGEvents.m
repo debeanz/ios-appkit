@@ -206,9 +206,16 @@ static NSView *AKViewUnder(NSWindow *w, NSPoint windowPoint) {
 }
 
 static void AKPostOnMain(AKCGEvent *ev) {
+  NSEventModifierFlags flags = (NSEventModifierFlags)(ev.flags & AKFlagMask);
+  // With the Safari engine Steam's interface is web pages, so the keys Steam types (its
+  // on-screen keyboard, played with a controller) go to the focused page, not a window here.
+  if (AKWHStageView() && (ev.type == kCGEventKeyDown || ev.type == kCGEventKeyUp)) {
+    AKWHTypeKey(ev.type == kCGEventKeyDown, ev.fields[@(kCGKeyboardEventKeycode)].unsignedShortValue, AKEventText(ev),
+                (flags & NSEventModifierFlagCommand) != 0);
+    return;
+  }
   NSWindow *w = NSApp.keyWindow;
   if (!w) return;
-  NSEventModifierFlags flags = (NSEventModifierFlags)(ev.flags & AKFlagMask);
   NSEvent *e = nil;
   switch (ev.type) {
     case kCGEventKeyDown: case kCGEventKeyUp: case kCGEventFlagsChanged: {
