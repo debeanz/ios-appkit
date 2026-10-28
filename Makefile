@@ -74,9 +74,14 @@ test: $(LIB)
 # src tags with asm labels; that export set is exactly what package-ipa.sh repoints to.
 # The shim's font class runs as AKShimFont (iOS has an unrelated internal class named NSFont)
 # but is exported under the NSFont class symbols, so a client linking AppKit's NSFont gets it.
+# NSColor likewise runs as AKShim_NSColor (AK_SHIM_RUNTIME_NAME; UIKitCore has a private
+# NSColor) and is exported as NSColor too — otherwise CEF's [NSColor colorWithCatalogName:...]
+# went to UIKit's class and threw.
 # Single quotes keep the $ in the Objective-C symbol names away from the shell.
 CLASS_ALIASES := '-Wl,-alias,_OBJC_CLASS_$$_AKShimFont,_OBJC_CLASS_$$_NSFont' \
-  '-Wl,-alias,_OBJC_METACLASS_$$_AKShimFont,_OBJC_METACLASS_$$_NSFont'
+  '-Wl,-alias,_OBJC_METACLASS_$$_AKShimFont,_OBJC_METACLASS_$$_NSFont' \
+  '-Wl,-alias,_OBJC_CLASS_$$_AKShim_NSColor,_OBJC_CLASS_$$_NSColor' \
+  '-Wl,-alias,_OBJC_METACLASS_$$_AKShim_NSColor,_OBJC_METACLASS_$$_NSColor'
 
 framework: $(OBJS)
 	mkdir -p $(FRAMEWORK)

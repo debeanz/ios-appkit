@@ -8,9 +8,11 @@
 
 // UIKit ships private classes with some AppKit names (NSColor, for one). Objective-C class
 // names are process-global, so a shim class with the same name would collide with it.
-// This keeps the link-time name (what the client's binaries bind to, _OBJC_CLASS_$_NSColor)
-// while registering the class with the runtime under a distinct name. The smoke test fails
-// on any remaining collision, so it tells us which classes need this.
+// This registers the class with the runtime under a distinct name. It renames the class
+// symbol too (_OBJC_CLASS_$_AKShim_NSColor), so the Makefile's CLASS_ALIASES also exports it
+// as _OBJC_CLASS_$_NSColor, the name the client's binaries bind to; without that they bind to
+// UIKit's private class. The smoke test fails on any remaining collision, so it tells us
+// which classes need this.
 #define AK_SHIM_RUNTIME_NAME(name) __attribute__((objc_runtime_name("AKShim_" #name)))
 
 typedef CGPoint NSPoint;
