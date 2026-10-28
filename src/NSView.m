@@ -413,6 +413,22 @@ static void AKOnMainLater(dispatch_block_t block) {
 }
 - (void)drawRect:(NSRect)dirtyRect { /* override point */ }
 
+// AppKit's -display draws the view right away. One drawn into its layer here draws when UIKit
+// next asks, so this asks; an OpenGL view draws now (NSOpenGL.m).
+- (void)display { [self setNeedsDisplay:YES]; }
+- (void)displayIfNeeded {}
+- (void)displayRect:(NSRect)rect { [self setNeedsDisplayInRect:rect]; }
+
+// The part of the view its superviews don't clip away.
+- (NSRect)visibleRect {
+  UIView *backing = _backing;
+  CGRect visible = backing.bounds;
+  for (UIView *v = backing.superview; v; v = v.superview) {
+    if (v.clipsToBounds) visible = CGRectIntersection(visible, [backing convertRect:v.bounds fromView:v]);
+  }
+  return CGRectIsNull(visible) ? NSZeroRect : [self _ak_uikitRect:visible];   // the flip is its own inverse
+}
+
 // This view's AppKit coordinates <-> its backing view's UIKit coordinates (the same flip
 // both ways).
 - (CGPoint)_ak_uikitPoint:(NSPoint)p {

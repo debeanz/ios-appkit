@@ -19,6 +19,7 @@
 #import <execinfo.h>
 #import <fcntl.h>
 #import <mach-o/dyld.h>
+#import <mach-o/getsect.h>
 #import <mach/mach.h>
 #import <pthread.h>
 #import <signal.h>
@@ -79,6 +80,30 @@ static NSString *steamRoot(void) {
 
 static void writeStr(int fd, const char *s) { if (fd >= 0) write(fd, s, strlen(s)); }
 
+// Why the process was aborted, as Apple's crash reports give it ("Application Specific
+// Information"): a library leaves its message in its __crash_info section before it calls
+// abort() — libmalloc's "pointer being freed was not allocated", an assertion's text.
+static void writeAbortReasons(int fd) {
+  for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+    const struct mach_header_64 *mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
+    unsigned long size = 0;
+    const uint64_t *info = (const uint64_t *)getsectiondata(mh, "__DATA", "__crash_info", &size);
+    if (!info) info = (const uint64_t *)getsectiondata(mh, "__DATA_DIRTY", "__crash_info", &size);
+    // { version, message, signature_string, backtrace, message2, thread, dialog_mode, abort_cause }
+    if (!info || size < 5 * sizeof(uint64_t)) continue;
+    const char *messages[2] = { (const char *)info[1], (const char *)info[4] };
+    for (int k = 0; k < 2; k++) {
+      if (!messages[k] || !*messages[k]) continue;
+      const char *name = strrchr(_dyld_get_image_name(i), '/');
+      writeStr(fd, "reason (");
+      writeStr(fd, name ? name + 1 : "?");
+      writeStr(fd, "): ");
+      write(fd, messages[k], strnlen(messages[k], 2048));
+      writeStr(fd, "\n");
+    }
+  }
+}
+
 // Fatal signal: record which, where, and the backtrace in Documents/crash.log (and the
 // console log), then die the normal way. Runs on an alternate stack so a stack overflow
 // can still report.
@@ -128,6 +153,9 @@ static void onFatalSignal(int sig, siginfo_t *info, void *uap) {
     snprintf(line, sizeof line, "  %p  %s\n", (void *)_dyld_get_image_header(i), strrchr(name, '/') + 1);
     writeStr(fd, line);
   }
+  // Last, once everything else is on disk: the messages are in other libraries' memory.
+  writeAbortReasons(fd);
+  writeAbortReasons(2);
   if (fd >= 0) close(fd);
   signal(sig, SIG_DFL);
   raise(sig);

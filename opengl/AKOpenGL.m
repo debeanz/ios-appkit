@@ -15,6 +15,8 @@
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
+#import <fcntl.h>
+#import <unistd.h>
 #import <mach/mach_time.h>
 #import <math.h>
 #import <pthread.h>
@@ -86,12 +88,177 @@ static NSString *frameworksDir(void) {
   return @(info.dli_fname).stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
 }
 
-// Zink is told where MoltenVK is and to run as the driver. Read when the first context is made.
+#pragma mark Vulkan, with each pipeline's shaders kept
+
+// Zink reaches MoltenVK through this library (ZINK_VULKAN_LIBRARY names it), and every call
+// goes straight on to MoltenVK — but each pipeline's SPIR-V shaders are first written to
+// Documents/gl-shaders, so a shader whose conversion to Metal crashes MoltenVK is on disk
+// afterwards: last-<stage>.spv is the pipeline being made, <hash>-<stage>.spv every shader
+// once, and pipelines.txt lists each pipeline's shaders in order.
+typedef void (*AKVkVoidFunction)(void);
+typedef AKVkVoidFunction (*AKVkGetProcAddr)(void *handle, const char *name);
+typedef int32_t (*AKVkCreateShaderModule)(void *device, const void *info, const void *allocator, uint64_t *module);
+typedef void (*AKVkDestroyShaderModule)(void *device, uint64_t module, const void *allocator);
+typedef int32_t (*AKVkCreateGraphicsPipelines)(void *device, uint64_t cache, uint32_t count, const void *infos,
+                                               const void *allocator, uint64_t *pipelines);
+typedef struct { uint32_t sType; const void *pNext; } AKVkHeader;
+typedef struct { uint32_t sType; const void *pNext; uint32_t flags; size_t codeSize; const uint32_t *pCode; } AKVkShaderModuleInfo;
+typedef struct { uint32_t sType; const void *pNext; uint32_t flags; uint32_t stage; uint64_t module; const char *pName;
+                 const void *pSpecializationInfo; } AKVkStageInfo;
+typedef struct { uint32_t sType; const void *pNext; uint32_t flags; uint32_t stageCount; const AKVkStageInfo *pStages;
+                 uint8_t rest[112]; } AKVkPipelineInfo;
+_Static_assert(sizeof(AKVkShaderModuleInfo) == 40, "VkShaderModuleCreateInfo");
+_Static_assert(sizeof(AKVkStageInfo) == 48, "VkPipelineShaderStageCreateInfo");
+_Static_assert(sizeof(AKVkPipelineInfo) == 144, "VkGraphicsPipelineCreateInfo");
+enum { kVkShaderModuleCreateInfo = 16 };
+
+static AKVkGetProcAddr gMvkInstanceProcAddr, gMvkDeviceProcAddr;
+static AKVkCreateShaderModule gMvkCreateShaderModule;
+static AKVkDestroyShaderModule gMvkDestroyShaderModule;
+static AKVkCreateGraphicsPipelines gMvkCreateGraphicsPipelines;
+static NSMutableDictionary<NSNumber *, NSData *> *gShaderCode;   // shader module -> its SPIR-V
+static NSMutableSet<NSString *> *gShaderFiles;
+static pthread_mutex_t gShaderLock = PTHREAD_MUTEX_INITIALIZER;
+static NSString *gShaderDir;
+static unsigned gPipelines;
+
+static BOOL loadMoltenVK(void) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSString *mvk = [frameworksDir() stringByAppendingPathComponent:@"libMoltenVK.dylib"];
+    void *h = dlopen(mvk.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+    if (h) gMvkInstanceProcAddr = (AKVkGetProcAddr)dlsym(h, "vkGetInstanceProcAddr");
+    if (h) gMvkDeviceProcAddr = (AKVkGetProcAddr)dlsym(h, "vkGetDeviceProcAddr");
+    if (!gMvkInstanceProcAddr) glLog(@"MoltenVK doesn't load: %s", dlerror());
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    gShaderDir = [docs stringByAppendingPathComponent:@"gl-shaders"];
+    [NSFileManager.defaultManager removeItemAtPath:gShaderDir error:nil];
+    [NSFileManager.defaultManager createDirectoryAtPath:gShaderDir withIntermediateDirectories:YES attributes:nil error:nil];
+    gShaderCode = [NSMutableDictionary dictionary];
+    gShaderFiles = [NSMutableSet set];
+  });
+  return gMvkInstanceProcAddr != NULL;
+}
+
+static int32_t akCreateShaderModule(void *device, const void *info, const void *allocator, uint64_t *module) {
+  int32_t result = gMvkCreateShaderModule(device, info, allocator, module);
+  const AKVkShaderModuleInfo *m = info;
+  if (result == 0 && module && m && m->pCode && m->codeSize) {
+    NSData *code = [NSData dataWithBytes:m->pCode length:m->codeSize];
+    pthread_mutex_lock(&gShaderLock);
+    gShaderCode[@(*module)] = code;
+    pthread_mutex_unlock(&gShaderLock);
+  }
+  return result;
+}
+
+static void akDestroyShaderModule(void *device, uint64_t module, const void *allocator) {
+  pthread_mutex_lock(&gShaderLock);
+  [gShaderCode removeObjectForKey:@(module)];
+  pthread_mutex_unlock(&gShaderLock);
+  gMvkDestroyShaderModule(device, module, allocator);
+}
+
+static NSString *stageName(uint32_t stage) {
+  switch (stage) {
+    case 0x1: return @"vertex";
+    case 0x2: return @"tesscontrol";
+    case 0x4: return @"tesseval";
+    case 0x8: return @"geometry";
+    case 0x10: return @"fragment";
+    default: return [NSString stringWithFormat:@"stage%x", stage];
+  }
+}
+
+// A stage's SPIR-V: its module's, or given inline (VkShaderModuleCreateInfo in its pNext).
+static NSData *stageCode(const AKVkStageInfo *stage) {
+  if (stage->module) {
+    pthread_mutex_lock(&gShaderLock);
+    NSData *code = gShaderCode[@(stage->module)];
+    pthread_mutex_unlock(&gShaderLock);
+    return code;
+  }
+  for (const AKVkHeader *h = stage->pNext; h; h = h->pNext) {
+    if (h->sType != kVkShaderModuleCreateInfo) continue;
+    const AKVkShaderModuleInfo *m = (const void *)h;
+    return m->pCode ? [NSData dataWithBytes:m->pCode length:m->codeSize] : nil;
+  }
+  return nil;
+}
+
+static void keepPipelineShaders(const AKVkPipelineInfo *pipeline) {
+  unsigned n = __atomic_add_fetch(&gPipelines, 1, __ATOMIC_RELAXED);
+  NSMutableString *line = [NSMutableString stringWithFormat:@"pipeline %u:", n];
+  for (uint32_t i = 0; pipeline->pStages && i < pipeline->stageCount; i++) {
+    const AKVkStageInfo *stage = &pipeline->pStages[i];
+    NSData *code = stageCode(stage);
+    NSString *name = stageName(stage->stage);
+    if (!code) { [line appendFormat:@" %@ (no code seen)", name]; continue; }
+    uint64_t hash = 1469598103934665603ull;   // FNV-1a
+    const uint8_t *b = code.bytes;
+    for (NSUInteger k = 0; k < code.length; k++) hash = (hash ^ b[k]) * 1099511628211ull;
+    NSString *file = [NSString stringWithFormat:@"%016llx-%@.spv", hash, name];
+    [code writeToFile:[gShaderDir stringByAppendingPathComponent:[NSString stringWithFormat:@"last-%@.spv", name]] atomically:NO];
+    pthread_mutex_lock(&gShaderLock);
+    BOOL fresh = ![gShaderFiles containsObject:file] && gShaderFiles.count < 500;
+    if (fresh) [gShaderFiles addObject:file];
+    pthread_mutex_unlock(&gShaderLock);
+    if (fresh) [code writeToFile:[gShaderDir stringByAppendingPathComponent:file] atomically:NO];
+    [line appendFormat:@" %@ %@ (%lu bytes, entry %s)", name, file, (unsigned long)code.length, stage->pName ?: "?"];
+  }
+  [line appendString:@"\n"];
+  NSString *list = [gShaderDir stringByAppendingPathComponent:@"pipelines.txt"];
+  int fd = open(list.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd >= 0) { const char *s = line.UTF8String; write(fd, s, strlen(s)); close(fd); }
+  if (n <= 5 || n % 100 == 0) glLog(@"%@", [line stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet]);
+}
+
+static int32_t akCreateGraphicsPipelines(void *device, uint64_t cache, uint32_t count, const void *infos,
+                                         const void *allocator, uint64_t *pipelines) {
+  @autoreleasepool {
+    for (uint32_t i = 0; infos && i < count; i++) keepPipelineShaders(&((const AKVkPipelineInfo *)infos)[i]);
+  }
+  return gMvkCreateGraphicsPipelines(device, cache, count, infos, allocator, pipelines);
+}
+
+static AKVkVoidFunction recorded(const char *name, AKVkVoidFunction f) {
+  if (!f || !name) return f;
+  if (!strcmp(name, "vkCreateShaderModule")) { gMvkCreateShaderModule = (AKVkCreateShaderModule)f; return (AKVkVoidFunction)akCreateShaderModule; }
+  if (!strcmp(name, "vkDestroyShaderModule")) { gMvkDestroyShaderModule = (AKVkDestroyShaderModule)f; return (AKVkVoidFunction)akDestroyShaderModule; }
+  if (!strcmp(name, "vkCreateGraphicsPipelines")) {
+    gMvkCreateGraphicsPipelines = (AKVkCreateGraphicsPipelines)f;
+    return (AKVkVoidFunction)akCreateGraphicsPipelines;
+  }
+  return f;
+}
+
+AKVkVoidFunction vkGetDeviceProcAddr(void *device, const char *name);
+
+__attribute__((visibility("default"))) AKVkVoidFunction vkGetInstanceProcAddr(void *instance, const char *name) {
+  if (!loadMoltenVK()) return NULL;
+  if (name && !strcmp(name, "vkGetInstanceProcAddr")) return (AKVkVoidFunction)vkGetInstanceProcAddr;
+  if (name && !strcmp(name, "vkGetDeviceProcAddr")) {
+    if (!gMvkDeviceProcAddr) gMvkDeviceProcAddr = (AKVkGetProcAddr)gMvkInstanceProcAddr(instance, name);
+    return gMvkDeviceProcAddr ? (AKVkVoidFunction)vkGetDeviceProcAddr : NULL;
+  }
+  return recorded(name, gMvkInstanceProcAddr(instance, name));
+}
+
+__attribute__((visibility("default"))) AKVkVoidFunction vkGetDeviceProcAddr(void *device, const char *name) {
+  if (!loadMoltenVK() || !gMvkDeviceProcAddr) return NULL;
+  if (name && !strcmp(name, "vkGetDeviceProcAddr")) return (AKVkVoidFunction)vkGetDeviceProcAddr;
+  return recorded(name, gMvkDeviceProcAddr(device, name));
+}
+
+// Zink is told where Vulkan is (this library, in front of MoltenVK) and to run as the driver.
+// Read when the first context is made.
 static void configureMesa(void) {
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     NSString *mvk = [frameworksDir() stringByAppendingPathComponent:@"libMoltenVK.dylib"];
-    setenv("ZINK_VULKAN_LIBRARY", mvk.fileSystemRepresentation, 1);
+    Dl_info me;
+    BOOL recording = dladdr((const void *)&vkGetInstanceProcAddr, &me) && me.dli_fname;
+    setenv("ZINK_VULKAN_LIBRARY", recording ? me.dli_fname : mvk.fileSystemRepresentation, 1);
     setenv("GALLIUM_DRIVER", "zink", 1);
     setenv("MVK_CONFIG_LOG_LEVEL", "1", 0);   // MoltenVK: errors only
     // A Metal shader compile that never finishes would freeze the game: give up after 20 s.
@@ -105,7 +272,7 @@ static void configureMesa(void) {
     NSString *cache = [caches stringByAppendingPathComponent:@"mesa-shader-cache"];
     [NSFileManager.defaultManager createDirectoryAtPath:cache withIntermediateDirectories:YES attributes:nil error:nil];
     setenv("MESA_SHADER_CACHE_DIR", cache.fileSystemRepresentation, 0);
-    glLog(@"Mesa (Zink) on MoltenVK: %@", mvk);
+    glLog(@"Mesa (Zink) on MoltenVK: %@%s", mvk, recording ? "; each pipeline's shaders kept in Documents/gl-shaders" : "");
   });
 }
 

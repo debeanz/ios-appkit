@@ -257,6 +257,10 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
 - (void)lockFocus { [self.openGLContext makeCurrentContext]; }
 - (void)unlockFocus {}
 
+// AppKit's -display: drawn now, on the thread that owns the context (the game's main thread).
+- (void)display { [self _ak_performOnOwnerThread:^{ [self _ak_display]; }]; }
+- (void)displayIfNeeded { [self display]; }
+
 - (void)_ak_display {
   [self.openGLContext makeCurrentContext];
   [self drawRect:self.bounds];
