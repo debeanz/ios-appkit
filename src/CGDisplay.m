@@ -214,7 +214,7 @@ CGError CGDisplayShowCursor(CGDirectDisplayID display) { return kCGErrorSuccess;
 boolean_t CGCursorIsVisible(void) { return false; }
 
 CGError CGWarpMouseCursorPosition(CGPoint p) {
-  [NSEvent _setMouseLocation:p];
+  [NSEvent _setMouseLocation:AKAppKitPointFromQuartz(p)];
   return kCGErrorSuccess;
 }
 

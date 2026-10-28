@@ -4,10 +4,28 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
 
+// Coordinates. AppKit measures from the bottom-left: window points go up from the bottom of
+// the content area, and a view's own points do too unless it says -isFlipped (the default is
+// not flipped). UIKit measures from the top-left. The shim keeps UIKit's geometry underneath
+// and converts at the AppKit surface — frames, point/rect conversion, event locations and
+// drawing — so Mac code that does its own flipping (Chromium flips every mouse point by its
+// view's height) gets the numbers it would get on a Mac.
+
 // A UIView subclass that calls back into its owning NSView for drawing and layout, so NSView
 // subclasses that override -drawRect: or -setFrameSize: keep working. Input lives in InputBridge.m.
 @implementation _AKShimBackingView
-- (void)drawRect:(CGRect)rect { [self.owner drawRect:rect]; }
+- (void)drawRect:(CGRect)rect {
+  NSView *owner = self.owner;
+  if (owner.isFlipped) { [owner drawRect:rect]; return; }
+  // An unflipped view draws with y going up, as on the Mac.
+  CGContextRef ctx = UIGraphicsGetCurrentContext();
+  CGFloat h = self.bounds.size.height;
+  CGContextSaveGState(ctx);
+  CGContextTranslateCTM(ctx, 0, h);
+  CGContextScaleCTM(ctx, 1, -1);
+  [owner drawRect:CGRectMake(rect.origin.x, h - rect.origin.y - rect.size.height, rect.size.width, rect.size.height)];
+  CGContextRestoreGState(ctx);
+}
 - (void)layoutSubviews {
   [super layoutSubviews];
   [self.owner _ak_backingDidLayout];
@@ -67,31 +85,52 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 #pragma mark Geometry
 
-- (NSRect)frame { return _backing.frame; }
+// A frame is in the superview's coordinates: measured from its bottom unless it is flipped.
+static BOOL AKMeasuresFromBottom(NSView *superview) { return superview && !superview.isFlipped; }
+
+- (NSRect)frame {
+  CGRect f = _backing.frame;
+  NSView *sup = self.superview;
+  if (AKMeasuresFromBottom(sup)) f.origin.y = sup.backing.bounds.size.height - f.origin.y - f.size.height;
+  return f;
+}
 
 - (void)setFrame:(NSRect)frame {
   [self setFrameOrigin:frame.origin];
   [self setFrameSize:frame.size];
 }
 
+// Each setter works out the UIKit frame first and skips the trip to the main thread when it
+// is already there: Chromium re-sends unchanged frames, and every trip waits for Steam's loop.
 - (void)setFrameOrigin:(NSPoint)origin {
-  AKOnMainSync(^{
-    CGRect f = self->_backing.frame;
-    f.origin = origin;
-    self->_backing.frame = f;
-  });
+  CGRect f = _backing.frame;
+  NSView *sup = self.superview;
+  f.origin.x = origin.x;
+  f.origin.y = AKMeasuresFromBottom(sup) ? sup.backing.bounds.size.height - origin.y - f.size.height : origin.y;
+  if (CGRectEqualToRect(f, _backing.frame)) return;
+  AKOnMainSync(^{ self->_backing.frame = f; });
 }
 
 - (void)setFrameSize:(NSSize)size {
   if (!_applyingLayout) {
-    AKOnMainSync(^{
-      CGRect f = self->_backing.frame;
-      f.size = size;
-      self->_backing.frame = f;
-    });
+    CGRect f = _backing.frame;
+    // Measured from the bottom, a size change keeps the bottom edge where it is.
+    if (AKMeasuresFromBottom(self.superview)) f.origin.y += f.size.height - size.height;
+    f.size = size;
+    if (!CGRectEqualToRect(f, _backing.frame)) AKOnMainSync(^{ self->_backing.frame = f; });
   }
   _lastSize = size;
   [self _ak_layoutLayers];
+}
+
+// Place the backing view for `frame` given in the current superview's coordinates, without
+// going through the overridable setters (AppKit doesn't call them when a view is moved).
+- (void)_ak_placeFrame:(NSRect)frame {
+  CGRect f = frame;
+  NSView *sup = self.superview;
+  if (AKMeasuresFromBottom(sup)) f.origin.y = sup.backing.bounds.size.height - frame.origin.y - frame.size.height;
+  if (CGRectEqualToRect(f, _backing.frame)) return;
+  AKOnMainSync(^{ self->_backing.frame = f; });
 }
 
 // UIKit resized the backing view (rotation, safe-area or constraint changes): tell the NSView
@@ -136,12 +175,14 @@ static void AKViewDidMoveToWindow(NSView *view) {
 - (NSRect)bounds { return _backing.bounds; }
 - (void)setBounds:(NSRect)bounds { AKOnMainSync(^{ self->_backing.bounds = bounds; }); }
 
-// UIKit is top-left origin, which is AppKit's "flipped". Report that honestly so
-// callers that special-case flipped coordinates compute the right thing.
-- (BOOL)isFlipped { return YES; }
+// AppKit's default: y goes up. Views that want top-down coordinates override this.
+- (BOOL)isFlipped { return NO; }
 
 - (BOOL)hidden { return _backing.hidden; }
-- (void)setHidden:(BOOL)h { AKOnMainSync(^{ self->_backing.hidden = h; }); }
+- (void)setHidden:(BOOL)h {
+  if (_backing.hidden == h) return;
+  AKOnMainSync(^{ self->_backing.hidden = h; });
+}
 
 - (NSArray<NSView *> *)subviews { return [_mutableSubviews copy]; }
 
@@ -205,11 +246,16 @@ static void AKViewDidMoveToWindow(NSView *view) {
   [view viewWillMoveToSuperview:self];
   if (oldWindow != newWindow) AKViewWillMoveToWindow(view, newWindow);
 
+  // As in AppKit, the frame keeps its numbers across the move; they are read in the new
+  // superview's coordinates (which may measure from the bottom where the old one didn't).
+  NSRect frame = view.frame;
   [view _ak_detachFromSuperview];
   view.superview = self;
   view.nextResponder = self;
   [_mutableSubviews addObject:view];
   AKOnMainSync(^{ [self->_backing addSubview:view.backing]; });
+  [view _ak_placeFrame:frame];
+  [view _ak_applyAutoresizing];
 
   [view viewDidMoveToSuperview];
   if (oldWindow != newWindow) AKViewDidMoveToWindow(view);
@@ -248,8 +294,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
   return self;
 }
 
-// AppKit's "is this point in this rect", which accounts for flipped views; views here are
-// always flipped, so it is a plain containment test.
+// AppKit's "is this point in this rect" (point and rect in this view's coordinates).
 - (BOOL)mouse:(NSPoint)point inRect:(NSRect)rect { return CGRectContainsPoint(rect, point); }
 
 - (BOOL)isHiddenOrHasHiddenAncestor {
@@ -265,22 +310,30 @@ static void AKViewDidMoveToWindow(NSView *view) {
 - (NSUInteger)allowedTouchTypes { return 0; }
 - (void)setAllowedTouchTypes:(NSUInteger)types {}
 
+// The superview's list may hold the last reference to this view. Keep the view alive until
+// it is fully detached and told so, as AppKit does; releasing it mid-detach let a client's
+// -dealloc run on a half-removed view (Chromium crashed there opening Steam's menu).
 - (void)removeFromSuperview {
   if (!self.superview) return;
+  __attribute__((objc_precise_lifetime)) NSView *keepAlive = self;
   NSWindow *oldWindow = self.window;
   [self viewWillMoveToSuperview:nil];
   if (oldWindow) AKViewWillMoveToWindow(self, nil);
   [self _ak_detachFromSuperview];
   [self viewDidMoveToSuperview];
   if (oldWindow) AKViewDidMoveToWindow(self);
+  (void)keepAlive;
 }
 
 - (void)_ak_detachFromSuperview {
-  if (!self.superview) return;
-  AKOnMainSync(^{ [self->_backing removeFromSuperview]; });
-  [self.superview.mutableSubviews removeObject:self];
-  if (self.nextResponder == self.superview) self.nextResponder = nil;
+  NSView *sup = self.superview;
+  if (!sup) return;
+  __attribute__((objc_precise_lifetime)) NSView *keepAlive = self;
   self.superview = nil;
+  if (self.nextResponder == sup) self.nextResponder = nil;
+  AKOnMainSync(^{ [self->_backing removeFromSuperview]; });
+  [sup.mutableSubviews removeObjectIdenticalTo:self];
+  (void)keepAlive;
 }
 
 // A content view knows its window directly; every other view asks its superview.
@@ -302,26 +355,62 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 #pragma mark Drawing and coordinates
 
-- (void)setNeedsDisplay:(BOOL)flag { if (flag) AKOnMainSync(^{ [self->_backing setNeedsDisplay]; }); }
-- (void)setNeedsDisplayInRect:(NSRect)rect { AKOnMainSync(^{ [self->_backing setNeedsDisplayInRect:rect]; }); }
+// A redraw request has no result to wait for: from another thread it is queued, not awaited.
+static void AKOnMainLater(dispatch_block_t block) {
+  if (NSThread.isMainThread) block();
+  else dispatch_async(dispatch_get_main_queue(), block);
+}
+- (void)setNeedsDisplay:(BOOL)flag { if (flag) AKOnMainLater(^{ [self->_backing setNeedsDisplay]; }); }
+- (void)setNeedsDisplayInRect:(NSRect)rect {
+  CGRect r = [self _ak_uikitRect:rect];
+  AKOnMainLater(^{ [self->_backing setNeedsDisplayInRect:r]; });
+}
 - (void)drawRect:(NSRect)dirtyRect { /* override point */ }
 
-// A nil view means window coordinates, which in the shim are the content view's coordinates
-// (the window's content sits inside the safe area, so it is not the UIWindow's space).
-- (UIView *)_ak_spaceForView:(NSView *)view {
-  return view ? view.backing : (self.window.contentView.backingView ?: _backing);
+// This view's AppKit coordinates <-> its backing view's UIKit coordinates (the same flip
+// both ways).
+- (CGPoint)_ak_uikitPoint:(NSPoint)p {
+  return self.isFlipped ? p : CGPointMake(p.x, _backing.bounds.size.height - p.y);
 }
+- (CGRect)_ak_uikitRect:(NSRect)r {
+  if (self.isFlipped) return r;
+  r.origin.y = _backing.bounds.size.height - r.origin.y - r.size.height;
+  return r;
+}
+
+// A nil view means the window: points measured up from the bottom-left of its content area
+// (windows here fill the screen, so these are screen points too).
+- (UIView *)_ak_windowSpace {
+  return self.window.contentView.backingView ?: _backing;
+}
+
 - (NSPoint)convertPoint:(NSPoint)point fromView:(NSView *)view {
-  return [_backing convertPoint:point fromView:[self _ak_spaceForView:view]];
+  UIView *space = view ? view.backing : [self _ak_windowSpace];
+  CGPoint p = view ? [view _ak_uikitPoint:point] : CGPointMake(point.x, space.bounds.size.height - point.y);
+  if (space != _backing) p = [_backing convertPoint:p fromView:space];
+  return [self _ak_uikitPoint:p]; // the flip is its own inverse
 }
 - (NSPoint)convertPoint:(NSPoint)point toView:(NSView *)view {
-  return [_backing convertPoint:point toView:[self _ak_spaceForView:view]];
+  UIView *space = view ? view.backing : [self _ak_windowSpace];
+  CGPoint p = [self _ak_uikitPoint:point];
+  if (space != _backing) p = [_backing convertPoint:p toView:space];
+  return view ? [view _ak_uikitPoint:p] : NSMakePoint(p.x, space.bounds.size.height - p.y);
 }
 - (NSRect)convertRect:(NSRect)rect fromView:(NSView *)view {
-  return [_backing convertRect:rect fromView:[self _ak_spaceForView:view]];
+  UIView *space = view ? view.backing : [self _ak_windowSpace];
+  CGRect r = rect;
+  if (view) r = [view _ak_uikitRect:rect];
+  else r.origin.y = space.bounds.size.height - rect.origin.y - rect.size.height;
+  if (space != _backing) r = [_backing convertRect:r fromView:space];
+  return [self _ak_uikitRect:r];
 }
 - (NSRect)convertRect:(NSRect)rect toView:(NSView *)view {
-  return [_backing convertRect:rect toView:[self _ak_spaceForView:view]];
+  UIView *space = view ? view.backing : [self _ak_windowSpace];
+  CGRect r = [self _ak_uikitRect:rect];
+  if (space != _backing) r = [_backing convertRect:r toView:space];
+  if (view) return [view _ak_uikitRect:r];
+  r.origin.y = space.bounds.size.height - r.origin.y - r.size.height;
+  return r;
 }
 
 - (CGFloat)_ak_backingScale {
@@ -354,16 +443,31 @@ static void AKViewDidMoveToWindow(NSView *view) {
   return NSMakePoint(p.x / s, p.y / s);
 }
 
-// Route backing-view autoresizing onto the AppKit mask values that overlap UIKit's.
+// Route backing-view autoresizing onto UIKit's equivalent. AppKit's MinY margin is the one
+// at the low-y edge: the bottom in a superview that measures from the bottom, the top in a
+// flipped one. And with no flexible y part, a frame measured from the bottom keeps its
+// bottom margin when the superview grows — UIKit's flexible top margin.
 - (void)setAutoresizingMask:(NSAutoresizingMaskOptions)mask {
   _autoresizingMask = mask;
+  [self _ak_applyAutoresizing];
+}
+
+- (void)_ak_applyAutoresizing {
+  NSAutoresizingMaskOptions mask = _autoresizingMask;
   UIViewAutoresizing u = UIViewAutoresizingNone;
   if (mask & NSViewWidthSizable)  u |= UIViewAutoresizingFlexibleWidth;
   if (mask & NSViewHeightSizable) u |= UIViewAutoresizingFlexibleHeight;
   if (mask & NSViewMinXMargin)    u |= UIViewAutoresizingFlexibleLeftMargin;
   if (mask & NSViewMaxXMargin)    u |= UIViewAutoresizingFlexibleRightMargin;
-  if (mask & NSViewMinYMargin)    u |= UIViewAutoresizingFlexibleTopMargin;
-  if (mask & NSViewMaxYMargin)    u |= UIViewAutoresizingFlexibleBottomMargin;
+  if (AKMeasuresFromBottom(self.superview)) {
+    if (mask & NSViewMinYMargin) u |= UIViewAutoresizingFlexibleBottomMargin;
+    if (mask & NSViewMaxYMargin) u |= UIViewAutoresizingFlexibleTopMargin;
+    if (!(mask & (NSViewMinYMargin | NSViewMaxYMargin | NSViewHeightSizable))) u |= UIViewAutoresizingFlexibleTopMargin;
+  } else {
+    if (mask & NSViewMinYMargin) u |= UIViewAutoresizingFlexibleTopMargin;
+    if (mask & NSViewMaxYMargin) u |= UIViewAutoresizingFlexibleBottomMargin;
+  }
+  if (_backing.autoresizingMask == u) return;
   AKOnMainSync(^{ self->_backing.autoresizingMask = u; });
 }
 

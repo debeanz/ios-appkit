@@ -577,7 +577,9 @@ static void dumpLayer(CALayer *l, int depth, int *lines) {
   for (CALayer *s in l.sublayers) dumpLayer(s, depth + 1, lines);
 }
 
-static void dumpScreenLayers(void) {
+// Not called in normal runs (it found the 0x0 page container); call it from the heartbeat to
+// see where layers end up.
+__attribute__((unused)) static void dumpScreenLayers(void) {
   int lines = 0;
   hostlog(@"--- layer tree (%d page frames handed over so far) ---", gSurfaceFrames);
   for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
@@ -688,12 +690,14 @@ static void bringUpClient(void) {
   // (UIKit work the shim sends over from other threads, this log view) would wait forever.
   // Called from a timer, the run loop turns Steam's loop makes still drain the queue.
   [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:NO block:^(NSTimer *t) { bringUpClient(); }];
-  // A heartbeat in the log shows whether the main thread still gets a turn once Steam runs.
-  __block int beats = 0;
+  // A heartbeat in the log shows whether the main thread still gets a turn once Steam runs,
+  // and how many page frames Chromium handed over since the last one (its frame rate).
+  __block int beats = 0, framesBefore = 0;
   NSTimer *heartbeat = [NSTimer timerWithTimeInterval:10 repeats:YES block:^(NSTimer *t) {
-    hostlog(@"main thread turning (%ds)", (++beats) * 10);
-    if (beats == 2) dumpScreenLayers(); // Big Picture has been up for ~10s by now
-    if (beats >= 3) [t invalidate];
+    int frames = gSurfaceFrames;
+    hostlog(@"main thread turning (%ds); page frames %.1f/s", (++beats) * 10, (frames - framesBefore) / 10.0);
+    framesBefore = frames;
+    if (beats >= 6) [t invalidate];
   }];
   [NSRunLoop.mainRunLoop addTimer:heartbeat forMode:NSRunLoopCommonModes];
   return YES;

@@ -1,5 +1,6 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/AKShimInput.h"
+#import <os/lock.h>
 
 NSApplication *NSApp = nil;
 NSRunLoopMode const NSEventTrackingRunLoopMode = @"NSEventTrackingRunLoopMode";
@@ -127,8 +128,31 @@ static void noopPerform(void *info) {}
   return nil;
 }
 
+// How long other threads spend waiting for these steps, logged every few seconds: Chromium's
+// UI thread stalls for as long as the main thread takes to get to them, which shows as lag.
+static void AKNoteMainWait(CFAbsoluteTime waited) {
+  static CFAbsoluteTime windowStart, total, longest;
+  static unsigned count;
+  static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  os_unfair_lock_lock(&lock);
+  if (!windowStart) windowStart = now;
+  count++;
+  total += waited;
+  if (waited > longest) longest = waited;
+  BOOL report = now - windowStart >= 5;
+  unsigned n = count;
+  CFAbsoluteTime span = now - windowStart, sum = total, max = longest;
+  if (report) { windowStart = now; total = longest = 0; count = 0; }
+  os_unfair_lock_unlock(&lock);
+  if (report)
+    fprintf(stderr, "[AppKitShim] UIKit steps from other threads: %u in %.1fs, %.0f ms spent waiting for the main thread (longest %.0f ms)\n",
+            n, span, sum * 1000, max * 1000);
+}
+
 void AKOnMainSync(dispatch_block_t block) {
   if (NSThread.isMainThread) { block(); return; }
+  CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
   dispatch_async(dispatch_get_main_queue(), ^{
     block();
@@ -140,6 +164,7 @@ void AKOnMainSync(dispatch_block_t block) {
             NSThread.currentThread.name.UTF8String ?: "a thread");
     dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
   }
+  AKNoteMainWait(CFAbsoluteTimeGetCurrent() - start);
 }
 
 // As in AppKit, waiting for an event runs the calling thread's run loop in `mode` until an

@@ -287,20 +287,15 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (NSRect)contentRectForFrameRect:(NSRect)frameRect { return frameRect; }
 - (NSRect)frameRectForContentRect:(NSRect)contentRect { return contentRect; }
 
-#pragma mark Coordinates — window space is screen space offset by the frame origin
+#pragma mark Coordinates — every window fills the screen from its corner
 
-- (NSRect)convertRectToScreen:(NSRect)rect {
-  return NSMakeRect(rect.origin.x + _frame.origin.x, rect.origin.y + _frame.origin.y, rect.size.width, rect.size.height);
-}
-- (NSRect)convertRectFromScreen:(NSRect)rect {
-  return NSMakeRect(rect.origin.x - _frame.origin.x, rect.origin.y - _frame.origin.y, rect.size.width, rect.size.height);
-}
-- (NSPoint)convertPointToScreen:(NSPoint)point {
-  return NSMakePoint(point.x + _frame.origin.x, point.y + _frame.origin.y);
-}
-- (NSPoint)convertPointFromScreen:(NSPoint)point {
-  return NSMakePoint(point.x - _frame.origin.x, point.y - _frame.origin.y);
-}
+// So window points (up from the bottom-left of the content area) are screen points. The
+// frame a client set isn't where the window is (SDL, for one, sets a "centered" placeholder
+// origin), so it takes no part.
+- (NSRect)convertRectToScreen:(NSRect)rect { return rect; }
+- (NSRect)convertRectFromScreen:(NSRect)rect { return rect; }
+- (NSPoint)convertPointToScreen:(NSPoint)point { return point; }
+- (NSPoint)convertPointFromScreen:(NSPoint)point { return point; }
 
 - (void)setFrame:(NSRect)frame display:(BOOL)display { [self setFrame:frame]; }
 - (void)setFrame:(NSRect)frame display:(BOOL)display animate:(BOOL)animate { [self setFrame:frame]; }

@@ -98,6 +98,11 @@ NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
 // moves; the client's own callbacks stay on the thread that made the call.
 void AKOnMainSync(dispatch_block_t block);
 
+// CGEvents.m: Quartz's global display points (origin top-left, y down) <-> AppKit screen
+// points (origin bottom-left, y up), as +[NSEvent mouseLocation] reports them.
+CGPoint AKQuartzPointFromAppKit(NSPoint p);
+NSPoint AKAppKitPointFromQuartz(CGPoint p);
+
 // NSEvent.m: local event monitors (+addLocalMonitorForEventsMatchingMask:handler:). NSApp's
 // -sendEvent: passes each event through them first; a handler returning nil swallows it.
 NSEvent *AKRunLocalEventMonitors(NSEvent *event);

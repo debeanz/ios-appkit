@@ -37,7 +37,8 @@ void AKNoteInputEvent(NSEvent *e) {
                  e.type == NSEventTypeLeftMouseDown || e.type == NSEventTypeRightMouseDown;
     if (mouse) {
       NSPoint p = e.locationInWindow;
-      if (gHaveMouse) { gMouseDX = (int32_t)lround(p.x - gLastMouse.x); gMouseDY = (int32_t)lround(p.y - gLastMouse.y); }
+      // AppKit points go up; Quartz deltas count downward movement as positive.
+      if (gHaveMouse) { gMouseDX = (int32_t)lround(p.x - gLastMouse.x); gMouseDY = (int32_t)lround(gLastMouse.y - p.y); }
       gLastMouse = p;
       gHaveMouse = YES;
     }
@@ -107,6 +108,9 @@ static AKCGEvent *AKEv(CGEventRef e) { return (__bridge AKCGEvent *)(void *)e; }
 // Command and Caps Lock.
 static const CGEventFlags AKFlagMask = 0x00FF0000;
 
+CGPoint AKQuartzPointFromAppKit(NSPoint p) { return CGPointMake(p.x, UIScreen.mainScreen.bounds.size.height - p.y); }
+NSPoint AKAppKitPointFromQuartz(CGPoint p) { return NSMakePoint(p.x, UIScreen.mainScreen.bounds.size.height - p.y); }
+
 static CGEventRef AKNewEvent(CGEventType type, CGPoint location) {
   AKCGEvent *e = [AKCGEvent new];
   e.type = type;
@@ -116,10 +120,10 @@ static CGEventRef AKNewEvent(CGEventType type, CGPoint location) {
   return (CGEventRef)CFBridgingRetain(e);
 }
 
-CGEventRef CGEventCreate(CGEventSourceRef source) { return AKNewEvent(kCGEventNull, [NSEvent mouseLocation]); }
+CGEventRef CGEventCreate(CGEventSourceRef source) { return AKNewEvent(kCGEventNull, AKQuartzPointFromAppKit([NSEvent mouseLocation])); }
 
 CGEventRef CGEventCreateKeyboardEvent(CGEventSourceRef source, CGKeyCode key, bool keyDown) {
-  CGEventRef ref = AKNewEvent(keyDown ? kCGEventKeyDown : kCGEventKeyUp, [NSEvent mouseLocation]);
+  CGEventRef ref = AKNewEvent(keyDown ? kCGEventKeyDown : kCGEventKeyUp, AKQuartzPointFromAppKit([NSEvent mouseLocation]));
   AKEv(ref).fields[@(kCGKeyboardEventKeycode)] = @(key);
   return ref;
 }
@@ -219,13 +223,15 @@ static void AKPostOnMain(AKCGEvent *ev) {
     case kCGEventLeftMouseDown: case kCGEventLeftMouseUp: case kCGEventRightMouseDown: case kCGEventRightMouseUp:
     case kCGEventMouseMoved: case kCGEventLeftMouseDragged: case kCGEventRightMouseDragged:
     case kCGEventOtherMouseDown: case kCGEventOtherMouseUp: case kCGEventOtherMouseDragged: {
-      // Quartz locations are global display points; the window's space is its content view's.
+      // Quartz locations are global display points (top-left origin); find the view under
+      // the point in UIKit terms, and give the event AppKit window coordinates (bottom-left).
       UIView *content = w.contentView.backingView;
-      NSPoint p = content.window ? [content convertPoint:ev.location fromView:nil] : ev.location;
+      CGPoint u = content.window ? [content convertPoint:ev.location fromView:nil] : ev.location;
+      NSPoint p = NSMakePoint(u.x, content.bounds.size.height - u.y);
       e = [NSEvent mouseEventWithType:(NSEventType)ev.type location:p modifierFlags:flags timestamp:0
                          windowNumber:w.windowNumber context:nil eventNumber:0
                            clickCount:MAX(1, (NSInteger)ev.fields[@(kCGMouseEventClickState)].integerValue) pressure:1];
-      [e _setWindow:w targetView:AKViewUnder(w, p)];
+      [e _setWindow:w targetView:AKViewUnder(w, u)];
       [NSEvent _setMouseLocation:p];
       break;
     }

@@ -2,9 +2,10 @@
 // pointer input (see InputBridge.m), and the client can build its own with the AppKit
 // factories below. Only the members Steam/CEF actually read are modelled.
 //
-// Coordinates: the shim uses top-left-origin window coordinates throughout, which is
-// what a flipped NSView (Chromium's view is flipped) expects from -locationInWindow
-// passed through -convertPoint:fromView:nil.
+// Coordinates are AppKit's: -locationInWindow is up from the bottom-left of the window's
+// content area, and +mouseLocation up from the bottom-left of the screen (the same points,
+// since windows fill the screen). Chromium passes -locationInWindow through
+// -convertPoint:fromView:nil and then flips by its view's height itself.
 #import <Foundation/Foundation.h>
 #import "NSGeometry.h"
 

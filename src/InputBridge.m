@@ -101,10 +101,17 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
 
 #pragma mark Mouse
 
+// An event's location is in AppKit window coordinates: up from the bottom-left of the
+// content area. Windows fill the screen, so it is the mouse's screen location too.
+static NSPoint AKWindowPoint(UIView *content, CGPoint uikitPoint) {
+  return NSMakePoint(uikitPoint.x, content.bounds.size.height - uikitPoint.y);
+}
+
 - (void)_ak_sendMouse:(NSEventType)type touch:(UITouch *)touch target:(NSView *)target {
   NSWindow *w = target.window;
   if (!w) return;
-  NSPoint p = [touch locationInView:w.contentView.backingView];
+  UIView *content = w.contentView.backingView;
+  NSPoint p = AKWindowPoint(content, [touch locationInView:content]);
   [NSEvent _setMouseLocation:p];
   NSEvent *e = [NSEvent mouseEventWithType:type location:p modifierFlags:[NSEvent modifierFlags]
                                  timestamp:touch.timestamp windowNumber:w.windowNumber context:nil
@@ -143,9 +150,10 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
 - (void)_ak_hover:(UIHoverGestureRecognizer *)g {
   if (![self _ak_isWindowRoot]) return;
   NSWindow *w = self.owner.window;
-  CGPoint p = [g locationInView:self];
+  CGPoint u = [g locationInView:self];
+  NSPoint p = AKWindowPoint(self, u);
   [NSEvent _setMouseLocation:p];
-  NSView *target = [self _ak_viewAtPoint:p];
+  NSView *target = [self _ak_viewAtPoint:u];
   NSEvent *e = [NSEvent mouseEventWithType:NSEventTypeMouseMoved location:p modifierFlags:[NSEvent modifierFlags]
                                  timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
   [e _setWindow:w targetView:target];
@@ -165,8 +173,9 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
   objc_setAssociatedObject(self, &kLastPanKey, [NSValue valueWithCGPoint:now], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
   NSWindow *w = self.owner.window;
-  CGPoint p = [g locationInView:self];
-  NSView *target = [self _ak_viewAtPoint:p];
+  CGPoint u = [g locationInView:self];
+  NSPoint p = AKWindowPoint(self, u);
+  NSView *target = [self _ak_viewAtPoint:u];
   NSEvent *e = [NSEvent mouseEventWithType:NSEventTypeScrollWheel location:p modifierFlags:[NSEvent modifierFlags]
                                  timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
   [e _setWindow:w targetView:target];
