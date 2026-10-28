@@ -54,6 +54,9 @@ static NSMutableArray<NSGraphicsContext *> *AKContextStack(void) {
   if (_cg) CGContextSetShouldAntialias(_cg, shouldAntialias);
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSColorSpace {
@@ -96,4 +99,7 @@ static NSColorSpace *AKColorSpaceNamed(CFStringRef name) {
 - (NSInteger)numberOfColorComponents { return CGColorSpaceGetNumberOfComponents(_cg); }
 - (NSString *)localizedName { return (__bridge_transfer NSString *)CGColorSpaceCopyName(_cg) ?: @"Color Space"; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

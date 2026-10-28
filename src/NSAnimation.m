@@ -61,6 +61,9 @@ static NSMutableArray<NSAnimationContext *> *AKContextStack(void) {
 
 + (void)runAnimationGroup:(void (^)(NSAnimationContext *))changes { [self runAnimationGroup:changes completionHandler:nil]; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSAnimation {
@@ -117,4 +120,7 @@ static NSMutableArray<NSAnimationContext *> *AKContextStack(void) {
   }
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

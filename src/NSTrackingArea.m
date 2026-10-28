@@ -1,4 +1,5 @@
 #import "AppKitShim/NSTrackingArea.h"
+#import "AKShimPrivate.h"
 
 @implementation NSTrackingArea
 
@@ -15,4 +16,7 @@
   return self;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

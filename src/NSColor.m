@@ -1,4 +1,5 @@
 #import "AppKitShim/NSColor.h"
+#import "AKShimPrivate.h"
 #import "AppKitShim/NSGraphics.h"
 #import <UIKit/UIKit.h>
 
@@ -39,4 +40,7 @@
   if (ctx) CGContextSetStrokeColorWithColor(ctx, _color.CGColor);
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

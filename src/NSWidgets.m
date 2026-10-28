@@ -301,6 +301,9 @@
   if ((self = [super init])) { _identifier = identifier; _label = @""; }
   return self;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSTabView {
@@ -361,6 +364,9 @@
   if ((self = [super init])) { _identifier = [identifier copy]; _title = @""; _width = 100; _minWidth = 10; _maxWidth = 1000; }
   return self;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSTableView {
@@ -468,10 +474,16 @@
   return self;
 }
 - (void)setDraggingFrame:(NSRect)frame contents:(id)contents { _draggingFrame = frame; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSTouchBar
 - (BOOL)isVisible { return NO; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSTouchBarItem
@@ -480,6 +492,9 @@
   if ((self = [super init])) _identifier = [identifier copy];
   return self;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSCustomTouchBarItem
@@ -511,18 +526,27 @@
   e.accessibilityParent = parent;
   return e;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSAccessibilityRemoteUIElement
 + (BOOL)registerRemoteUIProcessIdentifier:(int)pid { return NO; }
 + (NSData *)remoteTokenForLocalUIElement:(id)element { return nil; }
 - (instancetype)initWithRemoteToken:(NSData *)token { return nil; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark OpenGL
 
 @implementation NSOpenGLPixelFormat
 - (instancetype)initWithAttributes:(const uint32_t *)attribs { return nil; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSOpenGLContext
@@ -531,6 +555,9 @@
 - (instancetype)initWithFormat:(NSOpenGLPixelFormat *)format shareContext:(NSOpenGLContext *)share { return nil; }
 - (void)makeCurrentContext {}
 - (void)flushBuffer {}
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSOpenGLView

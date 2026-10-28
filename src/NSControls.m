@@ -20,6 +20,9 @@
 - (NSInteger)integerValue { return _stringValue.integerValue; }
 - (void)setIntegerValue:(NSInteger)v { self.stringValue = [NSString stringWithFormat:@"%ld", (long)v]; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 // A control's value lives in its cell, as in AppKit.

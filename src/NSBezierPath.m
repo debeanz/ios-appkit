@@ -97,4 +97,7 @@
   return CGPathContainsPoint(_path, NULL, point, eo);
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

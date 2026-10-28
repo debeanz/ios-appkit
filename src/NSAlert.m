@@ -70,4 +70,7 @@ void AKRunModalUntil(BOOL (^finished)(void)) {
   [self _present:^(NSModalResponse r) { if (handler) handler(r); }];
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

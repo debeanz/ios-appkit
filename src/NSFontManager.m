@@ -63,6 +63,30 @@ static UIFontDescriptorSymbolicTraits AKSymbolicFromMask(NSFontTraitMask m) {
   return [[NSFontDescriptor alloc] initWithUIDescriptor:[_d fontDescriptorWithSize:size]];
 }
 
+// The bold/italic/... variant. NSFontDescriptorSymbolicTraits and UIFontDescriptorSymbolicTraits
+// are both Core Text's trait bits, so the value passes straight through. AppKit returns nil
+// when no font has those traits; so does UIKit.
+- (NSFontDescriptor *)fontDescriptorWithSymbolicTraits:(uint32_t)traits {
+  UIFontDescriptor *d = [_d fontDescriptorWithSymbolicTraits:(UIFontDescriptorSymbolicTraits)traits];
+  return d ? [[NSFontDescriptor alloc] initWithUIDescriptor:d] : nil;
+}
+
+- (id)objectForKey:(NSString *)attribute { return [_d objectForKey:attribute]; }
+
+- (NSFontDescriptor *)fontDescriptorWithFamily:(NSString *)family {
+  return [[NSFontDescriptor alloc] initWithUIDescriptor:[_d fontDescriptorWithFamily:family]];
+}
+- (NSFontDescriptor *)fontDescriptorWithFace:(NSString *)face {
+  return [[NSFontDescriptor alloc] initWithUIDescriptor:[_d fontDescriptorWithFace:face]];
+}
+
+// The rest of the Mac descriptor API matches UIFontDescriptor's by name, so anything not
+// defined above goes to the wrapped descriptor; what neither answers is logged and returns
+// zero (AK_UNIMPLEMENTED_FORWARDER) rather than aborting.
+- (id)forwardingTargetForSelector:(SEL)sel { return [_d respondsToSelector:sel] ? _d : nil; }
+
+AK_UNIMPLEMENTED_FORWARDER
+
 @end
 
 @implementation NSFontManager
@@ -136,5 +160,12 @@ static UIFontDescriptorSymbolicTraits AKSymbolicFromMask(NSFontTraitMask m) {
   UIFontDescriptor *d = [f.fontDescriptor fontDescriptorWithSymbolicTraits:t];
   return d ? [UIFont fontWithDescriptor:d size:f.pointSize] : font;
 }
+
+- (id)convertFont:(id)font toSize:(CGFloat)size {
+  UIFont *f = AKUIFont(font);
+  return f ? [f fontWithSize:size] : font;
+}
+
+AK_UNIMPLEMENTED_FORWARDER
 
 @end

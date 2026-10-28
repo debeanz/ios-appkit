@@ -5,6 +5,9 @@
 
 @implementation NSImageRep
 - (BOOL)drawInRect:(NSRect)rect { return NO; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSBitmapImageRep {
@@ -217,4 +220,7 @@ static CFStringRef AKUTTypeForFileType(NSBitmapImageFileType type) {
   return nil;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

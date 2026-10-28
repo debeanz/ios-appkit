@@ -1,4 +1,5 @@
 #import "AppKitShim/NSPasteboard.h"
+#import "AKShimPrivate.h"
 #import <UIKit/UIKit.h>
 
 // The same UTIs AppKit uses, which are also what UIPasteboard stores.
@@ -50,6 +51,9 @@ static NSData *AKDataFromValue(id value) {
 - (NSString *)stringForType:(NSPasteboardType)type { return AKStringFromValue(_values[type]); }
 - (NSData *)dataForType:(NSPasteboardType)type { return AKDataFromValue(_values[type]); }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSPasteboard {
@@ -172,4 +176,7 @@ static NSData *AKDataFromValue(id value) {
   return out;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

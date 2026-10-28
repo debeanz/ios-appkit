@@ -51,4 +51,7 @@
 - (BOOL)terminate { return NO; }
 - (BOOL)forceTerminate { return NO; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

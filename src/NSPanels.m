@@ -43,6 +43,9 @@
   [self beginWithCompletionHandler:handler];
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 // The document picker's delegate; holds itself alive until the picker finishes.

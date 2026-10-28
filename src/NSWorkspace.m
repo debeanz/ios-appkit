@@ -26,6 +26,9 @@ NSString *const NSWorkspaceLaunchConfigurationEnvironment = @"NSWorkspaceLaunchC
   c.promptsUserIfNeeded = _promptsUserIfNeeded;
   return c;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSWorkspace
@@ -96,4 +99,7 @@ completionHandler:(void (^)(NSRunningApplication *, NSError *))completionHandler
 - (NSImage *)iconForFile:(NSString *)fullPath { return nil; }
 - (NSImage *)iconForContentType:(id)contentType { return nil; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

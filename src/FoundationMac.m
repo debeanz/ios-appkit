@@ -22,6 +22,9 @@ NSString *const NSUserNotificationDefaultSoundName = @"DefaultSoundName";
   c.deliveryDate = _deliveryDate;
   return c;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSUserNotificationCenter {
@@ -109,6 +112,9 @@ static NSString *AKNotificationID(NSUserNotification *n) {
   @synchronized (_delivered) { [_delivered removeAllObjects]; }
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark Apple Events (inert model)
@@ -184,6 +190,9 @@ static NSString *AKNotificationID(NSUserNotification *n) {
   return c;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSAppleEventManager
@@ -200,6 +209,9 @@ static NSString *AKNotificationID(NSUserNotification *n) {
 - (void)removeEventHandlerForEventClass:(uint32_t)eventClass andEventID:(uint32_t)eventID {}
 - (NSAppleEventDescriptor *)currentAppleEvent { return nil; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSScriptClassDescription
@@ -208,11 +220,17 @@ static NSString *AKNotificationID(NSUserNotification *n) {
   d->_className = NSStringFromClass(aClass);
   return d;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSScriptCommand
 - (NSAppleEventDescriptor *)appleEvent { return nil; }
 - (id)executeCommand { return nil; } // no scripting runtime on iOS
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSUniqueIDSpecifier
@@ -221,4 +239,7 @@ static NSString *AKNotificationID(NSUserNotification *n) {
   if ((self = [super init])) { _key = [property copy]; _uniqueID = uniqueID; }
   return self;
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

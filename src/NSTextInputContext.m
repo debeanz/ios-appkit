@@ -62,8 +62,14 @@ static NSString *const AKUSInputSource = @"com.apple.keylayout.US";
   return [inputSourceIdentifier isEqualToString:AKUSInputSource] ? @"U.S." : inputSourceIdentifier;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSInputManager
 + (NSInputManager *)currentInputManager { return nil; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

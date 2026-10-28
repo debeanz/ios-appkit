@@ -89,6 +89,9 @@
 - (void)unlearnWord:(NSString *)word { if (word) [UITextChecker unlearnWord:word]; }
 - (BOOL)hasLearnedWord:(NSString *)word { return word && [UITextChecker hasLearnedWord:word]; }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark Speech (AVSpeechSynthesizer)
@@ -157,6 +160,9 @@
   if ([_delegate respondsToSelector:@selector(speechSynthesizer:didFinishSpeaking:)]) [_delegate speechSynthesizer:self didFinishSpeaking:NO];
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark Popover
@@ -265,12 +271,18 @@
   self.visible = NO;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSColorSampler
 - (void)showSamplerWithSelectionHandler:(void (^)(NSColor *))handler {
   if (handler) dispatch_async(dispatch_get_main_queue(), ^{ handler(nil); });
 }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark Sharing (share sheet)
@@ -300,6 +312,9 @@ static void AKPresentShareSheet(NSArray *items, NSView *anchor, NSRect rect) {
 // Every named service goes through the share sheet, which lists Mail, Reading List and the rest.
 - (void)performWithItems:(NSArray *)items { AKPresentShareSheet(items, nil, NSZeroRect); }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSSharingServicePicker {
@@ -317,11 +332,17 @@ static void AKPresentShareSheet(NSArray *items, NSView *anchor, NSRect rect) {
 
 - (void)close {}
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 #pragma mark Menu bar, toolbar, printing
 
 @implementation NSStatusItem
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSStatusBar
@@ -345,6 +366,9 @@ static void AKPresentShareSheet(NSArray *items, NSView *anchor, NSRect rect) {
 
 - (void)removeStatusItem:(NSStatusItem *)item {}
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSToolbar {
@@ -367,6 +391,9 @@ static void AKPresentShareSheet(NSArray *items, NSView *anchor, NSRect rect) {
   if (index >= 0 && index < (NSInteger)_itemIdentifiers.count) [_itemIdentifiers removeObjectAtIndex:(NSUInteger)index];
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 @implementation NSPrintInfo
@@ -407,6 +434,9 @@ static NSPrintInfo *gSharedPrintInfo;
   return c;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
 // The Mac print dialog prints a view; without a document to hand UIPrintInteractionController,
@@ -415,4 +445,7 @@ static NSPrintInfo *gSharedPrintInfo;
 + (NSPrintPanel *)printPanel { return [NSPrintPanel new]; }
 - (NSInteger)runModal { return NSModalResponseCancel; }
 - (NSInteger)runModalWithPrintInfo:(NSPrintInfo *)printInfo { return NSModalResponseCancel; }
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end

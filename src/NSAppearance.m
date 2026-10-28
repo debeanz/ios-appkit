@@ -44,4 +44,7 @@ static NSAppearance *gCurrentAppearance;
   gCurrentAppearance = previous;
 }
 
+
+AK_UNIMPLEMENTED_FORWARDER
+AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
