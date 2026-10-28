@@ -320,32 +320,49 @@ static int gRedirected;
 // and paints CEF's frames into it with SDL's software renderer — no OpenGL calls of its own.
 // But it asks for the window with SDL's OpenGL flag set, and SDL's macOS backend then loads
 // desktop OpenGL (OpenGL.framework/Libraries/libGL.dylib), which iOS doesn't have, so the
-// window was never created ("CreateOutputWindow: failed to create window"). The helper's
-// two window calls come here and drop that flag; SDL then backs the surface with Metal.
+// window was never created ("CreateOutputWindow: failed to create window"). Dropping the
+// flag isn't enough: a window created with no graphics flag gets SDL's default for macOS,
+// which is OpenGL again. So the helper's window calls come here and ask for Metal instead,
+// and SDL's window surface is told to present through its Metal renderer.
 #define AK_SDL_WINDOW_OPENGL 0x2LL
+#define AK_SDL_WINDOW_METAL 0x20000000LL
 
 typedef uint32_t SDLProps;
 static void *(*gSDLCreateWindowWithProperties)(SDLProps);
 static void *(*gSDLCreatePopupWindow)(void *, int, int, int, int, uint64_t);
+static void *(*gSDLGetWindowSurface)(void *);
 static int64_t (*gSDLGetNumberProperty)(SDLProps, const char *, int64_t);
 static bool (*gSDLSetNumberProperty)(SDLProps, const char *, int64_t);
 static bool (*gSDLSetBooleanProperty)(SDLProps, const char *, bool);
+static bool (*gSDLSetHint)(const char *, const char *);
 static const char *(*gSDLGetError)(void);
 
 static void *hostSDLCreateWindowWithProperties(SDLProps props) {
   int64_t flags = gSDLGetNumberProperty(props, "SDL.window.create.flags", 0);
-  if (flags & AK_SDL_WINDOW_OPENGL) gSDLSetNumberProperty(props, "SDL.window.create.flags", flags & ~AK_SDL_WINDOW_OPENGL);
+  gSDLSetNumberProperty(props, "SDL.window.create.flags", (flags & ~AK_SDL_WINDOW_OPENGL) | AK_SDL_WINDOW_METAL);
   gSDLSetBooleanProperty(props, "SDL.window.create.opengl", false);
+  gSDLSetBooleanProperty(props, "SDL.window.create.metal", true);
   void *window = gSDLCreateWindowWithProperties(props);
-  hostlog(@"web helper window (flags 0x%llx, OpenGL dropped): %@", flags,
+  hostlog(@"web helper window (flags 0x%llx, as Metal): %@", flags,
           window ? @"created" : [NSString stringWithFormat:@"failed: %s", gSDLGetError()]);
   return window;
 }
 
 static void *hostSDLCreatePopupWindow(void *parent, int x, int y, int w, int h, uint64_t flags) {
-  void *window = gSDLCreatePopupWindow(parent, x, y, w, h, flags & ~(uint64_t)AK_SDL_WINDOW_OPENGL);
+  void *window = gSDLCreatePopupWindow(parent, x, y, w, h, (flags & ~(uint64_t)AK_SDL_WINDOW_OPENGL) | AK_SDL_WINDOW_METAL);
   if (!window) hostlog(@"web helper popup window failed: %s", gSDLGetError());
   return window;
+}
+
+// The helper paints into this surface; log the first result so a blank screen says why.
+static void *hostSDLGetWindowSurface(void *window) {
+  static int logged;
+  void *surface = gSDLGetWindowSurface(window);
+  if (logged < 2) {
+    logged++;
+    hostlog(@"web helper window surface: %@", surface ? @"ok" : [NSString stringWithFormat:@"failed: %s", gSDLGetError()]);
+  }
+  return surface;
 }
 
 static void redirectHelperWindows(const char *image) {
@@ -354,14 +371,21 @@ static void redirectHelperWindows(const char *image) {
   gSDLGetNumberProperty = (__typeof__(gSDLGetNumberProperty))dlsym(RTLD_DEFAULT, "SDL_GetNumberProperty");
   gSDLSetNumberProperty = (__typeof__(gSDLSetNumberProperty))dlsym(RTLD_DEFAULT, "SDL_SetNumberProperty");
   gSDLSetBooleanProperty = (__typeof__(gSDLSetBooleanProperty))dlsym(RTLD_DEFAULT, "SDL_SetBooleanProperty");
+  gSDLGetWindowSurface = (__typeof__(gSDLGetWindowSurface))dlsym(RTLD_DEFAULT, "SDL_GetWindowSurface");
+  gSDLSetHint = (__typeof__(gSDLSetHint))dlsym(RTLD_DEFAULT, "SDL_SetHint");
   gSDLGetError = (__typeof__(gSDLGetError))dlsym(RTLD_DEFAULT, "SDL_GetError");
-  if (!gSDLCreateWindowWithProperties || !gSDLCreatePopupWindow || !gSDLGetNumberProperty ||
-      !gSDLSetNumberProperty || !gSDLSetBooleanProperty || !gSDLGetError) {
+  if (!gSDLCreateWindowWithProperties || !gSDLCreatePopupWindow || !gSDLGetWindowSurface || !gSDLGetNumberProperty ||
+      !gSDLSetNumberProperty || !gSDLSetBooleanProperty || !gSDLSetHint || !gSDLGetError) {
     hostlog(@"  FAIL  SDL functions for the web helper's windows not found");
     return;
   }
+  // The surface is shown through an SDL renderer; only Metal exists here. And skip SDL's
+  // hunt for a low-power GPU: it asks macOS-only device questions iOS doesn't answer.
+  gSDLSetHint("SDL_FRAMEBUFFER_ACCELERATION", "metal");
+  gSDLSetHint("SDL_RENDER_METAL_PREFER_LOW_POWER_DEVICE", "0");
   int n = gRebind(image, "SDL_CreateWindowWithProperties", (void *)hostSDLCreateWindowWithProperties)
-        + gRebind(image, "SDL_CreatePopupWindow", (void *)hostSDLCreatePopupWindow);
+        + gRebind(image, "SDL_CreatePopupWindow", (void *)hostSDLCreatePopupWindow)
+        + gRebind(image, "SDL_GetWindowSurface", (void *)hostSDLGetWindowSurface);
   hostlog(@"  web helper window creation redirected (%d)", n);
 }
 
