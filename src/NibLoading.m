@@ -95,7 +95,7 @@ static Class viewClass(NSString *name) {
   if (!viewClass(name)) nibLog(@"no view class %@ here; an %s stands in", name, class_getName(c));
   NSView *view = [[c alloc] initWithFrame:AKNibDecodeFrame(coder)];
   [view _ak_applyNibCoder:coder];
-  return view;
+  return (id)view;   // the view stands in for this placeholder, as AppKit's does
 }
 @end
 
