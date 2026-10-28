@@ -43,8 +43,15 @@ void AKShimUpdateSoftwareKeyboard(void) {
     poll = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) { AKShimUpdateSoftwareKeyboard(); }];
     [NSRunLoop.mainRunLoop addTimer:poll forMode:NSRunLoopCommonModes];
   }
+  // Act only once the answer has held for a moment: while a page loads, focus hops between
+  // fields and elements, and following every hop opened and closed the keyboard repeatedly.
+  static BOOL pendingWant;
+  static CFAbsoluteTime pendingSince;
   BOOL want = AKKeyboardShouldShow();
-  if (want == gKeyboardWanted) return;
+  if (want == gKeyboardWanted) { pendingWant = want; return; }
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  if (want != pendingWant) { pendingWant = want; pendingSince = now; return; }
+  if (now - pendingSince < 0.4) return;
   gKeyboardWanted = want;
   [AKFocusedView().backingView reloadInputViews];
 }

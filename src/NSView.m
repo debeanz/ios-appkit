@@ -248,6 +248,10 @@ static void AKViewDidMoveToWindow(NSView *view) {
   return self;
 }
 
+// AppKit's "is this point in this rect", which accounts for flipped views; views here are
+// always flipped, so it is a plain containment test.
+- (BOOL)mouse:(NSPoint)point inRect:(NSRect)rect { return CGRectContainsPoint(rect, point); }
+
 - (BOOL)isHiddenOrHasHiddenAncestor {
   for (NSView *v = self; v; v = v.superview) if (v.hidden) return YES;
   return NO;

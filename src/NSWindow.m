@@ -330,6 +330,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)orderBack:(id)sender { if (!self.isVisible) [self orderFront:sender]; }
 
 // Cursor rectangles (the pointer shape per region); recorded so the getter round-trips.
+- (void)invalidateCursorRectsForView:(NSView *)view { /* no pointer shapes to recompute on iOS */ }
 - (void)disableCursorRects { self.cursorRectsDisabled = YES; }
 - (void)enableCursorRects { self.cursorRectsDisabled = NO; }
 - (BOOL)areCursorRectsEnabled { return !self.cursorRectsDisabled; }
