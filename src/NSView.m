@@ -17,6 +17,12 @@
 @implementation _AKShimBackingView
 - (void)drawRect:(CGRect)rect {
   NSView *owner = self.owner;
+  // An OpenGL view draws with a context current on the thread that made it (a game's main
+  // thread, where AppKit would ask it), and its frames go to a layer of their own.
+  if ([owner isKindOfClass:NSOpenGLView.class]) {
+    [owner _ak_performOnOwnerThread:^{ [(NSOpenGLView *)owner _ak_display]; }];
+    return;
+  }
   if (owner.isFlipped) { [owner drawRect:rect]; return; }
   // An unflipped view draws with y going up, as on the Mac.
   CGContextRef ctx = UIGraphicsGetCurrentContext();
@@ -80,6 +86,39 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 - (void)dealloc {
   if (_ownerLoop) CFRelease(_ownerLoop);
+}
+
+// Made by a nib (NibLoading.m). As in AppKit, no -initWithFrame: of the app's own runs: the
+// nearest of the shim's classes sets the view up (an NSTextField its parts), then the
+// archived flags and subviews apply.
+- (instancetype)initWithCoder:(NSCoder *)coder {
+  Class shim = self.class;
+  const char *image = class_getImageName(NSView.class);
+  while (shim && !(class_getImageName(shim) && strcmp(class_getImageName(shim), image) == 0)) shim = class_getSuperclass(shim);
+  IMP setUp = class_getMethodImplementation(shim ?: NSView.class, @selector(initWithFrame:));
+  // That initializer takes its receiver and returns its result owned, like any -init.
+  void *made = ((void *(*)(void *, SEL, NSRect))setUp)((__bridge_retained void *)self, @selector(initWithFrame:), AKNibDecodeFrame(coder));
+  self = (__bridge_transfer NSView *)made;
+  if (self) [self _ak_applyNibCoder:coder];
+  return self;
+}
+
+- (void)_ak_applyNibCoder:(NSCoder *)coder {
+  uint32_t flags = (uint32_t)[coder decodeInt64ForKey:@"NSvFlags"];
+  self.autoresizingMask = flags & 0x3F;
+  if (flags & 0x80000000u) self.hidden = YES;
+  if ([coder containsValueForKey:@"NSViewWantsBestResolutionOpenGLSurface"])
+    self.wantsBestResolutionOpenGLSurface = [coder decodeBoolForKey:@"NSViewWantsBestResolutionOpenGLSurface"];
+  id subviews = [coder decodeObjectForKey:@"NSSubviews"];
+  if ([subviews isKindOfClass:NSArray.class])
+    for (id view in subviews) if ([view isKindOfClass:NSView.class]) [self addSubview:view];
+}
+
+- (void)_ak_performOnOwnerThread:(dispatch_block_t)block {
+  CFRunLoopRef loop = _ownerLoop;
+  if (!loop || loop == CFRunLoopGetCurrent()) { block(); return; }
+  CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, block);
+  CFRunLoopWakeUp(loop);
 }
 
 - (UIView *)backingView { return _backing; }

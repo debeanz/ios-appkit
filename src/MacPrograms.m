@@ -1016,15 +1016,21 @@ int AKGameApplicationMain(int argc, const char *argv[]) {
   NSApplication *app = NSApplication.sharedApplication;
   NSDictionary *info = gGameBundle.infoDictionary;
   gameLog(@"NSApplicationMain: principal class %@, main nib %@", info[@"NSPrincipalClass"] ?: @"-", info[@"NSMainNibFile"] ?: @"-");
+  // As AppKit does: the main nib makes its delegate, windows and views, NSApp its owner.
+  NSString *mainNib = [info[@"NSMainNibFile"] isKindOfClass:NSString.class] ? info[@"NSMainNibFile"] : nil;
+  if (mainNib) AKLoadNib(mainNib, gGameBundle, app, NULL);
   if (!app.delegate) {
     Class c = appDelegateClass();
     if (c) {
       app.delegate = [c new];
-      gameLog(@"its app delegate: %s, made directly (nibs aren't loaded here)", class_getName(c));
+      gameLog(@"its app delegate: %s, made directly (its nib didn't make one)", class_getName(c));
     } else {
-      gameLog(@"no app delegate found in it, and its nib can't be loaded here");
+      gameLog(@"no app delegate found in it");
     }
   }
+  // The first pass of its loop, after launch, is where AppKit first displays its windows: an
+  // OpenGL view gets its context there, current on this thread, before any timer fires.
+  CFRunLoopPerformBlock(CFRunLoopGetCurrent(), kCFRunLoopCommonModes, ^{ AKPrepareGameOpenGLViews(); });
   [app run];
   return 0;
 }
@@ -1168,7 +1174,8 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     gGameImageCount = 0;
     pthread_mutex_unlock(&gGameLock);
   };
-  void *image = dlopen(program.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+  // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.
+  void *image = dlopen(program.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
   if (!image) {
     NSString *reason = [NSString stringWithFormat:@"it doesn't load: %s", dlerror()];
     undo();

@@ -15,6 +15,7 @@
     "NSCursor",
     "NSMenu",
     "NSMenuItem",
+    "NSNib",
     "NSWorkspace",
     "NSWorkspaceOpenConfiguration",
     "NSRunningApplication",

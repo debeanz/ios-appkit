@@ -29,6 +29,7 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 
 @interface NSView : NSResponder
 - (instancetype)initWithFrame:(NSRect)frame;
+- (instancetype)initWithCoder:(NSCoder *)coder;   // made by a nib
 
 @property (nonatomic, assign) NSRect frame;
 @property (nonatomic, assign) NSRect bounds;

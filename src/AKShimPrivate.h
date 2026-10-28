@@ -150,3 +150,25 @@ unsigned short AKMacKeyCodeForCharacter(unichar c);        // 0xFF when unknown
 NSString *AKCharactersForMacKeyCode(unsigned short code);  // AppKit's characters for non-text keys, or nil
 NSEventModifierFlags AKModifierFlagForHIDUsage(long usage); // 0 unless a modifier key
 SEL AKCommandSelectorForKeyEvent(NSEvent *event);          // NULL when the key types text
+
+// NibLoading.m: Interface Builder nibs (keyed archives and NIBArchive files), loaded as AppKit
+// loads them — objects made, outlets and actions connected, -awakeFromNib sent, windows marked
+// visible at launch shown. `name` is a nib in `bundle` (or a path); the top-level objects are
+// returned in `topLevelObjects` when asked for, else kept alive for good (as AppKit's legacy
+// loading does for MainMenu).
+BOOL AKLoadNib(NSString *name, NSBundle *bundle, id owner, NSArray **topLevelObjects);
+// An archived NSFrame (or NSFrameSize, at the origin) as AppKit numbers it.
+NSRect AKNibDecodeFrame(NSCoder *coder);
+
+@interface NSView (AKShimNib)
+- (void)_ak_applyNibCoder:(NSCoder *)coder;           // NSvFlags, OpenGL resolution, subviews
+- (void)_ak_performOnOwnerThread:(dispatch_block_t)block; // the thread that made the view
+@end
+
+// NSOpenGL.m: a game's OpenGL views as AppKit's first display after launch leaves them: each
+// with its context, current on the game's main thread, and -prepareOpenGL sent once.
+void AKPrepareGameOpenGLViews(void);
+
+@interface NSOpenGLView (AKShimDisplay)
+- (void)_ak_display;   // UIKit asked the view to draw: context current, then -drawRect:
+@end

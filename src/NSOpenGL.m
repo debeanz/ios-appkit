@@ -6,6 +6,7 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/OpenGLMac.h"
 #import <dlfcn.h>
+#import <objc/runtime.h>
 
 static struct {
   CGLError (*choose)(const int32_t *, CGLPixelFormatObj *, AKGLint *);
@@ -62,6 +63,15 @@ static BOOL loadGL(void) {
   // NSOpenGLPFA* and kCGLPFA* are the same numbers.
   if (GL.choose((const int32_t *)attribs, &_pix, NULL) != kCGLNoError || !_pix) return nil;
   return self;
+}
+
+// From a nib: the attributes as archived (NSOpenGLPixelFormatAttribute values, 0-terminated).
+- (instancetype)initWithCoder:(NSCoder *)coder {
+  NSData *data = [coder decodeObjectForKey:@"NSPixelAttributes"];
+  if (![data isKindOfClass:NSData.class] || data.length < sizeof(uint32_t)) return [self initWithAttributes:(const uint32_t[]){ 5, 12, 24, 0 }];
+  NSMutableData *attribs = [data mutableCopy];
+  [attribs increaseLengthBy:sizeof(uint32_t)];
+  return [self initWithAttributes:attribs.bytes];
 }
 
 - (instancetype)initWithCGLPixelFormatObj:(void *)pix {
@@ -194,7 +204,19 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
   return self;
 }
 
-- (instancetype)initWithFrame:(NSRect)frame { return [self initWithFrame:frame pixelFormat:nil]; }
+// Not through -initWithFrame:pixelFormat:, which a game may override: a nib view is set up
+// with this one (NSView's -initWithCoder:), then gets its archived pixel format.
+- (instancetype)initWithFrame:(NSRect)frame {
+  if ((self = [super initWithFrame:frame])) _pixelFormat = [self.class defaultPixelFormat];
+  return self;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)coder {
+  if (!(self = [super initWithCoder:coder])) return nil;
+  NSOpenGLPixelFormat *format = [coder decodeObjectForKey:@"NSPixelFormat"];
+  if ([format isKindOfClass:NSOpenGLPixelFormat.class]) _pixelFormat = format;
+  return self;
+}
 
 // As in AppKit: made when first asked for, then current, and -prepareOpenGL runs once.
 - (NSOpenGLContext *)openGLContext {
@@ -231,4 +253,34 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
 
 - (BOOL)isOpaque { return YES; }
 
+// As AppKit's -lockFocus on an OpenGL view: its context current for the drawing that follows.
+- (void)lockFocus { [self.openGLContext makeCurrentContext]; }
+- (void)unlockFocus {}
+
+- (void)_ak_display {
+  [self.openGLContext makeCurrentContext];
+  [self drawRect:self.bounds];
+}
+
 @end
+
+static void collectOpenGLViews(NSView *view, NSMutableArray<NSOpenGLView *> *into) {
+  if ([view isKindOfClass:NSOpenGLView.class]) [into addObject:(NSOpenGLView *)view];
+  for (NSView *sub in view.subviews) collectOpenGLViews(sub, into);
+}
+
+void AKPrepareGameOpenGLViews(void) {
+  NSMutableArray<NSOpenGLView *> *views = [NSMutableArray array];
+  for (NSWindow *window in NSApp.windows) if (window._ak_gameWindow) collectOpenGLViews(window.contentView, views);
+  NSMutableArray<NSString *> *names = [NSMutableArray array];
+  for (NSOpenGLView *view in views) {
+    NSOpenGLContext *context = view.openGLContext;   // made, current and prepared if it had none
+    [context makeCurrentContext];
+    [view reshape];
+    [names addObject:[NSString stringWithFormat:@"%s %.0fx%.0f%@", class_getName(view.class), view.bounds.size.width,
+                                                view.bounds.size.height, context ? @"" : @" (no context: no pixel format)"]];
+  }
+  if (!views.count) fprintf(stderr, "[AppKitShim] OpenGL: no OpenGL view in its windows yet\n");
+  else fprintf(stderr, "[AppKitShim] OpenGL: its views: %s; a context is %scurrent on its main thread\n",
+               [names componentsJoinedByString:@", "].UTF8String, GL.current && GL.current() ? "" : "NOT ");
+}
