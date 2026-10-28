@@ -188,16 +188,16 @@ static void logImageBases(void) {
 // the patched binaries with unpatched Mac ones). Documents/steam-args.txt, when present,
 // replaces this list (whitespace separated, '#' starts a comment line), so flags such as
 // -steamdeck can be tried without a rebuild; steam-args.example.txt shows the defaults.
-static NSArray<NSString *> *launchArguments(void) {
-  NSArray *defaults = @[ @"-gamepadui", @"-noverifyfiles", @"-norepairfiles", @"-nobootstrapperupdate",
-                         @"-skipinitialbootstrap", @"-inhibitbootstrap", @"-nocrashdialog" ];
-  NSString *example = [docsDir() stringByAppendingPathComponent:@"steam-args.example.txt"];
+// Arguments from Documents/<name>.txt when present (whitespace separated, '#' starts a
+// comment line), else the defaults; <name>.example.txt always shows the defaults.
+static NSArray<NSString *> *argumentsFromFile(NSString *name, NSArray<NSString *> *defaults, NSString *what) {
+  NSString *example = [docsDir() stringByAppendingPathComponent:[name stringByAppendingString:@".example.txt"]];
   NSString *exampleText = [NSString stringWithFormat:
-      @"# Copy to steam-args.txt to replace the launch arguments (one or more per line).\n%@\n",
-      [defaults componentsJoinedByString:@"\n"]];
+      @"# Copy to %@.txt to replace the %@ (one or more per line).\n%@\n",
+      name, what, [defaults componentsJoinedByString:@"\n"]];
   [exampleText writeToFile:example atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-  NSString *custom = [NSString stringWithContentsOfFile:[docsDir() stringByAppendingPathComponent:@"steam-args.txt"]
+  NSString *custom = [NSString stringWithContentsOfFile:[docsDir() stringByAppendingPathComponent:[name stringByAppendingString:@".txt"]]
                                                encoding:NSUTF8StringEncoding error:nil];
   if (!custom) return defaults;
   NSMutableArray *args = [NSMutableArray array];
@@ -207,8 +207,126 @@ static NSArray<NSString *> *launchArguments(void) {
     for (NSString *word in [t componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet])
       if (word.length) [args addObject:word];
   }
-  hostlog(@"using Documents/steam-args.txt");
+  hostlog(@"using Documents/%@.txt", name);
   return args;
+}
+
+// The -cef-* switches are Steam's own: it turns them into the matching Chromium flags on the
+// web helper's command line (no sandbox, no GPU, no crash reporter, no hang watchdog).
+static NSArray<NSString *> *launchArguments(void) {
+  return argumentsFromFile(@"steam-args", @[
+    @"-gamepadui", @"-noverifyfiles", @"-norepairfiles", @"-nobootstrapperupdate",
+    @"-skipinitialbootstrap", @"-inhibitbootstrap", @"-nocrashdialog",
+    @"-cef-disable-sandbox", @"-cef-disable-gpu", @"-cef-disable-gpu-compositing",
+    @"-cef-disable-breakpad", @"-cef-disable-hang-timeouts",
+  ], @"launch arguments");
+}
+
+#pragma mark The web helper, in-process
+
+// Steam draws its interface (Big Picture included) in steamwebhelper — Steam Helper.app, a
+// CEF program — and starts it with tier0's CreateSimpleProcess, which forks and execs. iOS
+// can do neither, so the host points the client's calls to CreateSimpleProcess here, and
+// this runs the helper in-process through the shim (the packager made it a loadable
+// library). Chromium normally splits itself into renderer/GPU/utility processes; here it
+// has to stay in one, which these flags ask for. JavaScript runs without a JIT (V8's
+// interpreter), since iOS only allows generating code under a debugger.
+static NSArray<NSString *> *webHelperArguments(void) {
+  return argumentsFromFile(@"webhelper-args", @[
+    @"--single-process", @"--no-sandbox", @"--no-zygote", @"--in-process-gpu",
+    @"--disable-gpu", @"--disable-gpu-compositing", @"--js-flags=--jitless",
+    @"--use-mock-keychain", @"--disable-features=MachPortRendezvousServer",
+  ], @"extra web helper (CEF) arguments");
+}
+
+typedef pid_t (*AKSpawnInProcessFn)(const char *path, char *const argv[], char *const envp[], const char *cwd);
+typedef int (*AKIsInProcessExecutableFn)(const char *path);
+static AKSpawnInProcessFn gSpawnInProcess;
+static AKIsInProcessExecutableFn gIsInProcess;
+
+// Steam computes the helper's path as <executable dir>/../Frameworks/..., which on a Mac is
+// Contents/Frameworks. The app keeps the client's Frameworks inside client/, so a path that
+// doesn't exist is retried there.
+static NSString *resolveProgram(const char *prog, const char *cwd) {
+  NSString *p = @(prog);
+  if (![p hasPrefix:@"/"]) {
+    NSString *base = (cwd && *cwd) ? @(cwd) : [[NSFileManager defaultManager] currentDirectoryPath];
+    p = [base stringByAppendingPathComponent:p];
+  }
+  p = p.stringByStandardizingPath;
+  if ([[NSFileManager defaultManager] fileExistsAtPath:p]) return p;
+  NSRange r = [p rangeOfString:@"/Frameworks/" options:NSBackwardsSearch];
+  if (r.location != NSNotFound) {
+    NSString *inClient = [[clientDir() stringByAppendingPathComponent:@"Frameworks"]
+                           stringByAppendingPathComponent:[p substringFromIndex:NSMaxRange(r)]];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:inClient]) return inClient;
+  }
+  return p;
+}
+
+// tier0's CreateSimpleProcess(argv-or-command, flags, envp, cwd) -> pid, 0 on failure. Flag
+// 0x8 execs argv directly and 0x10 searches PATH for it; without either, the first argument
+// is a shell command line. 0x20 means "don't start anything".
+static pid_t hostCreateSimpleProcess(char **cmd, unsigned flags, char **envp, const char *cwd) {
+  if (flags & 0x20) return 0;
+  if (!(flags & 0x18)) {
+    hostlog(@"process launch refused (a shell command; iOS can't run one): %s", (const char *)cmd);
+    return 0;
+  }
+  NSMutableString *line = [NSMutableString string];
+  for (int i = 0; cmd[i]; i++) [line appendFormat:@"%s%s", i ? " " : "", cmd[i]];
+  NSString *path = resolveProgram(cmd[0], cwd);
+  if (!gIsInProcess || !gIsInProcess(path.fileSystemRepresentation)) {
+    hostlog(@"process launch refused (not a program the app can run in-process): %@\n    %@", path, line);
+    return 0;
+  }
+  // The helper opens CEF by a path relative to its own directory (through the bundle's
+  // symlinks), so that is its working directory.
+  NSString *dir = path.stringByDeletingLastPathComponent;
+  hostlog(@"starting in-process: %@ (asked for cwd %s)", path, cwd ? cwd : "(none)");
+  pid_t pid = gSpawnInProcess(path.fileSystemRepresentation, cmd, envp, dir.fileSystemRepresentation);
+  if (pid <= 0) hostlog(@"  in-process start failed: %s", strerror(errno));
+  else hostlog(@"  running as pid %d", pid);
+  return pid > 0 ? pid : 0;
+}
+
+static int (*gRebind)(const char *, const char *, void *);
+static int gRedirected;
+
+// Steam loads some of its libraries later (chromehtml, which starts the helper, among them),
+// so redirect each new image's imports as it arrives. dyld also calls this for every image
+// already loaded when the callback is registered.
+static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
+  Dl_info info;
+  if (!dladdr(mh, &info) || !info.dli_fname) return;
+  const char *bundle = [[NSBundle mainBundle] bundlePath].fileSystemRepresentation;
+  if (strncmp(info.dli_fname, bundle, strlen(bundle)) != 0) return;
+  int n = gRebind(info.dli_fname, "CreateSimpleProcess", (void *)hostCreateSimpleProcess);
+  if (n > 0) {
+    gRedirected += n;
+    hostlog(@"  CreateSimpleProcess redirected in %s (%d)", strrchr(info.dli_fname, '/') + 1, n);
+  }
+}
+
+// Point every Steam image's CreateSimpleProcess at the host's, and register the helper's
+// extra arguments with the shim.
+static void installProcessLauncher(void) {
+  gSpawnInProcess = (AKSpawnInProcessFn)dlsym(RTLD_DEFAULT, "AKSpawnInProcess");
+  gIsInProcess = (AKIsInProcessExecutableFn)dlsym(RTLD_DEFAULT, "AKIsInProcessExecutable");
+  int (*rebind)(const char *, const char *, void *) = (int (*)(const char *, const char *, void *))dlsym(RTLD_DEFAULT, "AKRebindSymbol");
+  void (*setExtra)(const char *, const char *const *) = (void (*)(const char *, const char *const *))dlsym(RTLD_DEFAULT, "AKInProcessSetExtraArgs");
+  if (!gSpawnInProcess || !gIsInProcess || !rebind || !setExtra) {
+    hostlog(@"  FAIL  the shim has no in-process launcher; the web helper can't start");
+    return;
+  }
+  NSArray<NSString *> *extra = webHelperArguments();
+  const char **argv = calloc(extra.count + 1, sizeof(char *));
+  for (NSUInteger i = 0; i < extra.count; i++) argv[i] = strdup(extra[i].UTF8String);
+  setExtra("Steam Helper", argv);
+  gRebind = rebind;
+  _dyld_register_func_for_add_image(onImageAdded);
+  hostlog(@"in-process launcher ready: %d CreateSimpleProcess imports redirected so far; web helper gets: %@",
+          gRedirected, [extra componentsJoinedByString:@" "]);
 }
 
 // steam_osx hands SteamDllMainEx a callback the client calls to tick the launcher's own
@@ -320,6 +438,7 @@ static void bringUpClient(void) {
     hostlog(@"--- not launching: a library failed to load ---");
     return;
   }
+  installProcessLauncher();
   hostlog(@"--- all libraries loaded; starting Steam ---");
   launchSteam(steamui, launcher);
 }

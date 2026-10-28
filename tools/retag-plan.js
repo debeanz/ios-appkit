@@ -39,6 +39,14 @@ const MISSING_LIB_RE = /\/lib(cups|bsm)[.\d]*\.dylib$/;
 // asm labels). @rpath resolves against the app's LC_RPATH (added by the packager).
 const SHIM_INSTALL = '@rpath/AppKitShim.framework/AppKitShim';
 
+// Helper programs the app runs in-process (iOS won't launch them as processes): the
+// packager turns each into a loadable library (tools/exec-to-dylib.js) and the shim runs its
+// main() on a thread (src/InProcessExec.m). Steam Helper is steamwebhelper, the CEF program
+// that draws Steam's whole interface, Big Picture included.
+const IN_PROCESS_PROGRAMS = [
+  /^Frameworks\/Steam Helper\.app\/Contents\/MacOS\/Steam Helper$/,
+];
+
 function isMissing(p) {
   if (isInternal(p)) return false;            // bundled Valve/CEF code, resolved in-app
   if (!p.startsWith('/')) return false;        // relative / already rewritten
@@ -85,9 +93,16 @@ function main() {
     if (!arm) { x86only++; plan.push({ file: rel, archs, drop: true, reason: 'x86_64-only, no arm64 slice' }); continue; }
 
     const r = parseSlice(arm.buf);
+    const loadable = r.filetype === 2 && IN_PROCESS_PROGRAMS.some(re => re.test(rel));
     const repoint = [];
     for (const d of r.dylibs) {
       let to = null;
+      // A program run in-process is no longer the process's executable, so its
+      // @executable_path references (CEF, for the helper) must be relative to itself.
+      if (loadable && d.path.startsWith('@executable_path/')) {
+        repoint.push({ from: d.path, to: '@loader_path/' + d.path.slice('@executable_path/'.length), framework: frameworkOf(d.path), weak: d.weak });
+        continue;
+      }
       // The packager flattens every bundled deep framework (Versions/A/... -> top level),
       // so a reference into one (crashhandler -> Breakpad.framework/Versions/A/Breakpad)
       // must lose the Versions/<v>/ part too.
@@ -110,6 +125,7 @@ function main() {
       platform: r.platform,
       thin: archs.includes('x86_64'),
       retag: r.platform === 'macOS',
+      loadable,
       repoint,
     };
     if (r.id) entry.id = r.id;

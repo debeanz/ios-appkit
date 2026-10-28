@@ -96,17 +96,25 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 - (void)activateIgnoringOtherApps:(BOOL)flag { /* single foreground app on iOS */ }
 - (BOOL)setActivationPolicy:(NSApplicationActivationPolicy)policy { return YES; }
 
+// Run loops of threads waiting in -nextEventMatchingMask:, each with the source that wakes
+// it, so a posted event ends the wait at once.
+static NSMutableArray<NSValue *> *gWaiters;   // CFRunLoopSourceRef, paired with its run loop
+static NSMutableArray<NSValue *> *gWaiterLoops;
+
+static void noopPerform(void *info) {}
+
 - (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart {
   @synchronized (_eventQueue) {
     if (atStart) [_eventQueue insertObject:event atIndex:0];
     else [_eventQueue addObject:event];
+    for (NSUInteger i = 0; i < gWaiters.count; i++) {
+      CFRunLoopSourceSignal((CFRunLoopSourceRef)gWaiters[i].pointerValue);
+      CFRunLoopWakeUp((CFRunLoopRef)gWaiterLoops[i].pointerValue);
+    }
   }
 }
 
-- (NSEvent *)nextEventMatchingMask:(NSUInteger)mask
-                         untilDate:(NSDate *)date
-                            inMode:(NSString *)mode
-                           dequeue:(BOOL)dequeue {
+- (NSEvent *)_ak_dequeueMatching:(NSUInteger)mask dequeue:(BOOL)dequeue {
   @synchronized (_eventQueue) {
     for (NSUInteger i = 0; i < _eventQueue.count; i++) {
       NSEvent *e = _eventQueue[i];
@@ -117,6 +125,50 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
     }
   }
   return nil;
+}
+
+// On the main thread the UIKit run loop is already spinning around the caller, so this only
+// takes what is queued. Another thread pumping its own loop (CEF's message loop, run by an
+// in-process helper) gets AppKit's real behaviour: that thread's run loop runs in `mode`
+// until an event arrives or `date` passes, which is what services the work Chromium
+// schedules on it. Without that it would spin without ever running its timers and sources.
+- (NSEvent *)nextEventMatchingMask:(NSUInteger)mask
+                         untilDate:(NSDate *)date
+                            inMode:(NSString *)mode
+                           dequeue:(BOOL)dequeue {
+  NSEvent *e = [self _ak_dequeueMatching:mask dequeue:dequeue];
+  if (e || NSThread.isMainThread) return e;
+
+  CFStringRef cfMode = (__bridge CFStringRef)(mode ?: NSDefaultRunLoopMode);
+  CFRunLoopRef loop = CFRunLoopGetCurrent();
+  // A source of its own keeps the mode from being empty (an empty mode returns at once).
+  static NSMutableDictionary<NSValue *, NSValue *> *sources;
+  CFRunLoopSourceRef src;
+  @synchronized (_eventQueue) {
+    if (!sources) { sources = [NSMutableDictionary dictionary]; gWaiters = [NSMutableArray array]; gWaiterLoops = [NSMutableArray array]; }
+    NSValue *key = [NSValue valueWithPointer:loop];
+    src = (CFRunLoopSourceRef)sources[key].pointerValue;
+    if (!src) {
+      CFRunLoopSourceContext ctx = { .version = 0, .perform = noopPerform };
+      src = CFRunLoopSourceCreate(NULL, 0, &ctx);
+      sources[key] = [NSValue valueWithPointer:src];
+    }
+    [gWaiters addObject:[NSValue valueWithPointer:src]];
+    [gWaiterLoops addObject:key];
+  }
+  CFRunLoopAddSource(loop, src, cfMode);
+
+  NSTimeInterval left = date ? date.timeIntervalSinceNow : 0;
+  while (!(e = [self _ak_dequeueMatching:mask dequeue:dequeue]) && left > 0) {
+    CFRunLoopRunInMode(cfMode, MIN(left, 1.0), true);
+    left = date.timeIntervalSinceNow;
+  }
+
+  @synchronized (_eventQueue) {
+    NSUInteger i = [gWaiters indexOfObject:[NSValue valueWithPointer:src]];
+    if (i != NSNotFound) { [gWaiters removeObjectAtIndex:i]; [gWaiterLoops removeObjectAtIndex:i]; }
+  }
+  return e;
 }
 
 - (void)sendEvent:(NSEvent *)event {

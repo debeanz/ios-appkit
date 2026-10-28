@@ -94,6 +94,12 @@ while read -r b; do
     fi
   fi
 
+  # A helper program the app runs in-process becomes a loadable library (after thinning:
+  # the converter edits a thin arm64 file).
+  if [ "$(jq -r '.loadable // false' <<<"$b")" = "true" ]; then
+    node "$here/exec-to-dylib.js" "$path" || { echo "ERROR: couldn't make $f loadable"; exit 1; }
+  fi
+
   # Every load-command rewrite for this binary in one install_name_tool call (CEF is
   # ~200 MB; one call per rewrite would rewrite it dozens of times). If the batch fails,
   # redo them one by one so the log names the rewrite that broke.
