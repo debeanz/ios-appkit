@@ -30,7 +30,9 @@ missing=0
 for sym in '_OBJC_CLASS_$_NSApplication' '_OBJC_CLASS_$_NSWindow' '_OBJC_CLASS_$_NSView' \
            '_OBJC_CLASS_$_NSEvent' '_NSApp' '_CGDisplayBounds' '_RegisterEventHotKey' \
            '_OBJC_CLASS_$_NSFont' '_OBJC_METACLASS_$_NSFont' '__NSGetExecutablePath'; do
-  if echo "$EXPORTS" | grep -q -- "$sym\$"; then
+  # A here-string, not a pipe: grep -q stops at the first match, and with pipefail the
+  # writer's broken pipe would make a present symbol look missing.
+  if grep -q -- "$sym\$" <<< "$EXPORTS"; then
     echo "  export OK   $sym"
   else
     echo "  MISSING     $sym"; missing=1
