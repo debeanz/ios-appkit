@@ -255,14 +255,15 @@ static NSArray<NSString *> *launchArguments(void) {
 // this runs the helper in-process through the shim (the packager made it a loadable
 // library). Chromium normally splits itself into renderer/GPU/utility processes; here it
 // has to stay in one, which these flags ask for. JavaScript runs without a JIT (V8's
-// interpreter), since iOS only allows generating code under a debugger. Pages render at 2x,
-// not the screen's 3x: Chromium draws every pixel on the CPU here, and 3x is 2.25 times the
-// pixels per frame for text that already looks sharp at 2x on a phone.
+// interpreter), since iOS only allows generating code under a debugger. Pages render at 1.5x,
+// not the screen's 3x: Chromium draws every pixel on the CPU here, so 3x is four times the
+// pixels per frame. 1.5x roughly halves the raster work versus 2x and still reads clearly on
+// a phone; the scale is easy to retune (lower = faster and softer, higher = sharper).
 static NSArray<NSString *> *webHelperArguments(void) {
   return argumentsFromFile(@"webhelper-args", @[
     @"--single-process", @"--no-sandbox", @"--no-zygote", @"--in-process-gpu",
     @"--disable-gpu", @"--disable-gpu-compositing", @"--js-flags=--jitless",
-    @"--force-device-scale-factor=2",
+    @"--force-device-scale-factor=1.5",
     @"--use-mock-keychain", @"--enable-logging=stderr",
   ], @"extra web helper (CEF) arguments");
 }
