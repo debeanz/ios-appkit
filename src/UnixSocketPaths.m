@@ -140,9 +140,13 @@ static void logTransfer(const char *dir, int fd, const void *buf, ssize_t n, int
   if (fd < 0 || fd >= AK_TRACK_MAX || !gTracked[fd]) return;
   if (n < 0 && (err == EAGAIN || err == EINTR)) return;   // nothing happened yet
   gTracked[fd]--;
-  char text[260];
+  // HTTP (the WebSocket upgrade request and the server's answer) is logged whole — its
+  // headers are the point; anything else only as a short sample.
+  char text[1600];
+  size_t limit = 200;
+  if (n >= 5 && (memcmp(buf, "GET ", 4) == 0 || memcmp(buf, "HTTP/", 5) == 0)) limit = sizeof text - 3;
   size_t k = 0;
-  for (ssize_t i = 0; i < n && k < sizeof text - 3; i++) {
+  for (ssize_t i = 0; i < n && k < limit; i++) {
     unsigned char c = ((const unsigned char *)buf)[i];
     if (c == '\r') continue;
     text[k++] = c == '\n' ? '|' : (c >= 32 && c < 127) ? (char)c : '.';
