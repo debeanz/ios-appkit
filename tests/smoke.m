@@ -690,12 +690,12 @@ int main(int argc, const char *argv[]) {
 
     // Steam's web-helper transport (SteamIPC.m): names, events, the shared ring.
     CHECK(AKSteamCRC32("123456789") == 0xCBF43926u, "Steam's object names hash with CRC32");
-    AKSteamEvent *ev = AKSteamEventCreate("AKTest_Event", false, false, true);
-    CHECK(ev && !AKSteamEventWait(ev, 0), "a new event isn't signaled");
-    AKSteamEventSet(ev);
-    AKSteamEventSet(ev);
-    CHECK(AKSteamEventWait(ev, 0) && !AKSteamEventWait(ev, 0), "an auto-reset event wakes one wait, however often it was set");
-    AKSteamEventFree(ev);
+    AKSteamEvent *testEvent = AKSteamEventCreate("AKTest_Event", false, false, true);
+    CHECK(testEvent && !AKSteamEventWait(testEvent, 0), "a new event isn't signaled");
+    AKSteamEventSet(testEvent);
+    AKSteamEventSet(testEvent);
+    CHECK(AKSteamEventWait(testEvent, 0) && !AKSteamEventWait(testEvent, 0), "an auto-reset event wakes one wait, however often it was set");
+    AKSteamEventFree(testEvent);
     AKSteamStream *writer = AKSteamStreamOpen("AKTest_Stream", 0x200, 1000, AKSteamStreamForceCreate);
     AKSteamStream *reader = AKSteamStreamOpen("AKTest_Stream", 0x200, 1000, AKSteamStreamOpenExisting);
     CHECK(writer && reader && AKSteamStreamCreated(writer) && !AKSteamStreamCreated(reader), "a stream is created once and attached to");
