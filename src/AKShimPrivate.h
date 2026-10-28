@@ -19,6 +19,7 @@
 @interface NSView (AKShimPrivate)
 - (void)_setOwningWindow:(NSWindow *)window;
 - (void)_ak_backingDidLayout;
+- (void)_ak_deliverEvent:(NSEvent *)event; // send via NSApp on the thread that owns this view
 @end
 
 // NSAlert.m: the view controller to present UIKit modals from, and a nested run loop that

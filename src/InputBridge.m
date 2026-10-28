@@ -90,7 +90,7 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
                                  timestamp:touch.timestamp windowNumber:w.windowNumber context:nil
                                eventNumber:0 clickCount:MAX(touch.tapCount, 1) pressure:1];
   [e _setWindow:w targetView:target];
-  [NSApp sendEvent:e];
+  [target _ak_deliverEvent:e];
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -125,10 +125,11 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
   NSWindow *w = self.owner.window;
   CGPoint p = [g locationInView:self];
   [NSEvent _setMouseLocation:p];
+  NSView *target = [self _ak_viewAtPoint:p];
   NSEvent *e = [NSEvent mouseEventWithType:NSEventTypeMouseMoved location:p modifierFlags:[NSEvent modifierFlags]
                                  timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
-  [e _setWindow:w targetView:[self _ak_viewAtPoint:p]];
-  [NSApp sendEvent:e];
+  [e _setWindow:w targetView:target];
+  [target _ak_deliverEvent:e];
 }
 
 - (void)_ak_scroll:(UIPanGestureRecognizer *)g {
@@ -145,11 +146,12 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
 
   NSWindow *w = self.owner.window;
   CGPoint p = [g locationInView:self];
+  NSView *target = [self _ak_viewAtPoint:p];
   NSEvent *e = [NSEvent mouseEventWithType:NSEventTypeScrollWheel location:p modifierFlags:[NSEvent modifierFlags]
                                  timestamp:0 windowNumber:w.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
-  [e _setWindow:w targetView:[self _ak_viewAtPoint:p]];
+  [e _setWindow:w targetView:target];
   [e _setDeltaX:now.x - last.x deltaY:now.y - last.y];
-  [NSApp sendEvent:e];
+  [target _ak_deliverEvent:e];
 }
 
 #pragma mark Keyboard
@@ -172,7 +174,7 @@ static char kActiveTouchKey, kRightButtonKey, kRepeatTimerKey, kLastPanKey;
                                timestamp:0 windowNumber:w.windowNumber context:nil
                               characters:chars ?: @"" charactersIgnoringModifiers:raw ?: @""
                                isARepeat:repeat keyCode:code];
-  [NSApp sendEvent:e];
+  [self.owner _ak_deliverEvent:e];
 }
 
 // Hardware keyboard. Handling the press here (without calling super) also stops UIKit from

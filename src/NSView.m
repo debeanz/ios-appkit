@@ -118,6 +118,21 @@ static void AKViewDidMoveToWindow(NSView *view) {
   _applyingLayout = NO;
 }
 
+// Hand an input event to the app on the thread that owns this view. UIKit calls the input
+// methods on the main thread, but Chromium's views (made on its UI thread) trap when touched
+// from any other thread, so the actual -[NSApp sendEvent:] runs on the owner's run loop.
+// Delivery stays in order per loop (CFRunLoopPerformBlock queues), and the event already
+// carries its window and target view, so it routes the same whichever thread sends it.
+- (void)_ak_deliverEvent:(NSEvent *)event {
+  CFRunLoopRef loop = _ownerLoop;
+  if (!loop || loop == CFRunLoopGetCurrent()) {
+    [NSApp sendEvent:event];
+    return;
+  }
+  CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, ^{ [NSApp sendEvent:event]; });
+  CFRunLoopWakeUp(loop);
+}
+
 - (NSRect)bounds { return _backing.bounds; }
 - (void)setBounds:(NSRect)bounds { AKOnMainSync(^{ self->_backing.bounds = bounds; }); }
 
