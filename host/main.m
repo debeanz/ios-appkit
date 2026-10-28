@@ -358,15 +358,36 @@ static void *hostSDLCreatePopupWindow(void *parent, int x, int y, int w, int h, 
   return window;
 }
 
-// The helper paints into this surface; log the first result so a blank screen says why.
+// The helper wraps the window's surface in a software renderer, and a renderer made from a
+// surface has no window, so its frames never reach the screen — on the Mac either. What
+// shows Big Picture is Chromium's own view, which the helper puts inside this window. A
+// window surface would still make SDL stack an opaque, never-drawn Metal layer over that
+// view, so the helper gets an ordinary surface of the window's size instead, one per window.
+#define AK_SDL_PIXELFORMAT_ARGB8888 0x16362004u
+typedef struct { uint32_t flags, format; int w, h; } AKSDLSurfaceHead; // SDL_Surface's first fields
+static void *(*gSDLCreateSurface)(int, int, uint32_t);
+static void (*gSDLDestroySurface)(void *);
+static bool (*gSDLGetWindowSizeInPixels)(void *, int *, int *);
+
 static void *hostSDLGetWindowSurface(void *window) {
-  static int logged;
-  void *surface = gSDLGetWindowSurface(window);
-  if (logged < 2) {
-    logged++;
-    hostlog(@"web helper window surface: %@", surface ? @"ok" : [NSString stringWithFormat:@"failed: %s", gSDLGetError()]);
+  static NSMutableDictionary<NSValue *, NSValue *> *surfaces;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ surfaces = [NSMutableDictionary dictionary]; });
+  int w = 0, h = 0;
+  gSDLGetWindowSizeInPixels(window, &w, &h);
+  if (w <= 0 || h <= 0) return gSDLGetWindowSurface(window);
+  @synchronized(surfaces) {
+    NSValue *key = [NSValue valueWithPointer:window];
+    AKSDLSurfaceHead *surface = (AKSDLSurfaceHead *)surfaces[key].pointerValue;
+    if (surface && (surface->w != w || surface->h != h)) { gSDLDestroySurface(surface); surface = NULL; }
+    if (!surface) {
+      surface = (AKSDLSurfaceHead *)gSDLCreateSurface(w, h, AK_SDL_PIXELFORMAT_ARGB8888);
+      hostlog(@"web helper window surface %dx%d: %@", w, h,
+              surface ? @"offscreen (Chromium's view shows the page)" : [NSString stringWithFormat:@"failed: %s", gSDLGetError()]);
+      if (surface) surfaces[key] = [NSValue valueWithPointer:surface];
+    }
+    return surface;
   }
-  return surface;
 }
 
 static void redirectHelperWindows(const char *image) {
@@ -378,13 +399,18 @@ static void redirectHelperWindows(const char *image) {
   gSDLGetWindowSurface = (__typeof__(gSDLGetWindowSurface))dlsym(RTLD_DEFAULT, "SDL_GetWindowSurface");
   gSDLSetHint = (__typeof__(gSDLSetHint))dlsym(RTLD_DEFAULT, "SDL_SetHint");
   gSDLGetError = (__typeof__(gSDLGetError))dlsym(RTLD_DEFAULT, "SDL_GetError");
+  gSDLCreateSurface = (__typeof__(gSDLCreateSurface))dlsym(RTLD_DEFAULT, "SDL_CreateSurface");
+  gSDLDestroySurface = (__typeof__(gSDLDestroySurface))dlsym(RTLD_DEFAULT, "SDL_DestroySurface");
+  gSDLGetWindowSizeInPixels = (__typeof__(gSDLGetWindowSizeInPixels))dlsym(RTLD_DEFAULT, "SDL_GetWindowSizeInPixels");
   if (!gSDLCreateWindowWithProperties || !gSDLCreatePopupWindow || !gSDLGetWindowSurface || !gSDLGetNumberProperty ||
-      !gSDLSetNumberProperty || !gSDLSetBooleanProperty || !gSDLSetHint || !gSDLGetError) {
+      !gSDLSetNumberProperty || !gSDLSetBooleanProperty || !gSDLSetHint || !gSDLGetError ||
+      !gSDLCreateSurface || !gSDLDestroySurface || !gSDLGetWindowSizeInPixels) {
     hostlog(@"  FAIL  SDL functions for the web helper's windows not found");
     return;
   }
-  // The surface is shown through an SDL renderer; only Metal exists here. And skip SDL's
-  // hunt for a low-power GPU: it asks macOS-only device questions iOS doesn't answer.
+  // If a real window surface is ever made, it presents through an SDL renderer, and only
+  // Metal exists here. And skip SDL's hunt for a low-power GPU: it asks macOS-only device
+  // questions iOS doesn't answer.
   gSDLSetHint("SDL_FRAMEBUFFER_ACCELERATION", "metal");
   gSDLSetHint("SDL_RENDER_METAL_PREFER_LOW_POWER_DEVICE", "0");
   int n = gRebind(image, "SDL_CreateWindowWithProperties", (void *)hostSDLCreateWindowWithProperties)

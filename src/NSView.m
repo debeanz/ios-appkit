@@ -181,6 +181,36 @@ static void AKViewDidMoveToWindow(NSView *view) {
   if (oldWindow != newWindow) AKViewDidMoveToWindow(view);
 }
 
+// NSWindowAbove = 1, NSWindowBelow = -1; with no other view, the top or bottom of the stack.
+// Chromium puts its page view into a window's view tree this way.
+- (void)addSubview:(NSView *)view positioned:(NSInteger)place relativeTo:(NSView *)other {
+  if (!view) return;
+  [self addSubview:view]; // now frontmost
+  if (other && ![_mutableSubviews containsObject:other]) other = nil;
+  if (place > 0 && !other) return;
+  [_mutableSubviews removeObject:view];
+  NSUInteger i = other ? [_mutableSubviews indexOfObject:other] + (place > 0 ? 1 : 0) : 0;
+  [_mutableSubviews insertObject:view atIndex:i];
+  AKOnMainSync(^{
+    if (other && place > 0) [self->_backing insertSubview:view.backing aboveSubview:other.backing];
+    else if (other) [self->_backing insertSubview:view.backing belowSubview:other.backing];
+    else [self->_backing sendSubviewToBack:view.backing];
+  });
+}
+
+- (BOOL)isHiddenOrHasHiddenAncestor {
+  for (NSView *v = self; v; v = v.superview) if (v.hidden) return YES;
+  return NO;
+}
+
+// Keyboard loop, drag and drop, and trackpad touch kinds: nothing on iOS uses them.
+- (void)setNextKeyView:(NSView *)next {}
+- (NSView *)nextKeyView { return nil; }
+- (void)registerForDraggedTypes:(NSArray *)types {}
+- (void)unregisterDraggedTypes {}
+- (NSUInteger)allowedTouchTypes { return 0; }
+- (void)setAllowedTouchTypes:(NSUInteger)types {}
+
 - (void)removeFromSuperview {
   if (!self.superview) return;
   NSWindow *oldWindow = self.window;
