@@ -592,12 +592,16 @@ void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
         CALayer *layer = [CALayer layer];
         layer.opaque = c->opacity != 0;
         layer.contentsGravity = kCAGravityResize;
-        layer.contentsScale = c->scale;
         layer.backgroundColor = UIColor.blackColor.CGColor;
         [view.layer addSublayer:layer];
         c->layer = layer;
       }
     }
+    // Frames drawn below the screen's resolution (a game's 1x window) are scaled up by whole
+    // pixels, kept sharp rather than blurred.
+    CGFloat screenScale = view.window.screen.scale ?: UIScreen.mainScreen.scale;
+    c->layer.contentsScale = c->scale;
+    c->layer.magnificationFilter = c->scale < screenScale ? kCAFilterNearest : kCAFilterLinear;
     measure(c);
   });
   glLog(@"context %p shows in a %dx%d view (%.0fx)", ctx, c->wantedWidth, c->wantedHeight, c->scale);

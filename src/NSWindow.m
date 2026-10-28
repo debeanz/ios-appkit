@@ -125,7 +125,10 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 }
 
 - (NSScreen *)screen { return NSScreen.mainScreen; }
-- (CGFloat)backingScaleFactor { return self.screen.backingScaleFactor; }
+// A game's window is a 1x (non-Retina) one: Mac games of its time size their picture in points
+// (GameMaker drew in a third of a 3x surface), and drawing 9x the pixels cost frames. Core
+// Animation scales what it draws up to the screen.
+- (CGFloat)backingScaleFactor { return _gameWindow ? 1 : self.screen.backingScaleFactor; }
 
 - (void)setStyleMask:(NSWindowStyleMask)styleMask { _styleMask = styleMask | NSWindowStyleMaskFullScreen; }
 - (void)toggleFullScreen:(id)sender { /* already full screen, and can't leave it */ }

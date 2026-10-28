@@ -419,6 +419,11 @@ static void AKOnMainLater(dispatch_block_t block) {
 - (void)displayIfNeeded {}
 - (void)displayRect:(NSRect)rect { [self setNeedsDisplayInRect:rect]; }
 
+// Cursor rectangles: no pointer shapes to show on iOS.
+- (void)addCursorRect:(NSRect)rect cursor:(id)cursor {}
+- (void)removeCursorRect:(NSRect)rect cursor:(id)cursor {}
+- (void)discardCursorRects {}
+
 // Full-screen mode: a game's windows fill the screen from the start (NSWindow.m), so its views
 // are in it already — GameMaker fits its picture to the screen only when they say so.
 - (BOOL)isInFullScreenMode { return self.window._ak_gameWindow; }
@@ -483,7 +488,7 @@ static void AKOnMainLater(dispatch_block_t block) {
 
 - (CGFloat)_ak_backingScale {
   CGFloat s = self.window.backingScaleFactor;
-  return s > 0 ? s : UIScreen.mainScreen.scale;
+  return s > 0 ? s : NSScreen.mainScreen.backingScaleFactor;
 }
 
 - (NSRect)convertRectToBacking:(NSRect)r {

@@ -40,7 +40,8 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
   return b;
 }
 
-- (CGFloat)backingScaleFactor { return _screen.scale; }
+// 1 to a game, as its windows are (NSWindow.m).
+- (CGFloat)backingScaleFactor { return AKIsGameThread() ? 1 : _screen.scale; }
 - (NSInteger)maximumFramesPerSecond { return _screen.maximumFramesPerSecond; }
 
 // EDR (HDR) headroom. These return a CGFloat, which the unimplemented-method fallback
