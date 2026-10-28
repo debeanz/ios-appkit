@@ -232,6 +232,22 @@ static void AKViewDidMoveToWindow(NSView *view) {
   });
 }
 
+// AppKit's getter for `hidden` (the shim's property getter is -hidden).
+- (BOOL)isHidden { return _backing.hidden; }
+
+// AppKit hit testing: `point` is in the superview's coordinates; the answer is the deepest
+// visible view under it, frontmost first, or nil.
+- (NSView *)hitTest:(NSPoint)point {
+  if (_backing.hidden) return nil;
+  NSPoint local = self.superview ? [self convertPoint:point fromView:self.superview] : point;
+  if (!CGRectContainsPoint(self.bounds, local)) return nil;
+  for (NSView *sub in [self.subviews reverseObjectEnumerator]) {
+    NSView *hit = [sub hitTest:local];
+    if (hit) return hit;
+  }
+  return self;
+}
+
 - (BOOL)isHiddenOrHasHiddenAncestor {
   for (NSView *v = self; v; v = v.superview) if (v.hidden) return YES;
   return NO;

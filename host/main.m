@@ -11,7 +11,10 @@
 // of every Steam image), steam-console.log (Steam's stdout/stderr), crash.log (signal or
 // uncaught Objective-C exception with a backtrace) and steam-logs/ (Steam's own logs).
 #import <UIKit/UIKit.h>
+#import <IOSurface/IOSurfaceRef.h>
+#import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
+#import <objc/runtime.h>
 #import <errno.h>
 #import <execinfo.h>
 #import <fcntl.h>
@@ -528,7 +531,60 @@ static void launchSteam(void *steamui, void *launcher) {
 #define HOST_BUILD "local"
 #endif
 
+#pragma mark Is the page reaching the screen?
+
+// Chromium hands each finished page picture to its view as an IOSurface set as a CALayer's
+// contents. Log the first few hand-overs (so a black window says whether frames are made at
+// all), and later dump the whole layer tree (so it says where they went).
+static IMP gSetContents;
+static int gSurfaceFrames;
+
+static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
+  if (contents && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID()) {
+    int n = __atomic_add_fetch(&gSurfaceFrames, 1, __ATOMIC_RELAXED);
+    if (n <= 3) {
+      IOSurfaceRef s = (__bridge IOSurfaceRef)contents;
+      hostlog(@"page frame %d: %zux%zu IOSurface into %@ (bounds %@, superlayer %@) on %@", n,
+              IOSurfaceGetWidth(s), IOSurfaceGetHeight(s), NSStringFromClass(layer.class),
+              NSStringFromCGRect(layer.bounds), layer.superlayer ? NSStringFromClass(layer.superlayer.class) : @"none",
+              NSThread.isMainThread ? @"main" : (NSThread.currentThread.name.length ? NSThread.currentThread.name : @"a thread"));
+    }
+  }
+  ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
+}
+
+static void watchPageFrames(void) {
+  Method m = class_getInstanceMethod(CALayer.class, @selector(setContents:));
+  gSetContents = method_setImplementation(m, (IMP)hostSetContents);
+}
+
+static void dumpLayer(CALayer *l, int depth, int *lines) {
+  if (*lines >= 160 || depth > 16) return;
+  (*lines)++;
+  id c = l.contents;
+  NSString *what = !c ? @"-" : CFGetTypeID((__bridge CFTypeRef)c) == IOSurfaceGetTypeID() ? @"IOSurface"
+                                                                                            : NSStringFromClass([c class]);
+  NSString *pad = [@"" stringByPaddingToLength:(NSUInteger)depth * 2 withString:@" " startingAtIndex:0];
+  CGColorRef bg = l.backgroundColor;
+  hostlog(@"%@%@ %@ frame=%@%@ opacity=%.2f bg=%@ contents=%@%@", pad, NSStringFromClass(l.class),
+          l.delegate ? NSStringFromClass([(NSObject *)l.delegate class]) : @"",
+          NSStringFromCGRect(l.frame), l.hidden ? @" HIDDEN" : @"", l.opacity,
+          bg ? [NSString stringWithFormat:@"a%.2f", CGColorGetAlpha(bg)] : @"-", what,
+          l.geometryFlipped ? @" flipped" : @"");
+  for (CALayer *s in l.sublayers) dumpLayer(s, depth + 1, lines);
+}
+
+static void dumpScreenLayers(void) {
+  int lines = 0;
+  hostlog(@"--- layer tree (%d page frames handed over so far) ---", gSurfaceFrames);
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+    if ([scene isKindOfClass:UIWindowScene.class])
+      for (UIWindow *w in ((UIWindowScene *)scene).windows) dumpLayer(w.layer, 0, &lines);
+  hostlog(@"--- end of layer tree ---");
+}
+
 static void bringUpClient(void) {
+  watchPageFrames();
   hostlog(@"Steam-on-iOS host starting — build %s", HOST_BUILD);
   hostlog(@"bundle: %@", [[NSBundle mainBundle] bundlePath]);
   hostlog(@"loaded images at start: %u", _dyld_image_count());
@@ -622,6 +678,7 @@ static void bringUpClient(void) {
   __block int beats = 0;
   NSTimer *heartbeat = [NSTimer timerWithTimeInterval:10 repeats:YES block:^(NSTimer *t) {
     hostlog(@"main thread turning (%ds)", (++beats) * 10);
+    if (beats == 2) dumpScreenLayers(); // Big Picture has been up for ~10s by now
     if (beats >= 3) [t invalidate];
   }];
   [NSRunLoop.mainRunLoop addTimer:heartbeat forMode:NSRunLoopCommonModes];
