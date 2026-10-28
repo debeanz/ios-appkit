@@ -379,8 +379,14 @@ static void launchSteam(void *steamui, void *launcher) {
   if (runOnExit && *runOnExit()) hostlog(@"Steam asked to be relaunched with: %s", runOnExit());
 }
 
+// The commit and time CI built this from (ipa.yml passes it), so a log always says which
+// build produced it.
+#ifndef HOST_BUILD
+#define HOST_BUILD "local"
+#endif
+
 static void bringUpClient(void) {
-  hostlog(@"Steam-on-iOS host starting");
+  hostlog(@"Steam-on-iOS host starting — build %s", HOST_BUILD);
   hostlog(@"bundle: %@", [[NSBundle mainBundle] bundlePath]);
   hostlog(@"loaded images at start: %u", _dyld_image_count());
 

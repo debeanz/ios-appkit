@@ -44,6 +44,12 @@ bash "$here/prepare-client.sh" "$app/client"
 # The iOS host executable is the bundle's main binary.
 cp "$HOST" "$app/Steam"; chmod +x "$app/Steam"
 cp "$repo/host/Info.plist" "$app/Info.plist"
+# A distinct version per CI run, so a sideloader treats each IPA as an update of the app
+# rather than the same build it already has.
+if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+  plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" "$app/Info.plist"
+  echo "  CFBundleVersion $GITHUB_RUN_NUMBER"
+fi
 # Embed the shim frameworks; every binary finds them through an @loader_path rpath here.
 for fw in "$FW_DIR"/*.framework; do
   [ -d "$fw" ] && cp -R "$fw" "$app/Frameworks/" && echo "  embedded Frameworks/$(basename "$fw")"

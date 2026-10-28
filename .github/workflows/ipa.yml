@@ -70,6 +70,7 @@ jobs:
           SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
           xcrun clang -isysroot "$SYSROOT" -target arm64-apple-ios15.0 \
             -fobjc-arc -O2 -Wall -Wno-unused-parameter \
+            -DHOST_BUILD="\"$(git rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%MZ)\"" \
             host/main.m -framework UIKit -framework Foundation \
             -Wl,-rpath,@executable_path/Frameworks \
             -o build/Steam
