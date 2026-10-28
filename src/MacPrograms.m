@@ -28,7 +28,9 @@
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <dlfcn.h>
+#import <fcntl.h>
 #import <limits.h>
+#import <unistd.h>
 #import <mach-o/dyld.h>
 #import <mach-o/fat.h>
 #import <mach-o/loader.h>
@@ -533,6 +535,8 @@ static NSBundle *liveContainerBundle(void) {
 // LiveContainer's OpenSSL is loaded first, by its full path: dyld then matches the reference
 // by install name. If that isn't enough, a link to it is put where ZSign looks, only while
 // ZSign loads.
+static NSString *gSignerApp;   // the LiveContainer .app whose Frameworks hold the signer
+
 static Class zSigner(void) {
   Class signer = NSClassFromString(@"ZSigner");
   if (signer) return signer;
@@ -543,6 +547,7 @@ static Class zSigner(void) {
     NSString *dir = [lc stringByAppendingPathComponent:rel].stringByStandardizingPath;
     NSString *zsign = [dir stringByAppendingPathComponent:@"ZSign.dylib"];
     if (![fm fileExistsAtPath:zsign]) continue;
+    gSignerApp = dir.stringByDeletingLastPathComponent;
     NSString *openssl = [dir stringByAppendingPathComponent:@"OpenSSL.framework"];
     NSString *opensslBinary = [openssl stringByAppendingPathComponent:@"OpenSSL"];
     if ([fm fileExistsAtPath:opensslBinary] && !dlopen(opensslBinary.fileSystemRepresentation, RTLD_GLOBAL))
@@ -566,7 +571,12 @@ static NSString *signFiles(NSArray<NSString *> *paths, NSData *certificate, NSSt
   Class signer = zSigner();
   SEL sel = NSSelectorFromString(@"signMachOPathArr:bundleId:cert:pass:completionHandler:");
   if (!signer || ![signer respondsToSelector:sel]) return @"LiveContainer's signer couldn't be loaded (the lines above say why)";
-  NSString *bundleId = liveContainerBundle().bundleIdentifier ?: @"com.kdt.livecontainer";
+  // The identifier LiveContainer signs its apps with: its own bundle ID, read from its
+  // Info.plist (in a guest, NSBundle may answer with the guest's).
+  NSString *bundleId = [NSDictionary dictionaryWithContentsOfFile:[gSignerApp stringByAppendingPathComponent:@"Info.plist"]][@"CFBundleIdentifier"];
+  if (![bundleId isKindOfClass:NSString.class]) bundleId = liveContainerBundle().bundleIdentifier ?: @"com.kdt.livecontainer";
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ gameLog(@"signing as %@", bundleId); });
   __block BOOL ok = NO;
   __block NSString *failure;
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -602,19 +612,28 @@ static NSDictionary *liveContainerSettingsFile(void) {
   return [NSDictionary dictionaryWithContentsOfURL:[group URLByAppendingPathComponent:plist]];
 }
 
-static NSString *signApp(NSBundle *app, NSArray<NSString *> *ready, NSArray<NSString *> *changed) {
+// The certificate imported into LiveContainer (and its password), or nil: no JIT-less mode.
+static NSData *liveContainerCertificate(NSString **password) {
   NSUserDefaults *lc = liveContainerDefaults();
   NSData *certificate = [lc objectForKey:@"LCCertificateData"];
-  NSString *password = [lc objectForKey:@"LCCertificatePassword"];
+  NSString *pass = [lc objectForKey:@"LCCertificatePassword"];
   if (![certificate isKindOfClass:NSData.class] || !certificate.length) {
     NSDictionary *file = liveContainerSettingsFile();
     certificate = file[@"LCCertificateData"];
-    password = file[@"LCCertificatePassword"];
+    pass = file[@"LCCertificatePassword"];
   }
-  if (![certificate isKindOfClass:NSData.class] || !certificate.length) {
+  if (password) *password = [pass isKindOfClass:NSString.class] ? pass : nil;
+  return [certificate isKindOfClass:NSData.class] && certificate.length ? certificate : nil;
+}
+
+static NSString *signApp(NSBundle *app, NSArray<NSString *> *ready, NSArray<NSString *> *changed) {
+  NSString *password;
+  NSData *certificate = liveContainerCertificate(&password);
+  if (!certificate) {
     // No JIT-less certificate: LiveContainer is running on JIT (before iOS 26), which lets
     // unsigned code load.
-    gameLog(@"no certificate in LiveContainer%@: not signing, loading relies on JIT", lc ? @"" : @" (not running in LiveContainer?)");
+    gameLog(@"no certificate in LiveContainer%@: not signing, loading relies on JIT",
+            liveContainerDefaults() ? @"" : @" (not running in LiveContainer?)");
     return nil;
   }
   NSString *stampPath = [app.bundlePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:kSignedStamp];
@@ -622,10 +641,120 @@ static NSString *signApp(NSBundle *app, NSArray<NSString *> *ready, NSArray<NSSt
   NSString *hash = sha256Hex(certificate);
   NSArray<NSString *> *toSign = [stamp isEqualToString:hash] ? changed : ready;
   if (!toSign.count) return nil;
-  NSString *why = signFiles(toSign, certificate, [password isKindOfClass:NSString.class] ? password : nil);
+  NSString *why = signFiles(toSign, certificate, password);
   if (why) return why;
   [hash writeToFile:stampPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
   return nil;
+}
+
+#pragma mark Checking a signature
+
+static uint32_t be32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return OSSwapBigToHostInt32(v); }
+static uint64_t be64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return OSSwapBigToHostInt64(v); }
+
+// A thin Mach-O's LC_CODE_SIGNATURE (offset and size of its signature), or NO.
+static BOOL signatureRange(const uint8_t *file, size_t length, uint32_t *offset, uint32_t *size) {
+  const struct mach_header_64 *mh = (const void *)file;
+  if (length < sizeof *mh || mh->magic != MH_MAGIC_64 || mh->sizeofcmds > length - sizeof *mh) return NO;
+  const uint8_t *lc = file + sizeof *mh;
+  for (uint32_t i = 0, off = 0; i < mh->ncmds && off + sizeof(struct load_command) <= mh->sizeofcmds; i++) {
+    const struct load_command *c = (const void *)(lc + off);
+    if (!c->cmdsize) break;
+    if (c->cmd == LC_CODE_SIGNATURE) {
+      const struct linkedit_data_command *cs = (const void *)c;
+      *offset = cs->dataoff;
+      *size = cs->datasize;
+      return (uint64_t)cs->dataoff + cs->datasize <= length;
+    }
+    off += c->cmdsize;
+  }
+  return NO;
+}
+
+// What the kernel says of a binary's signature: the two checks dyld makes when it loads it
+// (and LiveContainer makes after it signs), with iOS's own words when library validation
+// refuses it. nil when it's accepted.
+static NSString *kernelVerdict(NSString *path) {
+  NSData *file = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+  uint32_t offset = 0, size = 0;
+  if (!signatureRange(file.bytes, file.length, &offset, &size)) return @"no code signature found in it";
+  int fd = open(path.fileSystemRepresentation, O_RDONLY);
+  if (fd < 0) return [NSString stringWithFormat:@"can't open it (%s)", strerror(errno)];
+  NSString *verdict = nil;
+  fsignatures_t sig;
+  memset(&sig, 0, sizeof sig);
+  sig.fs_file_start = 0;
+  sig.fs_blob_start = (void *)(uintptr_t)offset;
+  sig.fs_blob_size = size;
+  if (fcntl(fd, F_ADDFILESIGS_RETURN, &sig) == -1) {
+    verdict = [NSString stringWithFormat:@"the kernel refuses its signature (%s)", strerror(errno)];
+  } else {
+    char message[512] = "";
+    fchecklv_t lv;
+    memset(&lv, 0, sizeof lv);
+    lv.lv_file_start = 0;
+    lv.lv_error_message_size = sizeof message;
+    lv.lv_error_message = message;
+    if (fcntl(fd, F_CHECK_LV, &lv) != 0)
+      verdict = [NSString stringWithFormat:@"library validation refuses it: %s", message[0] ? message : strerror(errno)];
+  }
+  close(fd);
+  return verdict;
+}
+
+// The signature's parts: each code directory's version, flags, hash type, identifier, team,
+// code limit and executable segment, and the size of the CMS signature.
+static NSString *describeSignature(NSString *path) {
+  NSData *file = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+  uint32_t offset = 0, size = 0;
+  if (!signatureRange(file.bytes, file.length, &offset, &size)) return @"none";
+  const uint8_t *sb = (const uint8_t *)file.bytes + offset;
+  if (size < 12 || be32(sb) != 0xfade0cc0) return @"not a signature superblob";
+  uint32_t count = be32(sb + 8);
+  NSMutableArray<NSString *> *parts = [NSMutableArray array];
+  for (uint32_t i = 0; i < count && 12 + 8 * (i + 1) <= size; i++) {
+    uint32_t type = be32(sb + 12 + 8 * i), at = be32(sb + 16 + 8 * i);
+    if ((uint64_t)at + 8 > size) continue;
+    const uint8_t *b = sb + at;
+    uint32_t magic = be32(b), length = be32(b + 4);
+    if ((uint64_t)at + length > size) continue;
+    if (magic == 0xfade0c02 && length >= 44) {
+      uint32_t version = be32(b + 8), flags = be32(b + 12), identAt = be32(b + 20), limit = be32(b + 32);
+      NSString *ident = identAt < length ? [NSString stringWithUTF8String:(const char *)b + identAt] : nil;
+      NSString *team = @"none";
+      if (version >= 0x20200 && length >= 52) {
+        uint32_t teamAt = be32(b + 48);
+        if (teamAt && teamAt < length) team = [NSString stringWithUTF8String:(const char *)b + teamAt] ?: @"?";
+      }
+      uint64_t execLimit = 0, execFlags = 0;
+      if (version >= 0x20400 && length >= 88) { execLimit = be64(b + 72); execFlags = be64(b + 80); }
+      [parts addObject:[NSString stringWithFormat:@"code directory (slot %#x) v%#x flags %#x hash type %u id %@ team %@ "
+                        @"limit %#x exec segment %#llx flags %#llx", type, version, flags, b[37], ident ?: @"?", team, limit,
+                        execLimit, execFlags]];
+    } else if (magic == 0xfade0b01) {
+      [parts addObject:[NSString stringWithFormat:@"CMS %u bytes", length]];
+    } else if (magic == 0xfade7171 || magic == 0xfade7172) {
+      [parts addObject:[NSString stringWithFormat:@"entitlements %u bytes", length]];
+    }
+  }
+  return [parts componentsJoinedByString:@"; "];
+}
+
+// When iOS refuses a signed game: one of Steam's own libraries, which LiveContainer signed and
+// which loads, signed again here the way the game was. Whether iOS takes that tells this
+// signing apart from what the conversion did to the game.
+static void probeSigning(NSString *home) {
+  NSString *reference = [frameworksDir().stringByDeletingLastPathComponent stringByAppendingPathComponent:@"client/libogg.0.dylib"];
+  gameLog(@"  for comparison, Steam's %@ as LiveContainer signed it: %@", reference.lastPathComponent, describeSignature(reference));
+  NSString *password;
+  NSData *certificate = liveContainerCertificate(&password);
+  NSString *probe = [home stringByAppendingPathComponent:@"signing-probe.dylib"];
+  NSFileManager *fm = NSFileManager.defaultManager;
+  [fm removeItemAtPath:probe error:nil];
+  if (!certificate || ![fm copyItemAtPath:reference toPath:probe error:nil]) return;
+  NSString *why = signFiles(@[ probe ], certificate, password);
+  gameLog(@"  the same library signed here: %@; %@", why ?: (kernelVerdict(probe) ?: @"iOS accepts it"), describeSignature(probe));
+  [fm removeItemAtPath:probe error:nil];
 }
 
 // Every Mach-O in the app converted and signed; nil when the program can run, else why not.
@@ -969,6 +1098,19 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   if (!app || ![NSFileManager.defaultManager fileExistsAtPath:program]) { fail(@"its converted copy has no program"); return -1; }
   why = convertApp(app, program);
   if (why) { fail(why); return -1; }
+  // Signed with LiveContainer's certificate: ask the kernel now, the way dyld will, and on a
+  // refusal log enough to tell why.
+  if (liveContainerCertificate(NULL)) {
+    NSString *refused = kernelVerdict(program);
+    if (refused) {
+      gameLog(@"iOS refuses %@: %@", program.lastPathComponent, refused);
+      gameLog(@"  its signature: %@", describeSignature(program));
+      probeSigning(copy.stringByDeletingLastPathComponent);
+      fail([NSString stringWithFormat:@"iOS refuses its signature (%@)", refused]);
+      return -1;
+    }
+    gameLog(@"iOS accepts its signature");
+  }
   gameLog(@"resources: %@", app.resourcePath ?: @"not found");
   logLibraries(program);
   NSUInteger missing = reportMissingImports(program, app.bundlePath);
