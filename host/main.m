@@ -253,7 +253,7 @@ static NSArray<NSString *> *webHelperArguments(void) {
   return argumentsFromFile(@"webhelper-args", @[
     @"--single-process", @"--no-sandbox", @"--no-zygote", @"--in-process-gpu",
     @"--disable-gpu", @"--disable-gpu-compositing", @"--js-flags=--jitless",
-    @"--use-mock-keychain", @"--disable-features=MachPortRendezvousServer",
+    @"--use-mock-keychain", @"--enable-logging=stderr",
   ], @"extra web helper (CEF) arguments");
 }
 
