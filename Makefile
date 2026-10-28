@@ -72,11 +72,17 @@ test: $(LIB)
 # Install name is @rpath/... so dyld finds it via the LC_RPATH the packager adds to each
 # binary. Exports every global the objects define, including the macOS symbol names the
 # src tags with asm labels; that export set is exactly what package-ipa.sh repoints to.
+# The shim's font class runs as AKShimFont (iOS has an unrelated internal class named NSFont)
+# but is exported under the NSFont class symbols, so a client linking AppKit's NSFont gets it.
+# Single quotes keep the $ in the Objective-C symbol names away from the shell.
+CLASS_ALIASES := '-Wl,-alias,_OBJC_CLASS_$$_AKShimFont,_OBJC_CLASS_$$_NSFont' \
+  '-Wl,-alias,_OBJC_METACLASS_$$_AKShimFont,_OBJC_METACLASS_$$_NSFont'
+
 framework: $(OBJS)
 	mkdir -p $(FRAMEWORK)
 	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/$(SHIM_NAME).framework/$(SHIM_NAME) \
 	  -compatibility_version 1.0 -current_version 1.0 \
-	  $(OBJS) $(SHIM_FRAMEWORKS) -undefined dynamic_lookup \
+	  $(OBJS) $(SHIM_FRAMEWORKS) $(CLASS_ALIASES) -undefined dynamic_lookup \
 	  -o $(FRAMEWORK)/$(SHIM_NAME)
 	sed 's/AppKitShim/$(SHIM_NAME)/g' framework/Info.plist > $(FRAMEWORK)/Info.plist
 	@echo "built $(FRAMEWORK)/$(SHIM_NAME)"

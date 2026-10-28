@@ -43,6 +43,18 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 @property (nonatomic, assign, getter=isKeyWindow, readwrite) BOOL keyWindow;
 @property (nonatomic, weak, readwrite) NSResponder *firstResponder;
 @property (nonatomic, weak) NSView *hoverView;
+// Window chrome and stacking a client configures (VGUI sets all of these on its windows).
+// Every window here is full screen in one UIWindow, so these are recorded, not applied.
+@property (nonatomic, assign) NSInteger level;
+@property (nonatomic, assign) NSUInteger collectionBehavior;
+@property (nonatomic, assign) NSInteger animationBehavior;
+@property (nonatomic, assign, getter=isOpaque) BOOL opaque;
+@property (nonatomic, assign) BOOL hasShadow;
+@property (nonatomic, assign, getter=isMovable) BOOL movable;
+@property (nonatomic, assign, getter=isExcludedFromWindowsMenu) BOOL excludedFromWindowsMenu;
+@property (nonatomic, assign, getter=isReleasedWhenClosed) BOOL releasedWhenClosed;
+@property (nonatomic, assign, getter=isOneShot) BOOL oneShot;
+@property (nonatomic, assign) BOOL cursorRectsDisabled;
 @end
 
 @implementation NSWindow {
@@ -62,6 +74,11 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     _styleMask = style | NSWindowStyleMaskFullScreen;
     _contentView = [[NSView alloc] initWithFrame:(NSRect){{0, 0}, rect.size}];
     [_contentView _setOwningWindow:self];
+    // AppKit's defaults for a new window.
+    _opaque = YES;
+    _hasShadow = YES;
+    _movable = YES;
+    _releasedWhenClosed = YES;
     [NSApplication.sharedApplication _registerWindow:self];
   }
   return self;
@@ -259,5 +276,14 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)center {}
 - (NSWindow *)parentWindow { return nil; }
 - (NSArray<NSWindow *> *)childWindows { return @[]; }
+
+// Stacking within a level: every window is full screen, so "behind the others" still means
+// shown — order it in without taking key status, as AppKit's -orderBack: does.
+- (void)orderBack:(id)sender { if (!self.isVisible) [self orderFront:sender]; }
+
+// Cursor rectangles (the pointer shape per region); recorded so the getter round-trips.
+- (void)disableCursorRects { self.cursorRectsDisabled = YES; }
+- (void)enableCursorRects { self.cursorRectsDisabled = NO; }
+- (BOOL)areCursorRectsEnabled { return !self.cursorRectsDisabled; }
 
 @end
