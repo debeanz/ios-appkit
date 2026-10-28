@@ -592,7 +592,7 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
         removeBrowser(b);
       }
       break;
-    case kAKWHPopupCreated:
+    case kAKWHPopupCreated: {
       // What Steam Helper does on PopupCreated: tell the window. Steam's popup class only
       // renders into a new window once that message arrives (OnMessage "popup-created").
       AKWHLog(YES, @"Steam took window %u (%@) as browser %u", b.index, b.name, browser);
@@ -600,6 +600,7 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
         if (e) AKWHLog(YES, @"window %u: telling it it was created failed: %@", b.index, e.localizedDescription);
       }];
       break;
+    }
     case kAKWHReload: [b.webView reload]; break;
     case kAKWHGoBack: [b.webView goBack]; break;
     case kAKWHGoForward: [b.webView goForward]; break;
