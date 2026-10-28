@@ -528,14 +528,34 @@ static NSBundle *liveContainerBundle(void) {
   return shared ? [NSBundle bundleForClass:shared] : nil;
 }
 
+// ZSign.dylib links @rpath/OpenSSL.framework/OpenSSL, found through @executable_path/Frameworks,
+// which in a guest of LiveContainer is this app's folder, not LiveContainer's. So
+// LiveContainer's OpenSSL is loaded first, by its full path: dyld then matches the reference
+// by install name. If that isn't enough, a link to it is put where ZSign looks, only while
+// ZSign loads.
 static Class zSigner(void) {
   Class signer = NSClassFromString(@"ZSigner");
   if (signer) return signer;
+  NSFileManager *fm = NSFileManager.defaultManager;
   NSString *lc = liveContainerBundle().bundlePath;
-  for (NSString *rel in @[ @"Frameworks/ZSign.dylib", @"../../Frameworks/ZSign.dylib" ]) {
-    NSString *path = [lc stringByAppendingPathComponent:rel].stringByStandardizingPath;
-    if (!lc || ![NSFileManager.defaultManager fileExistsAtPath:path]) continue;
-    if (!dlopen(path.fileSystemRepresentation, RTLD_GLOBAL)) gameLog(@"LiveContainer's signer doesn't load: %s", dlerror());
+  if (!lc) return Nil;
+  for (NSString *rel in @[ @"Frameworks", @"../../Frameworks" ]) {
+    NSString *dir = [lc stringByAppendingPathComponent:rel].stringByStandardizingPath;
+    NSString *zsign = [dir stringByAppendingPathComponent:@"ZSign.dylib"];
+    if (![fm fileExistsAtPath:zsign]) continue;
+    NSString *openssl = [dir stringByAppendingPathComponent:@"OpenSSL.framework"];
+    NSString *opensslBinary = [openssl stringByAppendingPathComponent:@"OpenSSL"];
+    if ([fm fileExistsAtPath:opensslBinary] && !dlopen(opensslBinary.fileSystemRepresentation, RTLD_GLOBAL))
+      gameLog(@"LiveContainer's OpenSSL doesn't load: %s", dlerror());
+    if (!dlopen(zsign.fileSystemRepresentation, RTLD_GLOBAL)) {
+      gameLog(@"LiveContainer's signer doesn't load: %s", dlerror());
+      NSString *link = [frameworksDir() stringByAppendingPathComponent:@"OpenSSL.framework"];
+      if (![fm fileExistsAtPath:link] && [fm createSymbolicLinkAtPath:link withDestinationPath:openssl error:nil]) {
+        if (dlopen(zsign.fileSystemRepresentation, RTLD_GLOBAL)) gameLog(@"LiveContainer's signer loaded through a link to its OpenSSL");
+        else gameLog(@"LiveContainer's signer still doesn't load: %s", dlerror());
+        [fm removeItemAtPath:link error:nil];
+      }
+    }
     if ((signer = NSClassFromString(@"ZSigner"))) return signer;
   }
   return Nil;
@@ -545,7 +565,7 @@ static Class zSigner(void) {
 static NSString *signFiles(NSArray<NSString *> *paths, NSData *certificate, NSString *password) {
   Class signer = zSigner();
   SEL sel = NSSelectorFromString(@"signMachOPathArr:bundleId:cert:pass:completionHandler:");
-  if (!signer || ![signer respondsToSelector:sel]) return @"LiveContainer's signer isn't here (update LiveContainer?)";
+  if (!signer || ![signer respondsToSelector:sel]) return @"LiveContainer's signer couldn't be loaded (the lines above say why)";
   NSString *bundleId = liveContainerBundle().bundleIdentifier ?: @"com.kdt.livecontainer";
   __block BOOL ok = NO;
   __block NSString *failure;
