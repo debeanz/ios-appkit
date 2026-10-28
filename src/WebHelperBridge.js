@@ -353,6 +353,90 @@ function akwhInstall(win, config) {
   builtins['BrowserView.PostMessageToParent'] = (message, args) =>
     tell('browser', 'PostMessageToParent', [String(message), args === undefined ? '' : String(args)]);
 
+  // WebSockets to Steam's own servers on this device (the UI's transport,
+  // ws://localhost:<port>/transportsocket/). WebKit won't open a plain ws:// socket from an
+  // https page (mixed content), and the page has to stay https://steamloopback.host - the
+  // only origin Steam accepts there. So the app opens those sockets itself, with that Origin,
+  // and relays the messages; other WebSockets stay WebKit's.
+  const RealWebSocket = win.WebSocket;
+  const sockets = new Map();
+  let nextSocket = 1;
+  const isLoopbackSocket = (url) => {
+    try {
+      const u = new win.URL(String(url), win.location.href);
+      return u.protocol === 'ws:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+    } catch (e) { return false; }
+  };
+  const bytesToBase64 = (bytes) => {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return win.btoa(s);
+  };
+  class TunneledWebSocket extends win.EventTarget {
+    constructor(url, protocols) {
+      super();
+      this.url = String(url);
+      this.readyState = 0;
+      this.binaryType = 'blob';
+      this.bufferedAmount = 0;
+      this.protocol = '';
+      this.extensions = '';
+      this.onopen = this.onmessage = this.onerror = this.onclose = null;
+      this.id = nextSocket++;
+      sockets.set(this.id, this);
+      const list = protocols == null ? [] : [].concat(protocols).map(String);
+      post({ op: 'ws-open', id: this.id, url: this.url, protocols: list });
+    }
+    send(data) {
+      if (this.readyState === 0) throw new win.DOMException("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.", 'InvalidStateError');
+      if (this.readyState !== 1) return;
+      if (typeof data === 'string') { post({ op: 'ws-send', id: this.id, text: data }); return; }
+      const tag = Object.prototype.toString.call(data);
+      if (tag === '[object Blob]') { data.arrayBuffer().then((buffer) => this.send(buffer)); return; }
+      const bytes = tag === '[object ArrayBuffer]' ? new Uint8Array(data)
+                  : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      post({ op: 'ws-send', id: this.id, data: bytesToBase64(bytes) });
+    }
+    close(code, reason) {
+      if (this.readyState >= 2) return;
+      this.readyState = 2;
+      post({ op: 'ws-close', id: this.id, code: code == null ? 1000 : code, reason: reason == null ? '' : String(reason) });
+    }
+    __fire(type, event) {
+      const handler = this['on' + type];
+      if (typeof handler === 'function') { try { handler.call(this, event); } catch (e) { reportError(e); } }
+      this.dispatchEvent(event);
+    }
+    __deliver(m) {
+      if (m.ev === 'open') {
+        this.readyState = 1;
+        this.protocol = m.protocol || '';
+        this.__fire('open', new win.Event('open'));
+      } else if (m.ev === 'message') {
+        let data = m.text;
+        if (!('text' in m)) data = this.binaryType === 'blob' ? new win.Blob([base64ToBuffer(m.data)]) : base64ToBuffer(m.data);
+        this.__fire('message', new win.MessageEvent('message', { data }));
+      } else if (m.ev === 'error') {
+        this.__fire('error', new win.Event('error'));
+      } else if (m.ev === 'close') {
+        this.readyState = 3;
+        sockets.delete(this.id);
+        this.__fire('close', new win.CloseEvent('close', { code: m.code || 1006, reason: m.reason || '', wasClean: !!m.clean }));
+      }
+    }
+  }
+  const states = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
+  for (const [k, v] of Object.entries(states)) { TunneledWebSocket[k] = v; TunneledWebSocket.prototype[k] = v; }
+  if (RealWebSocket) {
+    const WebSocketShim = function WebSocket(url, protocols) {
+      return isLoopbackSocket(url) ? new TunneledWebSocket(url, protocols)
+                                   : (protocols === undefined ? new RealWebSocket(url) : new RealWebSocket(url, protocols));
+    };
+    for (const [k, v] of Object.entries(states)) WebSocketShim[k] = v;
+    WebSocketShim.prototype = RealWebSocket.prototype;
+    win.WebSocket = WebSocketShim;
+  }
+
   // _internal.ExecutePromise only exists for the original's own promise trick.
   builtins['_internal.ExecutePromise'] = () => { throw new Error('SteamClient._internal.ExecutePromise(): Not expecting promise'); };
 
@@ -383,6 +467,9 @@ function akwhInstall(win, config) {
               if (m.ev === 'can-go-back-forward-changed') { view.canGoBack = !!m.a[0]; view.canGoForward = !!m.a[1]; }
               view.emit(m.ev, m.a || []);
             }
+          } else if (m.t === 'ws') {
+            const socket = sockets.get(m.id);
+            if (socket) socket.__deliver(m);
           } else if (m.t === 'parent-message') {
             for (const fn of Array.from(parentMessageListeners)) fn.apply(null, m.a || []);
           } else if (m.t === 'methods') {

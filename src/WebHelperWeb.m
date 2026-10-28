@@ -19,6 +19,7 @@
 // landscape is about 932x430 points, so popups are zoomed out until that fits.
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 #import "HTMLMessages.h"
 #import "WebHelper.h"
 
@@ -61,6 +62,8 @@ static AKWHWebDelegate *gDelegate;
 static NSDictionary *gPendingOpen;                   // the latest window.open, from the bridge
 static uint64_t gBuildID;
 static unsigned gConsoleLines;
+
+static void closeSockets(AKWHBrowser *b);
 
 #pragma mark Browsers
 
@@ -127,9 +130,21 @@ static AKWHBrowser *newBrowser(uint32_t type, NSString *name) {
   return b;
 }
 
+// WebKit puts a bar (previous/next field, Done) over the keyboard; Steam's interface has its
+// own navigation, so the keyboard comes alone. The keyboard itself follows iOS's rule: a
+// field gets it when tapped, not when a page focuses it by itself.
+static void hideKeyboardBar(void) {
+  Class contentView = NSClassFromString(@"WKContentView");
+  if (!contentView) return;
+  IMP none = imp_implementationWithBlock(^UIView *(id view) { return nil; });
+  if (!class_addMethod(contentView, @selector(inputAccessoryView), none, "@@:"))
+    method_setImplementation(class_getInstanceMethod(contentView, @selector(inputAccessoryView)), none);
+}
+
 static WKWebViewConfiguration *steamConfiguration(void) {
   if (gSteamConfig) return gSteamConfig;
   if (!gDelegate) gDelegate = [AKWHWebDelegate new];
+  hideKeyboardBar();
   WKWebViewConfiguration *c = [WKWebViewConfiguration new];
   c.preferences.javaScriptCanOpenWindowsAutomatically = YES;
   c.allowsInlineMediaPlayback = YES;
@@ -209,6 +224,7 @@ static void removeBrowser(AKWHBrowser *b) {
   for (AKWHBrowser *v in [gBrowsers copy])
     if (v.parent == b) removeBrowser(v);
   AKWHLog(YES, @"browser %u \"%@\" closed", b.index, b.name);
+  closeSockets(b);
   [b.webView stopLoading];
   [b.webView removeFromSuperview];
   b.webView.navigationDelegate = nil;
@@ -257,6 +273,146 @@ static void enqueue(AKWHBrowser *b, NSDictionary *msg) {
   [b.outbox addObject:msg];
   if (first) dispatch_async(dispatch_get_main_queue(), ^{ flush(b); });
 }
+
+#pragma mark WebSockets to Steam on this device
+
+// The bridge hands WebSockets to localhost to the app (WebHelperBridge.js says why). Each is a
+// NSURLSessionWebSocketTask with the Origin Steam accepts; events go back to the page in
+// order, through the same batches as everything else.
+@interface AKWHSocket : NSObject
+@property(nonatomic, weak) AKWHBrowser *browser;
+@property(nonatomic) uint32_t pageId;
+@property(nonatomic, strong) NSURLSessionWebSocketTask *task;
+@property(nonatomic) BOOL closed;
+@end
+@implementation AKWHSocket
+@end
+
+@interface AKWHSocketDelegate : NSObject <NSURLSessionWebSocketDelegate>
+@end
+
+static NSMutableArray<AKWHSocket *> *gSockets;
+static NSURLSession *gSocketSession;
+
+static AKWHSocket *socketForTask(NSURLSessionTask *task) {
+  for (AKWHSocket *s in gSockets) if (s.task == task) return s;
+  return nil;
+}
+
+static AKWHSocket *socketFor(AKWHBrowser *b, uint32_t pageId) {
+  for (AKWHSocket *s in gSockets) if (s.browser == b && s.pageId == pageId) return s;
+  return nil;
+}
+
+static void socketEvent(AKWHSocket *s, NSDictionary *fields) {
+  NSMutableDictionary *m = [fields mutableCopy];
+  m[@"t"] = @"ws";
+  m[@"id"] = @(s.pageId);
+  enqueue(s.browser, m);
+}
+
+static void socketClosed(AKWHSocket *s, NSInteger code, NSString *reason, BOOL clean, BOOL failed) {
+  if (s.closed) return;
+  s.closed = YES;
+  if (failed) socketEvent(s, @{ @"ev": @"error" });
+  socketEvent(s, @{ @"ev": @"close", @"code": @(code), @"reason": reason ?: @"", @"clean": @(clean) });
+  [gSockets removeObject:s];
+}
+
+static void receiveNext(AKWHSocket *s) {
+  NSURLSessionWebSocketTask *task = s.task;
+  [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
+    if (s.closed) return;
+    if (error) {
+      NSInteger code = task.closeCode;
+      socketClosed(s, code ? code : 1006, @"", code != 0, code == 0);
+      return;
+    }
+    if (message.type == NSURLSessionWebSocketMessageTypeString) socketEvent(s, @{ @"ev": @"message", @"text": message.string ?: @"" });
+    else socketEvent(s, @{ @"ev": @"message", @"data": message.data ?: [NSData data] });
+    receiveNext(s);
+  }];
+}
+
+static void openSocket(AKWHBrowser *b, NSDictionary *m) {
+  if (!gSocketSession) {
+    gSockets = [NSMutableArray array];
+    NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
+    config.timeoutIntervalForRequest = 30;
+    gSocketSession = [NSURLSession sessionWithConfiguration:config delegate:[AKWHSocketDelegate new] delegateQueue:NSOperationQueue.mainQueue];
+  }
+  AKWHSocket *s = [AKWHSocket new];
+  s.browser = b;
+  s.pageId = [m[@"id"] unsignedIntValue];
+  // The URL as the page wrote it, so the Host header is what Chromium sends too.
+  NSURL *url = [NSURL URLWithString:m[@"url"] ?: @""];
+  if (!url) { socketClosed(s, 1006, @"", NO, YES); return; }
+  NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+  [request setValue:@"https://steamloopback.host" forHTTPHeaderField:@"Origin"];
+  NSArray *protocols = m[@"protocols"];
+  if ([protocols isKindOfClass:NSArray.class] && protocols.count)
+    [request setValue:[protocols componentsJoinedByString:@", "] forHTTPHeaderField:@"Sec-WebSocket-Protocol"];
+  s.task = [gSocketSession webSocketTaskWithRequest:request];
+  s.task.maximumMessageSize = 64 << 20;
+  [gSockets addObject:s];
+  [s.task resume];
+  receiveNext(s);
+  AKWHLog(YES, @"page %u: WebSocket %u to %@ (through the app)", b.index, s.pageId, url);
+}
+
+static void sendOnSocket(AKWHBrowser *b, NSDictionary *m) {
+  AKWHSocket *s = socketFor(b, [m[@"id"] unsignedIntValue]);
+  if (!s || s.closed) return;
+  NSURLSessionWebSocketMessage *message;
+  if (m[@"text"]) message = [[NSURLSessionWebSocketMessage alloc] initWithString:m[@"text"]];
+  else message = [[NSURLSessionWebSocketMessage alloc] initWithData:[[NSData alloc] initWithBase64EncodedString:m[@"data"] ?: @"" options:0] ?: [NSData data]];
+  [s.task sendMessage:message completionHandler:^(NSError *error) {
+    if (error) AKWHLog(NO, @"page %u: WebSocket %u send failed: %@", s.browser.index, s.pageId, error.localizedDescription);
+  }];
+}
+
+static void closeSocket(AKWHBrowser *b, NSDictionary *m) {
+  AKWHSocket *s = socketFor(b, [m[@"id"] unsignedIntValue]);
+  if (!s || s.closed) return;
+  NSInteger code = [m[@"code"] integerValue] ?: 1000;
+  [s.task cancelWithCloseCode:(NSURLSessionWebSocketCloseCode)code reason:[m[@"reason"] dataUsingEncoding:NSUTF8StringEncoding]];
+  socketClosed(s, code, m[@"reason"], YES, NO);
+}
+
+// A page that goes away (or loads another document) takes its sockets with it.
+static void closeSockets(AKWHBrowser *b) {
+  for (AKWHSocket *s in [gSockets copy]) {
+    if (s.browser != b) continue;
+    s.closed = YES;
+    [s.task cancel];
+    [gSockets removeObject:s];
+  }
+}
+
+@implementation AKWHSocketDelegate
+
+- (void)URLSession:(NSURLSession *)session webSocketTask:(NSURLSessionWebSocketTask *)task didOpenWithProtocol:(NSString *)protocol {
+  AKWHSocket *s = socketForTask(task);
+  if (!s || s.closed) return;
+  AKWHLog(NO, @"page %u: WebSocket %u open", s.browser.index, s.pageId);
+  socketEvent(s, @{ @"ev": @"open", @"protocol": protocol ?: @"" });
+}
+
+- (void)URLSession:(NSURLSession *)session webSocketTask:(NSURLSessionWebSocketTask *)task
+    didCloseWithCode:(NSURLSessionWebSocketCloseCode)code reason:(NSData *)reason {
+  AKWHSocket *s = socketForTask(task);
+  if (!s) return;
+  socketClosed(s, code, reason ? [[NSString alloc] initWithData:reason encoding:NSUTF8StringEncoding] : @"", YES, NO);
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+  AKWHSocket *s = socketForTask(task);
+  if (!s) return;
+  if (error) AKWHLog(YES, @"page %u: WebSocket %u failed: %@", s.browser.index, s.pageId, error.localizedDescription);
+  socketClosed(s, 1006, @"", NO, error != nil);
+}
+
+@end
 
 #pragma mark Steam's interface page
 
@@ -480,6 +636,12 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
   } else if ([op isEqualToString:@"console"]) {
     if (++gConsoleLines <= 5000) AKWHLog(NO, @"[js %u %@] %@", b.index, m[@"level"], m[@"text"]);
     if ([m[@"level"] isEqualToString:@"error"] && gConsoleLines <= 200) AKWHLog(YES, @"page %u error: %@", b.index, m[@"text"]);
+  } else if ([op isEqualToString:@"ws-open"]) {
+    openSocket(b, m);
+  } else if ([op isEqualToString:@"ws-send"]) {
+    sendOnSocket(b, m);
+  } else if ([op isEqualToString:@"ws-close"]) {
+    closeSocket(b, m);
   } else if ([op isEqualToString:@"will-open"]) {
     gPendingOpen = m;
   } else if ([op isEqualToString:@"window"]) {
@@ -613,6 +775,7 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
   AKWHBrowser *b = browserForWebView(webView);
   NSString *url = webView.URL.absoluteString ?: @"";
+  closeSockets(b);   // the previous document's
   if (b.createdBySteam)
     AKWHSend(kAKWHURLChanged, b.handle, @{ @"browser_handle": @(b.handle), @"url": url, @"bNewNavigation": @YES });
   viewEvent(b, @"history-changed", @[ url ]);
