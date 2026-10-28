@@ -180,3 +180,5 @@ void AKPrepareGameOpenGLViews(void);
 // GameHID.m: a game library's IOKit HID imports, answered from GameController (called for each
 // of the game's images as it loads).
 void AKGameBindControllers(const struct mach_header *header, intptr_t slide, const char *name);
+// GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
+void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
