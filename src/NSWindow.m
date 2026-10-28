@@ -106,7 +106,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (NSRect)frame { return _frame; }
 - (void)setFrame:(NSRect)frame {
   _frame = frame;
-  if (!self.visible) _contentView.backingView.frame = (NSRect){{0, 0}, frame.size};
+  if (!self.visible) AKOnMainSync(^{ self->_contentView.backingView.frame = (NSRect){{0, 0}, frame.size}; });
 }
 
 - (NSScreen *)screen { return NSScreen.mainScreen; }
@@ -145,21 +145,23 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 }
 
 - (void)orderFront:(id)sender {
-  UIView *host = AKSharedUIWindow().rootViewController.view;
-  UIView *bv = _contentView.backingView;
-  [bv removeFromSuperview];
-  [host addSubview:bv]; // last added is frontmost, i.e. ordered front
-  // iOS has no menu bar or title bar: a window fills the screen inside the safe area,
-  // which keeps content clear of the notch / Dynamic Island and the home indicator.
-  bv.translatesAutoresizingMaskIntoConstraints = NO;
-  UILayoutGuide *safe = host.safeAreaLayoutGuide;
-  [NSLayoutConstraint activateConstraints:@[
-    [bv.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
-    [bv.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
-    [bv.topAnchor constraintEqualToAnchor:safe.topAnchor],
-    [bv.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
-  ]];
-  bv.alpha = _alphaValue;
+  AKOnMainSync(^{
+    UIView *host = AKSharedUIWindow().rootViewController.view;
+    UIView *bv = self->_contentView.backingView;
+    [bv removeFromSuperview];
+    [host addSubview:bv]; // last added is frontmost, i.e. ordered front
+    // iOS has no menu bar or title bar: a window fills the screen inside the safe area,
+    // which keeps content clear of the notch / Dynamic Island and the home indicator.
+    bv.translatesAutoresizingMaskIntoConstraints = NO;
+    UILayoutGuide *safe = host.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+      [bv.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+      [bv.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+      [bv.topAnchor constraintEqualToAnchor:safe.topAnchor],
+      [bv.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+    ]];
+    bv.alpha = self->_alphaValue;
+  });
   self.visible = YES;
 }
 
@@ -177,14 +179,20 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 
 // Front-to-back position among visible windows (0 = frontmost), as AppKit numbers them.
 - (NSInteger)orderedIndex {
-  NSArray<UIView *> *views = AKSharedUIWindow().rootViewController.view.subviews;
-  NSUInteger i = [views indexOfObject:_contentView.backingView];
-  return i == NSNotFound ? -1 : (NSInteger)(views.count - 1 - i);
+  __block NSInteger index = -1;
+  AKOnMainSync(^{
+    NSArray<UIView *> *views = AKSharedUIWindow().rootViewController.view.subviews;
+    NSUInteger i = [views indexOfObject:self->_contentView.backingView];
+    if (i != NSNotFound) index = (NSInteger)(views.count - 1 - i);
+  });
+  return index;
 }
 
 - (void)orderOut:(id)sender {
-  [_contentView.backingView removeFromSuperview];
-  _contentView.backingView.translatesAutoresizingMaskIntoConstraints = YES;
+  AKOnMainSync(^{
+    [self->_contentView.backingView removeFromSuperview];
+    self->_contentView.backingView.translatesAutoresizingMaskIntoConstraints = YES;
+  });
   self.visible = NO;
   if (self.keyWindow) {
     self.keyWindow = NO;
@@ -198,7 +206,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   [NSApp _unregisterWindow:self];
 }
 
-- (void)setAlphaValue:(CGFloat)a { _alphaValue = a; _contentView.backingView.alpha = a; }
+- (void)setAlphaValue:(CGFloat)a { _alphaValue = a; AKOnMainSync(^{ self->_contentView.backingView.alpha = a; }); }
 
 #pragma mark First responder
 
@@ -220,7 +228,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)_syncUIKitFirstResponder {
   if (!self.keyWindow) return;
   NSView *v = [_firstResponder isKindOfClass:NSView.class] ? (NSView *)_firstResponder : _contentView;
-  [v.backingView becomeFirstResponder];
+  AKOnMainSync(^{ [v.backingView becomeFirstResponder]; });
 }
 
 #pragma mark Event dispatch

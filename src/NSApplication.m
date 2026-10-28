@@ -127,19 +127,46 @@ static void noopPerform(void *info) {}
   return nil;
 }
 
-// On the main thread the UIKit run loop is already spinning around the caller, so this only
-// takes what is queued. Another thread pumping its own loop (CEF's message loop, run by an
-// in-process helper) gets AppKit's real behaviour: that thread's run loop runs in `mode`
-// until an event arrives or `date` passes, which is what services the work Chromium
-// schedules on it. Without that it would spin without ever running its timers and sources.
+void AKOnMainSync(dispatch_block_t block) {
+  if (NSThread.isMainThread) { block(); return; }
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    block();
+    dispatch_semaphore_signal(done);
+  });
+  // The main thread serves this between turns of Steam's loop; a long wait means it is stuck.
+  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) != 0) {
+    fprintf(stderr, "[AppKitShim] %s waiting more than 5s for the main thread to run a UIKit step\n",
+            NSThread.currentThread.name.UTF8String ?: "a thread");
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+  }
+}
+
+// As in AppKit, waiting for an event runs the calling thread's run loop in `mode` until an
+// event arrives or `date` passes — one pass at least, even for a date already past. On the
+// main thread that pass is what lets UIKit draw, take touches and run main-queue work, since
+// Steam's own loop holds the main thread and never returns to UIApplicationMain's. On another
+// thread (CEF's message loop, run by an in-process helper) it services the timers and sources
+// Chromium schedules there.
 - (NSEvent *)nextEventMatchingMask:(NSUInteger)mask
                          untilDate:(NSDate *)date
                             inMode:(NSString *)mode
                            dequeue:(BOOL)dequeue {
   NSEvent *e = [self _ak_dequeueMatching:mask dequeue:dequeue];
-  if (e || NSThread.isMainThread) return e;
+  if (e) return e;
 
   CFStringRef cfMode = (__bridge CFStringRef)(mode ?: NSDefaultRunLoopMode);
+  if (NSThread.isMainThread) {
+    CFRunLoopRunInMode(cfMode, 0, true);
+    if ((e = [self _ak_dequeueMatching:mask dequeue:dequeue])) return e;
+    NSTimeInterval left = date ? date.timeIntervalSinceNow : 0;
+    while (left > 0 && !(e = [self _ak_dequeueMatching:mask dequeue:dequeue])) {
+      CFRunLoopRunInMode(cfMode, MIN(left, 1.0 / 60), true);
+      left = date.timeIntervalSinceNow;
+    }
+    return e;
+  }
+
   CFRunLoopRef loop = CFRunLoopGetCurrent();
   // A source of its own keeps the mode from being empty (an empty mode returns at once).
   static NSMutableDictionary<NSValue *, NSValue *> *sources;

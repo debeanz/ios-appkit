@@ -91,6 +91,12 @@ NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
     if (len) { void *zero = calloc(1, len); [anInvocation setReturnValue:zero]; free(zero); } \
   }
 
+// NSApplication.m: run a UIKit step on the main thread and wait for it. AppKit code runs off
+// the main thread here (the in-process web helper's Chromium UI thread), and UIKit throws
+// when a view in the live hierarchy is changed from another thread. Only the UIKit step
+// moves; the client's own callbacks stay on the thread that made the call.
+void AKOnMainSync(dispatch_block_t block);
+
 // NSEvent.m: local event monitors (+addLocalMonitorForEventsMatchingMask:handler:). NSApp's
 // -sendEvent: passes each event through them first; a handler returning nil swallows it.
 NSEvent *AKRunLocalEventMonitors(NSEvent *event);

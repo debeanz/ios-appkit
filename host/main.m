@@ -42,15 +42,19 @@ static void hostlog(NSString *fmt, ...) {
   NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
   va_end(ap);
   NSLog(@"[host] %@", line);
-  if (!gBuf) gBuf = [NSMutableString string];
-  [gBuf appendFormat:@"%@\n", line];
-  // Flush the whole buffer to disk each time: if the very next call kills the process,
-  // the log up to here is already on disk for pulling off the device.
-  [gBuf writeToFile:logPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  NSString *snapshot;
+  @synchronized([NSMutableString class]) { // threads log at once (Steam's, the web helper's)
+    if (!gBuf) gBuf = [NSMutableString string];
+    [gBuf appendFormat:@"%@\n", line];
+    // Flush the whole buffer to disk each time: if the very next call kills the process,
+    // the log up to here is already on disk for pulling off the device.
+    [gBuf writeToFile:logPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    snapshot = [gBuf copy];
+  }
   // Mirror to screen. The on-disk log above is the reliable record across a crash; this
-  // is the convenience view (it stops updating while Steam holds the main thread).
+  // is the convenience view (Steam's windows cover it once they show).
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (gLog) { gLog.text = gBuf; [gLog scrollRangeToVisible:NSMakeRange(gBuf.length, 0)]; }
+    if (gLog) { gLog.text = snapshot; [gLog scrollRangeToVisible:NSMakeRange(snapshot.length, 0)]; }
   });
 }
 
@@ -583,8 +587,18 @@ static void bringUpClient(void) {
   [self.window makeKeyAndVisible];
 
   // Run the client bring-up off the first runloop tick so the window is up to show logs.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
-                 dispatch_get_main_queue(), ^{ bringUpClient(); });
+  // From a timer, not a main-queue block: Steam's loop never returns, and while a main-queue
+  // block is running the main queue can't run another one, so every later main-queue job
+  // (UIKit work the shim sends over from other threads, this log view) would wait forever.
+  // Called from a timer, the run loop turns Steam's loop makes still drain the queue.
+  [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:NO block:^(NSTimer *t) { bringUpClient(); }];
+  // A heartbeat in the log shows whether the main thread still gets a turn once Steam runs.
+  __block int beats = 0;
+  NSTimer *heartbeat = [NSTimer timerWithTimeInterval:10 repeats:YES block:^(NSTimer *t) {
+    hostlog(@"main thread turning (%ds)", (++beats) * 10);
+    if (beats >= 3) [t invalidate];
+  }];
+  [NSRunLoop.mainRunLoop addTimer:heartbeat forMode:NSRunLoopCommonModes];
   return YES;
 }
 @end

@@ -69,16 +69,20 @@ static void AKViewDidMoveToWindow(NSView *view) {
 }
 
 - (void)setFrameOrigin:(NSPoint)origin {
-  CGRect f = _backing.frame;
-  f.origin = origin;
-  _backing.frame = f;
+  AKOnMainSync(^{
+    CGRect f = self->_backing.frame;
+    f.origin = origin;
+    self->_backing.frame = f;
+  });
 }
 
 - (void)setFrameSize:(NSSize)size {
   if (!_applyingLayout) {
-    CGRect f = _backing.frame;
-    f.size = size;
-    _backing.frame = f;
+    AKOnMainSync(^{
+      CGRect f = self->_backing.frame;
+      f.size = size;
+      self->_backing.frame = f;
+    });
   }
   _lastSize = size;
   [self _ak_layoutLayers];
@@ -96,14 +100,14 @@ static void AKViewDidMoveToWindow(NSView *view) {
 }
 
 - (NSRect)bounds { return _backing.bounds; }
-- (void)setBounds:(NSRect)bounds { _backing.bounds = bounds; }
+- (void)setBounds:(NSRect)bounds { AKOnMainSync(^{ self->_backing.bounds = bounds; }); }
 
 // UIKit is top-left origin, which is AppKit's "flipped". Report that honestly so
 // callers that special-case flipped coordinates compute the right thing.
 - (BOOL)isFlipped { return YES; }
 
 - (BOOL)hidden { return _backing.hidden; }
-- (void)setHidden:(BOOL)h { _backing.hidden = h; }
+- (void)setHidden:(BOOL)h { AKOnMainSync(^{ self->_backing.hidden = h; }); }
 
 - (NSArray<NSView *> *)subviews { return [_mutableSubviews copy]; }
 
@@ -135,16 +139,18 @@ static void AKViewDidMoveToWindow(NSView *view) {
   _hostedLayer = layer;
   if (!layer) return;
   _wantsLayer = YES;
-  if (!_flipLayer) {
-    // macOS layers measure from the bottom-left, iOS layers from the top-left. Hosting the
-    // client's layer inside one flipped container makes every layer below it map to the
-    // screen exactly as it would on the Mac, so Mac code's own flips come out right.
-    _flipLayer = [CALayer layer];
-    _flipLayer.geometryFlipped = YES;
-    [_backing.layer insertSublayer:_flipLayer atIndex:0]; // below subviews, as in AppKit
-  }
-  [_flipLayer addSublayer:layer];
-  [self _ak_layoutLayers];
+  AKOnMainSync(^{
+    if (!self->_flipLayer) {
+      // macOS layers measure from the bottom-left, iOS layers from the top-left. Hosting the
+      // client's layer inside one flipped container makes every layer below it map to the
+      // screen exactly as it would on the Mac, so Mac code's own flips come out right.
+      self->_flipLayer = [CALayer layer];
+      self->_flipLayer.geometryFlipped = YES;
+      [self->_backing.layer insertSublayer:self->_flipLayer atIndex:0]; // below subviews, as in AppKit
+    }
+    [self->_flipLayer addSublayer:layer];
+    [self _ak_layoutLayers];
+  });
 }
 
 - (void)_ak_layoutLayers {
@@ -169,7 +175,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
   view.superview = self;
   view.nextResponder = self;
   [_mutableSubviews addObject:view];
-  [_backing addSubview:view.backing];
+  AKOnMainSync(^{ [self->_backing addSubview:view.backing]; });
 
   [view viewDidMoveToSuperview];
   if (oldWindow != newWindow) AKViewDidMoveToWindow(view);
@@ -187,7 +193,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 - (void)_ak_detachFromSuperview {
   if (!self.superview) return;
-  [_backing removeFromSuperview];
+  AKOnMainSync(^{ [self->_backing removeFromSuperview]; });
   [self.superview.mutableSubviews removeObject:self];
   if (self.nextResponder == self.superview) self.nextResponder = nil;
   self.superview = nil;
@@ -212,8 +218,8 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 #pragma mark Drawing and coordinates
 
-- (void)setNeedsDisplay:(BOOL)flag { if (flag) [_backing setNeedsDisplay]; }
-- (void)setNeedsDisplayInRect:(NSRect)rect { [_backing setNeedsDisplayInRect:rect]; }
+- (void)setNeedsDisplay:(BOOL)flag { if (flag) AKOnMainSync(^{ [self->_backing setNeedsDisplay]; }); }
+- (void)setNeedsDisplayInRect:(NSRect)rect { AKOnMainSync(^{ [self->_backing setNeedsDisplayInRect:rect]; }); }
 - (void)drawRect:(NSRect)dirtyRect { /* override point */ }
 
 // A nil view means window coordinates, which in the shim are the content view's coordinates
@@ -274,7 +280,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
   if (mask & NSViewMaxXMargin)    u |= UIViewAutoresizingFlexibleRightMargin;
   if (mask & NSViewMinYMargin)    u |= UIViewAutoresizingFlexibleTopMargin;
   if (mask & NSViewMaxYMargin)    u |= UIViewAutoresizingFlexibleBottomMargin;
-  _backing.autoresizingMask = u;
+  AKOnMainSync(^{ self->_backing.autoresizingMask = u; });
 }
 
 #pragma mark Text input
