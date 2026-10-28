@@ -118,6 +118,24 @@ int listen(int fd, int backlog) {
   return rc;
 }
 
+// Whether a loopback server ever takes a connection, and on which port.
+int accept(int fd, struct sockaddr *addr, socklen_t *len);
+int accept(int fd, struct sockaddr *addr, socklen_t *len) {
+  int (*real)(int, struct sockaddr *, socklen_t *) = (int (*)(int, struct sockaddr *, socklen_t *))realSym("accept");
+  int rc = real(fd, addr, len);
+  int e = errno;
+  if (!(rc < 0 && (e == EAGAIN || e == EINTR))) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    char host[64];
+    int port;
+    if (getsockname(fd, (struct sockaddr *)&ss, &sl) == 0 && (port = loopbackPort((struct sockaddr *)&ss, host, sizeof host)) >= 0)
+      logOnce("accept", host, port, rc < 0 ? rc : 0, e);
+  }
+  errno = e;
+  return rc;
+}
+
 int bind(int fd, const struct sockaddr *addr, socklen_t len) {
   int (*real)(int, const struct sockaddr *, socklen_t) = (int (*)(int, const struct sockaddr *, socklen_t))realSym("bind");
   struct sockaddr_un local;
@@ -149,9 +167,9 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len) {
     int e = errno;
     char host[64];
     int port;
-    // A non-blocking connect reports EINPROGRESS and fails later; only immediate failures
-    // (Steam's blocking pipe connects) show here.
-    if (rc != 0 && e != EINPROGRESS && (port = loopbackPort(addr, host, sizeof host)) >= 0) logOnce("connect", host, port, rc, e);
+    // Every loopback target is recorded (a non-blocking connect reports EINPROGRESS and only
+    // fails later), so the log shows which port each client actually tries.
+    if ((port = loopbackPort(addr, host, sizeof host)) >= 0) logOnce("connect", host, port, rc, e);
     errno = e;
     return rc;
   }

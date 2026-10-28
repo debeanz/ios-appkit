@@ -158,6 +158,14 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 // even when the app isn't active — on iOS the app is always the active one).
 - (void)orderFrontRegardless { [self orderFront:nil]; }
 
+// NSWindowAbove = 1, NSWindowBelow = -1, NSWindowOut = 0. Windows here stack as subviews of
+// one host view; "above another" is ordering to the front.
+- (void)orderWindow:(NSInteger)place relativeTo:(NSInteger)otherWindowNumber {
+  if (place == 0) [self orderOut:nil];
+  else if (place > 0) [self orderFront:nil];
+  else [self orderBack:nil];
+}
+
 // Front-to-back position among visible windows (0 = frontmost), as AppKit numbers them.
 - (NSInteger)orderedIndex {
   NSArray<UIView *> *views = AKSharedUIWindow().rootViewController.view.subviews;
