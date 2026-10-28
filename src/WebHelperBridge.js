@@ -544,6 +544,23 @@ function akwhInstall(win, config) {
           if (count++ < 60) post({ op: 'console', level: 'focus', text: 'focus -> ' + describe(e.target) });
         }, true);
       }
+      // Videos play in the page: on iPhone a <video> without playsinline opens the full-screen
+      // player, a window over the app that takes every touch (the app also turns that rule
+      // off; this covers a WebKit without the switch).
+      if (root && !root.__akwhInlineVideo && doc.defaultView && doc.defaultView.MutationObserver) {
+        root.__akwhInlineVideo = true;
+        const inline = (v) => { if (!v.hasAttribute('playsinline')) v.setAttribute('playsinline', ''); };
+        Array.prototype.forEach.call(doc.getElementsByTagName('video'), inline);
+        new doc.defaultView.MutationObserver((records) => {
+          for (const r of records) {
+            for (const n of r.addedNodes) {
+              if (n.nodeType !== 1) continue;
+              if (n.tagName === 'VIDEO') inline(n);
+              else if (n.firstElementChild) Array.prototype.forEach.call(n.getElementsByTagName('video'), inline);
+            }
+          }
+        }).observe(root, { childList: true, subtree: true });
+      }
       if (!doc.getElementById('__akwh_style')) {
         const style = doc.createElement('style');
         style.id = '__akwh_style';

@@ -98,6 +98,10 @@ NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
 // moves; the client's own callbacks stay on the thread that made the call.
 void AKOnMainSync(dispatch_block_t block);
 
+// WebHelperWeb.m: the view the Safari-engine web interface lives on (nil with Chromium). It is
+// the app's top layer: NSWindow.m orders windows in below it and leaves UIKit focus to it.
+UIView *AKWHStageView(void);
+
 // CGEvents.m: Quartz's global display points (origin top-left, y down) <-> AppKit screen
 // points (origin bottom-left, y up), as +[NSEvent mouseLocation] reports them.
 CGPoint AKQuartzPointFromAppKit(NSPoint p);

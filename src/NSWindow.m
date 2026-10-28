@@ -149,7 +149,16 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     UIView *host = AKSharedUIWindow().rootViewController.view;
     UIView *bv = self->_contentView.backingView;
     [bv removeFromSuperview];
-    [host addSubview:bv]; // last added is frontmost, i.e. ordered front
+    // Last added is frontmost, i.e. ordered front - but under the Safari engine's interface,
+    // which is the whole UI then: a window there must not cover it or take its touches.
+    UIView *stage = AKWHStageView();
+    if (stage.superview == host) {
+      [host insertSubview:bv belowSubview:stage];
+      static unsigned logged;
+      if (++logged <= 10) fprintf(stderr, "[AppKitShim] window \"%s\" ordered in under the web interface\n", self.title.UTF8String ?: "");
+    } else {
+      [host addSubview:bv];
+    }
     // iOS has no menu bar or title bar: a window fills the whole screen, edge to edge.
     // Mac clients size their content to the screen they're told about (NSScreen is the full
     // display), so insetting the window to the safe area left a bar down one side and cut
@@ -228,6 +237,9 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 // NSView (or the content view, if focus is on something that isn't a view) takes that role.
 - (void)_syncUIKitFirstResponder {
   if (!self.keyWindow) return;
+  // The Safari engine's pages take the keys (and the on-screen keyboard) themselves; a
+  // window here taking UIKit focus would pull it from the page and drop its keyboard.
+  if (AKWHStageView()) return;
   NSView *v = [_firstResponder isKindOfClass:NSView.class] ? (NSView *)_firstResponder : _contentView;
   AKOnMainSync(^{ [v.backingView becomeFirstResponder]; });
 }

@@ -10,14 +10,16 @@
 // popups: SteamClient.BrowserView.CreatePopup gives the URL to open, and the BrowserView
 // object places the page inside its parent window.
 //
-// Here every browser is a WKWebView in the app's window. The shared context's is 1x1 at the
-// back (it must stay in the window, or WebKit stops its timers and animation frames); popups
-// fill the screen, and BrowserViews sit where their parent's script puts them. All of them
-// share one configuration, so the popups belong to the shared context's page (same process,
-// direct access to their documents) and load https through WebHelperLoopback.m. Big Picture
-// lays itself out for at least its window's minwidth/minheight (853x534) CSS pixels; a phone in
-// landscape is about 932x430 points, so popups are zoomed out until that fits.
+// Here every browser is a WKWebView on one stage, the top layer of the app's window. The
+// shared context's is 1x1 at the back (it must stay in the window, or WebKit stops its timers
+// and animation frames); popups fill the screen, and BrowserViews sit where their parent's
+// script puts them. All of them share one configuration, so the popups belong to the shared
+// context's page (same process, direct access to their documents) and load https through
+// WebHelperLoopback.m. Big Picture lays itself out for at least its window's
+// minwidth/minheight (853x534) CSS pixels; a phone in landscape is about 932x430 points, so a
+// popup gets a window that big and its view is scaled down to the screen.
 #import <UIKit/UIKit.h>
+#import <UIKit/UIGestureRecognizerSubclass.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #import "HTMLMessages.h"
@@ -67,10 +69,33 @@ static uint64_t gBuildID;
 static unsigned gConsoleLines;
 
 static void closeSockets(AKWHBrowser *b);
+static void layoutBrowser(AKWHBrowser *b);
+static void watchTouchesAndKeyboard(UIWindow *window);
+static void logWindows(NSString *when);
 
 #pragma mark Browsers
 
-static UIView *hostView(void) {
+// The stage: the web interface is the whole UI in this mode, so it sits above everything the
+// Mac-window layer puts in the app's window (NSWindow.m orders Steam's windows in below it),
+// and nothing there can cover a page or take its touches. Where no web view is, touches go
+// through to what's below.
+@interface AKWHStage : UIView
+@end
+
+@implementation AKWHStage
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+  UIView *hit = [super hitTest:point withEvent:event];
+  return hit == self ? nil : hit;
+}
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  for (AKWHBrowser *b in [gBrowsers copy]) layoutBrowser(b);
+}
+@end
+
+static AKWHStage *gStage;
+
+static UIView *appView(void) {
   for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
     if (![scene isKindOfClass:UIWindowScene.class]) continue;
     for (UIWindow *w in ((UIWindowScene *)scene).windows)
@@ -78,6 +103,23 @@ static UIView *hostView(void) {
   }
   return nil;
 }
+
+// Where the web views go (the stage, made on first use and kept in front).
+static UIView *hostView(void) {
+  UIView *app = appView();
+  if (!app) return nil;
+  if (!gStage) {
+    gStage = [[AKWHStage alloc] initWithFrame:app.bounds];
+    gStage.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    gStage.backgroundColor = UIColor.clearColor;
+    watchTouchesAndKeyboard(app.window);
+  }
+  if (gStage.superview != app) [app addSubview:gStage];
+  else if (app.subviews.lastObject != gStage) [app bringSubviewToFront:gStage];
+  return gStage;
+}
+
+UIView *AKWHStageView(void) { return gStage; }
 
 // The screen in points, landscape.
 static CGSize screenPoints(void) {
@@ -154,13 +196,24 @@ static void hideKeyboardBar(void) {
     method_setImplementation(class_getInstanceMethod(contentView, @selector(inputAccessoryView)), none);
 }
 
+// Videos play in the page. iPhone WebKit otherwise opens every <video> without playsinline in
+// its full-screen player - Steam's don't set it, and the Big Picture intro did - which puts a
+// window over the app that takes every touch. (WebHelperBridge.js also marks videos
+// playsinline, in case this private switch goes away.)
+static void playVideosInline(WKWebViewConfiguration *c) {
+  c.allowsInlineMediaPlayback = YES;
+  c.allowsPictureInPictureMediaPlayback = NO;
+  SEL requires = NSSelectorFromString(@"_setInlineMediaPlaybackRequiresPlaysInlineAttribute:");
+  if ([c respondsToSelector:requires]) ((void (*)(id, SEL, BOOL))[c methodForSelector:requires])(c, requires, NO);
+}
+
 static WKWebViewConfiguration *steamConfiguration(void) {
   if (gSteamConfig) return gSteamConfig;
   if (!gDelegate) gDelegate = [AKWHWebDelegate new];
   hideKeyboardBar();
   WKWebViewConfiguration *c = [WKWebViewConfiguration new];
   c.preferences.javaScriptCanOpenWindowsAutomatically = YES;
-  c.allowsInlineMediaPlayback = YES;
+  playVideosInline(c);
   c.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
   c.websiteDataStore = WKWebsiteDataStore.defaultDataStore;
   c.userContentController = [WKUserContentController new];
@@ -176,7 +229,7 @@ static WKWebViewConfiguration *webConfiguration(void) {
   static WKWebViewConfiguration *c;
   if (c) return c;
   c = [WKWebViewConfiguration new];
-  c.allowsInlineMediaPlayback = YES;
+  playVideosInline(c);
   c.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
   c.websiteDataStore = WKWebsiteDataStore.defaultDataStore;
   c.userContentController = [WKUserContentController new];
@@ -195,7 +248,6 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
     wv.scrollView.bounces = NO;
     wv.scrollView.scrollEnabled = NO;
   }
-  if (@available(iOS 14.0, *)) wv.pageZoom = b.zoom;
   if (@available(iOS 16.4, *)) wv.inspectable = YES;
   // WebKit asks this before a focused field brings up the keyboard (logged, see
   // _webView:decidePolicyForFocusedElement:).
@@ -206,25 +258,35 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
   return wv;
 }
 
-// Where a browser's view goes: popups fill the screen; BrowserViews take their bounds (CSS
-// pixels of the parent window) scaled by the parent's zoom; the shared context stays 1x1.
+// A view showing `frame` of the stage at `scale`: its own size (what the page lays out to) is
+// the frame's divided by the scale.
+static void placeView(UIView *v, CGRect frame, double scale) {
+  v.transform = CGAffineTransformIdentity;
+  v.bounds = CGRectMake(0, 0, frame.size.width / scale, frame.size.height / scale);
+  v.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+  v.transform = CGAffineTransformMakeScale(scale, scale);
+}
+
+// Where a browser's view goes. A window gets its size in CSS pixels (the screen divided by its
+// zoom) and its view is scaled down to fill the screen; WKWebView's pageZoom isn't used
+// because viewport units ignore it (100vw stays the unzoomed width), which left Big Picture
+// stopping short of the screen's right and bottom edges. BrowserViews take their bounds (CSS
+// pixels of the parent window) at the parent's scale; the shared context stays 1x1.
 static void layoutBrowser(AKWHBrowser *b) {
-  UIView *host = hostView();
-  if (!b.webView || !host) return;
+  UIView *stage = hostView();
+  if (!b.webView || !stage) return;
+  b.webView.autoresizingMask = UIViewAutoresizingNone;
   if (b.type == kSharedJSContextType) {
-    b.webView.frame = CGRectMake(0, 0, 1, 1);
-    b.webView.autoresizingMask = UIViewAutoresizingNone;
+    placeView(b.webView, CGRectMake(0, 0, 1, 1), 1);
   } else if (b.viewId) {
     AKWHBrowser *parent = b.parent;
-    CGRect pf = parent.webView ? parent.webView.frame : host.bounds;
+    CGRect pf = parent.webView ? parent.webView.frame : stage.bounds;
     double z = parent ? parent.zoom : b.zoom;
-    b.webView.autoresizingMask = UIViewAutoresizingNone;
-    b.webView.frame = CGRectMake(pf.origin.x + b.cssBounds.origin.x * z, pf.origin.y + b.cssBounds.origin.y * z,
-                                 b.cssBounds.size.width * z, b.cssBounds.size.height * z);
+    placeView(b.webView, CGRectMake(pf.origin.x + b.cssBounds.origin.x * z, pf.origin.y + b.cssBounds.origin.y * z,
+                                    b.cssBounds.size.width * z, b.cssBounds.size.height * z), z);
     b.webView.hidden = !b.viewVisible || b.cssBounds.size.width <= 0 || b.cssBounds.size.height <= 0;
   } else {
-    b.webView.frame = host.bounds;
-    b.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    placeView(b.webView, stage.bounds, b.zoom);
   }
 }
 
@@ -644,6 +706,9 @@ static void windowCall(AKWHBrowser *b, NSString *name, NSDictionary *m) {
   if ([name isEqualToString:@"ShowWindow"] || [name isEqualToString:@"BringToFront"]) {
     b.webView.hidden = NO;
     raiseBrowser(b);
+    // The window in front has the keyboard focus, as on a Mac: its document gets focus (the
+    // window's focus event, document.hasFocus()), which Steam's windows wait for.
+    if (b.type != kSharedJSContextType) [b.webView becomeFirstResponder];
   } else if ([name isEqualToString:@"HideWindow"] || [name isEqualToString:@"Minimize"]) {
     if (b.type != kSharedJSContextType) b.webView.hidden = YES;
   } else if ([name isEqualToString:@"Close"]) {
@@ -790,6 +855,13 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   if (b.parent) raiseBrowser(b.parent);
   AKWHLog(YES, @"%@ %u \"%@\" opened by %u (zoom %.2f): %@", isView ? @"BrowserView popup" : @"window", b.index, name,
           opener.index, b.zoom, url.absoluteString);
+  if (!isView) {
+    uint32_t index = b.index;
+    logWindows([NSString stringWithFormat:@"window %u opened", index]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+      logWindows([NSString stringWithFormat:@"3 s after window %u opened", index]);
+    });
+  }
   if (!isView && opener.knownToSteam) {
     // Steam Helper tells the client about each window a page opens (BrowserView popups
     // aside): browser_handle is the opener, popup_index the new window's handle. Steam then
@@ -921,3 +993,90 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
 }
 
 @end
+
+#pragma mark Where touches and the keyboard go
+
+// For the log: what the first touches land on, every window in the app and what is in front
+// of the stage when a Steam window opens, and what the keyboard comes up and goes away for.
+// A page that doesn't respond to taps, or a keyboard that flickers, then names its cause
+// (a window over the app, a view over the page, focus moving between views).
+
+static NSString *describeView(UIView *v) {
+  NSMutableArray *chain = [NSMutableArray array];
+  for (UIView *u = v; u && chain.count < 6; u = u.superview) {
+    if ([u isKindOfClass:WKWebView.class]) {
+      AKWHBrowser *b = browserForWebView((WKWebView *)u);
+      [chain addObject:[NSString stringWithFormat:@"page %u's web view", b.index]];
+      break;
+    }
+    if (u == gStage) { [chain addObject:@"stage"]; break; }
+    [chain addObject:NSStringFromClass(u.class)];
+  }
+  return chain.count ? [chain componentsJoinedByString:@" in "] : @"nothing";
+}
+
+static void logWindows(NSString *when) {
+  NSMutableArray *lines = [NSMutableArray array];
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if (![scene isKindOfClass:UIWindowScene.class]) continue;
+    for (UIWindow *w in ((UIWindowScene *)scene).windows)
+      [lines addObject:[NSString stringWithFormat:@"%@ level %.0f%@%@ %@", NSStringFromClass(w.class), w.windowLevel,
+                                                  w.hidden ? @" hidden" : @"", w.isKeyWindow ? @" key" : @"",
+                                                  NSStringFromCGRect(w.frame)]];
+  }
+  UIView *app = gStage.superview;
+  NSMutableArray *views = [NSMutableArray array];
+  for (UIView *v in app.subviews)
+    [views addObject:[NSString stringWithFormat:@"%@%@%@", v == gStage ? @"stage" : NSStringFromClass(v.class),
+                                                v.hidden ? @" hidden" : @"", v.alpha < 1 ? [NSString stringWithFormat:@" alpha %.2f", v.alpha] : @""]];
+  AKWHLog(NO, @"%@: windows [%@]; app view, back to front: [%@]", when, [lines componentsJoinedByString:@"; "],
+          [views componentsJoinedByString:@", "]);
+}
+
+@interface AKWHTouchWatcher : UIGestureRecognizer
+@end
+
+@implementation AKWHTouchWatcher
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+  static unsigned logged;
+  UITouch *t = touches.anyObject;
+  if (++logged <= 30) AKWHLog(NO, @"touch at %@ lands on %@", NSStringFromCGPoint([t locationInView:nil]), describeView(t.view));
+  if (logged == 1) logWindows(@"first touch");
+  self.state = UIGestureRecognizerStateFailed;   // only watching
+}
+@end
+
+static __weak UIResponder *gFoundResponder;
+
+@interface UIResponder (AKWHFirstResponder)
+- (void)akwh_reportFirstResponder:(id)sender;
+@end
+
+@implementation UIResponder (AKWHFirstResponder)
+- (void)akwh_reportFirstResponder:(id)sender { gFoundResponder = self; }
+@end
+
+static NSString *firstResponderDescription(void) {
+  gFoundResponder = nil;
+  [UIApplication.sharedApplication sendAction:@selector(akwh_reportFirstResponder:) to:nil from:nil forEvent:nil];
+  UIResponder *r = gFoundResponder;
+  if (!r) return @"nothing";
+  return [r isKindOfClass:UIView.class] ? describeView((UIView *)r) : NSStringFromClass(r.class);
+}
+
+static void watchTouchesAndKeyboard(UIWindow *window) {
+  if (!window) return;
+  AKWHTouchWatcher *watcher = [[AKWHTouchWatcher alloc] initWithTarget:nil action:nil];
+  watcher.cancelsTouchesInView = NO;
+  watcher.delaysTouchesBegan = NO;
+  watcher.delaysTouchesEnded = NO;
+  [window addGestureRecognizer:watcher];
+  static unsigned logged;
+  NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+  [nc addObserverForName:UIKeyboardWillShowNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+    if (++logged <= 60) AKWHLog(NO, @"keyboard up, for %@", firstResponderDescription());
+  }];
+  [nc addObserverForName:UIKeyboardWillHideNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+    if (++logged <= 60) AKWHLog(NO, @"keyboard down; focus now on %@", firstResponderDescription());
+  }];
+}

@@ -599,23 +599,53 @@ static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
   ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
 }
 
-// Where a thread is running right now, as image+offset (and the nearest symbol): Steam's
-// threads have no names, so this is what tells a busy one apart.
+// Where a thread is running right now: its call stack as image+offset (and the nearest
+// symbol). Steam's threads have no names, and a busy one is usually parked in a kernel wait
+// that something keeps waking, so the callers are what tell it apart. The thread is stopped
+// only while its frame pointers are copied (no locks taken then: symbolizing comes after).
 static NSString *threadLocation(thread_act_t thread) {
 #if defined(__arm64__)
+  thread_act_t me = mach_thread_self();
+  mach_port_deallocate(mach_task_self(), me);
+  if (thread == me) return @"the heartbeat itself";
+  pthread_t pt = pthread_from_mach_thread_np(thread);
+  uintptr_t top = pt ? (uintptr_t)pthread_get_stackaddr_np(pt) : 0;
+  uintptr_t bottom = pt ? top - pthread_get_stacksize_np(pt) : 0;
+  uintptr_t frames[16];
+  int n = 0;
+  if (thread_suspend(thread) != KERN_SUCCESS) return @"?";
   arm_thread_state64_t state;
   mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
-  if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) != KERN_SUCCESS) return @"?";
-  NSMutableString *out = [NSMutableString string];
-  uintptr_t addrs[2] = { (uintptr_t)arm_thread_state64_get_pc(state), (uintptr_t)arm_thread_state64_get_lr(state) };
-  for (int i = 0; i < 2; i++) {
-    Dl_info info;
-    if (!dladdr((void *)addrs[i], &info) || !info.dli_fname) { [out appendFormat:@"%@%p", i ? @" < " : @"", (void *)addrs[i]]; continue; }
-    const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
-    [out appendFormat:@"%@%s+0x%lx", i ? @" < " : @"", image, (unsigned long)(addrs[i] - (uintptr_t)info.dli_fbase)];
-    if (info.dli_sname) [out appendFormat:@" (%s)", info.dli_sname];
+  if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
+    frames[n++] = (uintptr_t)arm_thread_state64_get_pc(state);
+    frames[n++] = (uintptr_t)arm_thread_state64_get_lr(state);
+    uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(state);
+    while (n < 16 && top && fp >= bottom && fp + 16 <= top && !(fp & 7)) {
+      uintptr_t next = ((uintptr_t *)fp)[0], ret = ((uintptr_t *)fp)[1];
+      if (!ret) break;
+      frames[n++] = ret;
+      if (next <= fp) break;
+      fp = next;
+    }
   }
-  return out;
+  thread_resume(thread);
+  NSMutableArray<NSString *> *out = [NSMutableArray array];
+  NSString *previous = nil;
+  for (int i = 0; i < n && out.count < 10; i++) {
+    uintptr_t a = frames[i] & 0x0000000fffffffffULL;   // return addresses may carry a pointer signature
+    Dl_info info;
+    NSString *frame;
+    if (!dladdr((void *)a, &info) || !info.dli_fname) {
+      frame = [NSString stringWithFormat:@"%p", (void *)a];
+    } else {
+      const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
+      frame = [NSString stringWithFormat:@"%s+0x%lx", image, (unsigned long)(a - (uintptr_t)info.dli_fbase)];
+      if (info.dli_sname) frame = [frame stringByAppendingFormat:@" (%s)", info.dli_sname];
+    }
+    if (![frame isEqualToString:previous]) [out addObject:frame];
+    previous = frame;
+  }
+  return [out componentsJoinedByString:@" < "];
 #else
   return @"?";
 #endif
