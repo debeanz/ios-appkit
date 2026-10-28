@@ -14,6 +14,9 @@ extern NSNotificationName const NSWorkspaceScreensDidSleepNotification;
 extern NSNotificationName const NSWorkspaceScreensDidWakeNotification;
 extern NSNotificationName const NSWorkspaceWillPowerOffNotification;
 extern NSNotificationName const NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification;
+extern NSNotificationName const NSWorkspaceWillLaunchApplicationNotification;
+extern NSNotificationName const NSWorkspaceDidLaunchApplicationNotification;
+extern NSNotificationName const NSWorkspaceDidTerminateApplicationNotification;
 extern NSString *const NSWorkspaceApplicationKey;
 extern NSString *const NSWorkspaceLaunchConfigurationArguments;
 extern NSString *const NSWorkspaceLaunchConfigurationEnvironment;
@@ -36,6 +39,16 @@ completionHandler:(void (^)(NSRunningApplication *app, NSError *error))completio
 - (BOOL)openFile:(NSString *)fullPath;
 - (BOOL)openFile:(NSString *)fullPath withApplication:(NSString *)appName;
 - (BOOL)selectFile:(NSString *)fullPath inFileViewerRootedAtPath:(NSString *)rootFullPath;
+
+// Launching an app: the Mac games Steam downloads, run in this process (src/MacPrograms.m).
+- (NSRunningApplication *)launchApplicationAtURL:(NSURL *)url
+                                         options:(NSUInteger)options
+                                   configuration:(NSDictionary<NSString *, id> *)configuration
+                                           error:(NSError **)error;
+- (void)openApplicationAtURL:(NSURL *)url
+               configuration:(NSWorkspaceOpenConfiguration *)configuration
+           completionHandler:(void (^)(NSRunningApplication *app, NSError *error))completionHandler;
+- (BOOL)launchApplication:(NSString *)appName;
 
 - (NSURL *)URLForApplicationToOpenURL:(NSURL *)url;
 - (NSURL *)URLForApplicationWithBundleIdentifier:(NSString *)bundleIdentifier;

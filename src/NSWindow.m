@@ -60,7 +60,10 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 @implementation NSWindow {
   NSRect _frame;
   NSInteger _windowNumber;
+  BOOL _gameWindow;   // made by a game Steam started (MacPrograms.m): it goes above Steam's interface
 }
+
+- (BOOL)_ak_gameWindow { return _gameWindow; }
 
 - (instancetype)initWithContentRect:(NSRect)rect
                           styleMask:(NSWindowStyleMask)style
@@ -79,6 +82,7 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     _hasShadow = YES;
     _movable = YES;
     _releasedWhenClosed = YES;
+    _gameWindow = AKGameIsRunning() && (AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0)));
     [NSApplication.sharedApplication _registerWindow:self];
   }
   return self;
@@ -150,9 +154,14 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
     UIView *bv = self->_contentView.backingView;
     [bv removeFromSuperview];
     // Last added is frontmost, i.e. ordered front - but under the Safari engine's interface,
-    // which is the whole UI then: a window there must not cover it or take its touches.
+    // which is the whole UI then: a window there must not cover it or take its touches. A
+    // game's window is the exception: it covers the interface, which stops drawing meanwhile.
     UIView *stage = AKWHStageView();
-    if (stage.superview == host) {
+    if (self->_gameWindow) {
+      [host addSubview:bv];
+      stage.hidden = YES;
+      fprintf(stderr, "[AppKitShim] game window \"%s\" ordered in over the interface\n", self.title.UTF8String ?: "");
+    } else if (stage.superview == host) {
       [host insertSubview:bv belowSubview:stage];
       static unsigned logged;
       if (++logged <= 10) fprintf(stderr, "[AppKitShim] window \"%s\" ordered in under the web interface\n", self.title.UTF8String ?: "");
@@ -238,8 +247,9 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (void)_syncUIKitFirstResponder {
   if (!self.keyWindow) return;
   // The Safari engine's pages take the keys (and the on-screen keyboard) themselves; a
-  // window here taking UIKit focus would pull it from the page and drop its keyboard.
-  if (AKWHStageView()) return;
+  // window here taking UIKit focus would pull it from the page and drop its keyboard. A
+  // game's window covers them and takes the keys.
+  if (AKWHStageView() && !_gameWindow) return;
   NSView *v = [_firstResponder isKindOfClass:NSView.class] ? (NSView *)_firstResponder : _contentView;
   AKOnMainSync(^{ [v.backingView becomeFirstResponder]; });
 }
@@ -344,3 +354,16 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 - (BOOL)areCursorRectsEnabled { return !self.cursorRectsDisabled; }
 
 @end
+
+// A game has ended (MacPrograms.m): its windows go, without telling observers in its code that
+// no longer runs, and Steam's interface is shown again. Main thread.
+void AKGameWindowsClose(void) {
+  for (NSWindow *w in NSApp.windows) {
+    if (!w._ak_gameWindow) continue;
+    [w.contentView.backingView removeFromSuperview];
+    w.visible = NO;
+    w.keyWindow = NO;
+    [NSApp _unregisterWindow:w];
+  }
+  AKWHStageView().hidden = NO;
+}

@@ -102,6 +102,34 @@ void AKOnMainSync(dispatch_block_t block);
 // the app's top layer: NSWindow.m orders windows in below it and leaves UIKit focus to it.
 UIView *AKWHStageView(void);
 
+// InProcessExec.m: programs run in this process as stand-in processes (see there).
+pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[], const char *cwd);
+int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement);
+const char *AKInProcessCurrentPath(void);   // the program this thread is the main thread of, or NULL
+void AKInProcessDetach(pid_t pid);
+void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
+void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig));
+
+// MacPrograms.m: the Mac game Steam started (one at a time), run in this process.
+pid_t AKLaunchMacApplication(NSURL *app, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
+                             NSError **error);
+BOOL AKGameIsRunning(void);
+pid_t AKGamePid(void);
+NSBundle *AKGameBundleForPid(pid_t pid);
+BOOL AKIsGameThread(void);                     // its main thread
+BOOL AKAddressIsInGame(const void *address);   // code of its own
+int AKGameApplicationMain(int argc, const char *argv[]);
+void AKGameNoteRunLoop(void);                  // called on its main thread as it pumps events
+// NSApplication.m, NSWindow.m, NSWorkspace.m: what goes when it ends.
+void AKGameAppEnded(void);
+void AKGameWindowsClose(void);                 // main thread
+void AKGameDidLaunch(pid_t pid);
+void AKGameDidEnd(pid_t pid);
+
+@interface NSWindow (AKShimGame)
+@property (nonatomic, readonly) BOOL _ak_gameWindow;
+@end
+
 // WebHelperWeb.m: a key Steam typed (CGEventPost: its on-screen keyboard, driven by a
 // controller) for the focused page. `text` is what the key types; `command` is the Command
 // modifier. Main thread.

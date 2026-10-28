@@ -1,5 +1,6 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/AKShimInput.h"
+#import <objc/runtime.h>
 #import <os/lock.h>
 
 NSApplication *NSApp = nil;
@@ -71,25 +72,78 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 - (void)_registerWindow:(NSWindow *)w { if (![_mutableWindows containsObject:w]) [_mutableWindows addObject:w]; }
 - (void)_unregisterWindow:(NSWindow *)w { [_mutableWindows removeObject:w]; }
 
+#pragma mark A game's app (MacPrograms.m)
+
+// A Mac game Steam starts runs in this process, its main() on a thread of its own, and uses
+// this same NSApp. On that thread the app is the game's: its own delegate, its own launch
+// (Steam already had its), and an event loop that runs until it quits.
+static id gGameDelegate;
+static BOOL gGameRunning, gGameStopped;
+
+@synthesize delegate = _delegate;
+
+- (id<NSApplicationDelegate>)delegate { return AKIsGameThread() ? gGameDelegate : _delegate; }
+
+- (void)setDelegate:(id<NSApplicationDelegate>)delegate {
+  if (AKIsGameThread()) gGameDelegate = delegate;
+  else _delegate = delegate;
+}
+
+- (BOOL)isRunning { return AKIsGameThread() ? gGameRunning : _running; }
+
+void AKGameAppEnded(void) {
+  gGameDelegate = nil;
+  gGameRunning = gGameStopped = NO;
+}
+
 // The UIKit run loop is already spinning, so -run does not block: it marks the app
 // running and lets control return to UIApplicationMain. Steam calls -run on a thread
 // and pumps events with -nextEventMatchingMask:, which the shim serves from eventQueue.
+// A game's main thread runs AppKit's loop instead: events in, sent on, until -stop:.
 - (void)run {
+  if (AKIsGameThread()) {
+    AKGameNoteRunLoop();
+    if (!gGameRunning) [self finishLaunching];
+    gGameRunning = YES;
+    gGameStopped = NO;
+    while (!gGameStopped) @autoreleasepool {
+      NSEvent *e = [self nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]
+                                        inMode:NSDefaultRunLoopMode dequeue:YES];
+      if (e) [self sendEvent:e];
+    }
+    gGameRunning = NO;
+    return;
+  }
   self.running = YES;
   [self finishLaunching];
 }
 
 - (void)finishLaunching {
+  id<NSApplicationDelegate> delegate = self.delegate;
+  if (AKIsGameThread()) {
+    // The game's delegate only: Steam's observers already had this notification once.
+    NSNotification *will = [NSNotification notificationWithName:@"NSApplicationWillFinishLaunchingNotification" object:self];
+    if ([delegate respondsToSelector:@selector(applicationWillFinishLaunching:)]) [delegate applicationWillFinishLaunching:will];
+    gGameRunning = YES;
+    NSNotification *did = [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self];
+    if ([delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) [delegate applicationDidFinishLaunching:did];
+    return;
+  }
   NSNotification *n = [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self];
-  if ([_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) [_delegate applicationDidFinishLaunching:n];
+  if ([delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) [delegate applicationDidFinishLaunching:n];
   [NSNotificationCenter.defaultCenter postNotification:n];
 }
 
-- (void)stop:(id)sender { self.running = NO; }
+- (void)stop:(id)sender {
+  if (AKIsGameThread()) gGameStopped = YES;
+  else self.running = NO;
+}
 
+// On a game's main thread, exit() ends the game only (InProcessExec.m).
 - (void)terminate:(id)sender {
-  if ([_delegate respondsToSelector:@selector(applicationWillTerminate:)]) {
-    [_delegate applicationWillTerminate:[NSNotification notificationWithName:NSApplicationWillTerminateNotification object:self]];
+  id<NSApplicationDelegate> delegate = self.delegate;
+  if ([delegate respondsToSelector:@selector(applicationWillTerminate:)]) {
+    [delegate applicationWillTerminate:[NSNotification notificationWithName:NSApplicationWillTerminateNotification object:self]];
   }
   exit(0);
 }
@@ -104,7 +158,15 @@ static NSMutableArray<NSValue *> *gWaiterLoops;
 
 static void noopPerform(void *info) {}
 
+// An event a game posted (from its main thread, or code of its own) is for the game's loop;
+// any other is for Steam's. Neither takes the other's.
+static char kGameEventKey;
+
+static BOOL isGameEvent(NSEvent *e) { return objc_getAssociatedObject(e, &kGameEventKey) != nil; }
+
 - (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart {
+  if (AKGameIsRunning() && (AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0))))
+    objc_setAssociatedObject(event, &kGameEventKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   @synchronized (_eventQueue) {
     if (atStart) [_eventQueue insertObject:event atIndex:0];
     else [_eventQueue addObject:event];
@@ -116,9 +178,15 @@ static void noopPerform(void *info) {}
 }
 
 - (NSEvent *)_ak_dequeueMatching:(NSUInteger)mask dequeue:(BOOL)dequeue {
+  BOOL game = AKGameIsRunning(), gameThread = game && AKIsGameThread();
   @synchronized (_eventQueue) {
     for (NSUInteger i = 0; i < _eventQueue.count; i++) {
       NSEvent *e = _eventQueue[i];
+      if (isGameEvent(e) != gameThread) {
+        // Left by a game that has ended: nobody's.
+        if (!game) [_eventQueue removeObjectAtIndex:i--];
+        continue;
+      }
       if (mask & (1UL << e.type)) {
         if (dequeue) [_eventQueue removeObjectAtIndex:i];
         return e;
@@ -193,6 +261,7 @@ void AKOnMainSync(dispatch_block_t block) {
   }
 
   CFRunLoopRef loop = CFRunLoopGetCurrent();
+  AKGameNoteRunLoop();   // a game pumping its events here can be asked to quit through this loop
   // A source of its own keeps the mode from being empty (an empty mode returns at once).
   static NSMutableDictionary<NSValue *, NSValue *> *sources;
   CFRunLoopSourceRef src;
@@ -314,6 +383,7 @@ AK_UNIMPLEMENTED_FORWARDER
 @end
 
 int NSApplicationMain(int argc, const char *argv[]) {
+  if (AKIsGameThread()) return AKGameApplicationMain(argc, argv);
   (void)NSApplication.sharedApplication;
   @autoreleasepool { return UIApplicationMain(argc, (char **)argv, nil, nil); }
 }

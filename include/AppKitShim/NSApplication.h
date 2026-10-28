@@ -14,6 +14,7 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
 
 @protocol NSApplicationDelegate <NSObject>
 @optional
+- (void)applicationWillFinishLaunching:(NSNotification *)note;
 - (void)applicationDidFinishLaunching:(NSNotification *)note;
 - (void)applicationWillTerminate:(NSNotification *)note;
 @end

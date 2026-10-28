@@ -30,6 +30,7 @@
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
+#import <sys/event.h>
 #import <sys/mman.h>
 #import <sys/wait.h>
 #import <unistd.h>
@@ -52,6 +53,7 @@ typedef struct {
   char **envp;
   int (*entry)(int, char **, char **, char **);
   int (*function)(int, char **);   // AKSpawnInProcessFunction's stand-in, instead of entry
+  int detached;                    // nobody waits for it: gone (reaped) as soon as it ends
 } ak_vproc;
 
 static ak_vproc gProcs[AK_VPROC_MAX];
@@ -69,6 +71,15 @@ pid_t AKSpawnInProcessFunction(const char *name, int (*function)(int, char **), 
 int AKIsInProcessExecutable(const char *path);
 void AKInProcessSetExtraArgs(const char *name, const char *const *args);
 int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement);
+pid_t AKInProcessCurrentPid(void);
+const char *AKInProcessCurrentPath(void);
+void AKInProcessDetach(pid_t pid);
+void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
+void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig));
+int kevent(int kq, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents,
+           const struct timespec *timeout);
+int kevent64(int kq, const struct kevent64_s *changelist, int nchanges, struct kevent64_s *eventlist, int nevents,
+             unsigned int flags, const struct timespec *timeout);
 
 int posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa,
                 const posix_spawnattr_t *attr, char *const argv[], char *const envp[]);
@@ -164,13 +175,43 @@ static const struct mach_header_64 *loadedHeader(const char *path) {
   return NULL;
 }
 
+// Told when a stand-in process ends (MacPrograms.m: a game's windows and settings go with it),
+// and of signals sent to one (a game is asked to quit).
+static void (*gExitObserver)(pid_t pid, int status);
+static void (*gSignalObserver)(pid_t pid, int sig);
+
+void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status)) { gExitObserver = observer; }
+void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig)) { gSignalObserver = observer; }
+
+// The stand-in pid and program of the process this thread is the main thread of, or 0/NULL.
+pid_t AKInProcessCurrentPid(void) { return tCurrentProc ? tCurrentProc->pid : 0; }
+const char *AKInProcessCurrentPath(void) { return tCurrentProc ? tCurrentProc->path : NULL; }
+
+static void triggerWatches(pid_t pid, int status);
+
 static void finishProc(ak_vproc *p, int status) {
+  pid_t pid = p->pid;
   pthread_mutex_lock(&gProcLock);
   p->status = status;
   p->running = 0;
+  if (p->detached) p->inUse = 0;
   pthread_cond_broadcast(&gProcExited);
   pthread_mutex_unlock(&gProcLock);
-  shimLog("in-process %s (pid %d) exited with %d", baseName(p->path), p->pid, status);
+  shimLog("in-process %s (pid %d) exited with %d", baseName(p->path), pid, status);
+  triggerWatches(pid, status);
+  if (gExitObserver) gExitObserver(pid, status);
+}
+
+// A process the caller won't waitpid for (Steam starts games through NSWorkspace, as on the
+// Mac, and so never reaps them): it disappears when it ends, so kill(pid, 0) says it's gone.
+void AKInProcessDetach(pid_t pid) {
+  pthread_mutex_lock(&gProcLock);
+  for (int i = 0; i < AK_VPROC_MAX; i++) {
+    if (!gProcs[i].inUse || gProcs[i].pid != pid) continue;
+    gProcs[i].detached = 1;
+    if (!gProcs[i].running) gProcs[i].inUse = 0;
+  }
+  pthread_mutex_unlock(&gProcLock);
 }
 
 static void *procMain(void *arg) {
@@ -303,7 +344,9 @@ pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[],
 
   pthread_attr_t attr;
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 16 * 1024 * 1024);   // a main thread's worth (8 MB) and then some
+  // Generous: a game engine's main thread can recurse deep (CyPort runs Cyberpunk's main on
+  // 64 MB). Only the pages used are ever backed.
+  pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   int rc = pthread_create(&p->thread, &attr, procMain, p);
   pthread_attr_destroy(&attr);
@@ -355,9 +398,160 @@ int kill(pid_t pid, int sig) {
   pthread_mutex_unlock(&gProcLock);
   if (!p) { errno = ESRCH; return -1; }
   // Signal 0 asks "does it exist": yes, until it is reaped. A thread can't be stopped from
-  // outside the way a process can, so other signals are noted and otherwise ignored.
-  if (sig != 0) shimLog("signal %d to in-process pid %d ignored (it can't be stopped from outside)", sig, target);
+  // outside the way a process can; the observer may ask it to end (a game: quit), and other
+  // signals are noted and otherwise ignored.
+  if (sig != 0) {
+    shimLog("signal %d to in-process pid %d%s", sig, target, gSignalObserver ? "" : " ignored (it can't be stopped from outside)");
+    if (gSignalObserver) gSignalObserver(target, sig);
+  }
   return 0;
+}
+
+#pragma mark Watching a stand-in through kqueue
+
+// The Mac client watches the games it starts with kqueue (EVFILT_PROC, NOTE_EXIT), which only
+// knows real processes. A watch on a stand-in becomes a user event on the same queue, under an
+// ident of its own, fired when the stand-in ends and handed back to the caller as the
+// process event it asked for: ident the pid, NOTE_EXIT, and the exit status in data.
+#define AK_KQ_TAG 0x414B000000000000ull
+#define AK_KQ_IDENT(pid) (AK_KQ_TAG | (uint64_t)(uint32_t)(pid))
+#define AK_KQ_IS_OURS(ident) (((uint64_t)(ident) & 0xFFFF000000000000ull) == AK_KQ_TAG)
+
+typedef struct { int inUse; int kq; pid_t pid; int ended; int status; } ak_kwatch;
+static ak_kwatch gWatches[64];
+
+static int isStandInPid(uint64_t ident) { return ident >= AK_VPID_BASE && ident < AK_VPID_BASE + 1000000; }
+
+static int realKevent64(int kq, const struct kevent64_s *ch, int nch, struct kevent64_s *ev, int nev,
+                        unsigned int flags, const struct timespec *t) {
+  return REAL(int (*)(int, const struct kevent64_s *, int, struct kevent64_s *, int, unsigned int, const struct timespec *),
+              kevent64)(kq, ch, nch, ev, nev, flags, t);
+}
+
+static void fireWatch(int kq, pid_t pid) {
+  struct kevent64_s trigger = { .ident = AK_KQ_IDENT(pid), .filter = EVFILT_USER, .fflags = NOTE_TRIGGER };
+  realKevent64(kq, &trigger, 1, NULL, 0, 0, &(struct timespec){ 0, 0 });
+}
+
+static void triggerWatches(pid_t pid, int status) {
+  int kqs[64], n = 0;
+  pthread_mutex_lock(&gProcLock);
+  for (int i = 0; i < 64; i++) {
+    if (!gWatches[i].inUse || gWatches[i].pid != pid) continue;
+    gWatches[i].ended = 1;
+    gWatches[i].status = status;
+    kqs[n++] = gWatches[i].kq;
+  }
+  pthread_mutex_unlock(&gProcLock);
+  for (int i = 0; i < n; i++) fireWatch(kqs[i], pid);
+}
+
+// One change from the caller's list, rewritten in place if it watches a stand-in. Returns the
+// pid to fire for at once (it already ended), else 0.
+static pid_t rewriteChange(int kq, uint64_t *ident, int16_t *filter, uint16_t *flags, uint32_t *fflags, int64_t *data) {
+  if (*filter != EVFILT_PROC || !isStandInPid(*ident)) return 0;
+  pid_t pid = (pid_t)*ident;
+  pid_t fireNow = 0;
+  pthread_mutex_lock(&gProcLock);
+  ak_vproc *p = findProc(pid);
+  int slot = -1;
+  for (int i = 0; i < 64; i++) if (gWatches[i].inUse && gWatches[i].kq == kq && gWatches[i].pid == pid) slot = i;
+  if (*flags & EV_ADD) {
+    if (slot < 0) for (int i = 0; i < 64; i++) if (!gWatches[i].inUse) { slot = i; break; }
+    if (slot >= 0) {
+      int ended = !p || !p->running;
+      gWatches[slot] = (ak_kwatch){ 1, kq, pid, ended, p ? p->status : 0 };
+      if (ended) fireNow = pid;
+    }
+  } else if ((*flags & EV_DELETE) && slot >= 0) {
+    gWatches[slot].inUse = 0;
+  }
+  pthread_mutex_unlock(&gProcLock);
+  static int logged;
+  if (++logged <= 10) shimLog("kqueue watch on in-process pid %d (flags 0x%x, fflags 0x%x)", pid, *flags, *fflags);
+  *ident = AK_KQ_IDENT(pid);
+  *filter = EVFILT_USER;
+  *flags = (*flags & (EV_ADD | EV_DELETE | EV_ENABLE | EV_DISABLE | EV_ONESHOT | EV_RECEIPT | EV_DISPATCH)) | EV_CLEAR;
+  *fflags = NOTE_FFNOP;
+  *data = 0;
+  return fireNow;
+}
+
+// A delivered event, turned back into the process event the caller registered.
+static void restoreEvent(int kq, uint64_t *ident, int16_t *filter, uint16_t *flags, uint32_t *fflags, int64_t *data) {
+  if (*filter != EVFILT_USER || !AK_KQ_IS_OURS(*ident)) return;
+  pid_t pid = (pid_t)(*ident & 0xFFFFFFFFu);
+  int status = 0;
+  pthread_mutex_lock(&gProcLock);
+  for (int i = 0; i < 64; i++)
+    if (gWatches[i].inUse && gWatches[i].kq == kq && gWatches[i].pid == pid) { status = gWatches[i].status; gWatches[i].inUse = 0; }
+  pthread_mutex_unlock(&gProcLock);
+  *ident = (uint64_t)pid;
+  *filter = EVFILT_PROC;
+  *flags |= EV_EOF | EV_ONESHOT;
+  *fflags = NOTE_EXIT;
+  *data = (status & 0xff) << 8;   // wait(2) form (NOTE_EXITSTATUS): exited with `status`
+}
+
+int kevent64(int kq, const struct kevent64_s *changelist, int nchanges, struct kevent64_s *eventlist, int nevents,
+             unsigned int flags, const struct timespec *timeout) {
+  struct kevent64_s *changes = NULL;
+  pid_t fire[16];
+  int nfire = 0;
+  for (int i = 0; i < nchanges; i++) {
+    if (changelist[i].filter != EVFILT_PROC || !isStandInPid(changelist[i].ident)) continue;
+    if (!changes) { changes = malloc(sizeof *changes * (size_t)nchanges); memcpy(changes, changelist, sizeof *changes * (size_t)nchanges); }
+    struct kevent64_s *c = &changes[i];
+    pid_t now = rewriteChange(kq, &c->ident, &c->filter, &c->flags, &c->fflags, &c->data);
+    if (now && nfire < 16) fire[nfire++] = now;
+  }
+  int n;
+  if (changes) {
+    // Registered first and on its own, so a stand-in that already ended can fire before the wait.
+    int rc = realKevent64(kq, changes, nchanges, NULL, 0, 0, &(struct timespec){ 0, 0 });
+    free(changes);
+    for (int i = 0; i < nfire; i++) fireWatch(kq, fire[i]);
+    if (rc < 0) return rc;
+    n = nevents ? realKevent64(kq, NULL, 0, eventlist, nevents, flags, timeout) : 0;
+  } else {
+    n = realKevent64(kq, changelist, nchanges, eventlist, nevents, flags, timeout);
+  }
+  for (int i = 0; i < n; i++)
+    restoreEvent(kq, &eventlist[i].ident, &eventlist[i].filter, &eventlist[i].flags, &eventlist[i].fflags, &eventlist[i].data);
+  return n;
+}
+
+int kevent(int kq, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents,
+           const struct timespec *timeout) {
+  int watching = 0;
+  for (int i = 0; i < nchanges && !watching; i++)
+    watching = changelist[i].filter == EVFILT_PROC && isStandInPid(changelist[i].ident);
+  if (!watching) {
+    int n = REAL(int (*)(int, const struct kevent *, int, struct kevent *, int, const struct timespec *), kevent)(
+        kq, changelist, nchanges, eventlist, nevents, timeout);
+    for (int i = 0; i < n; i++) {
+      if (eventlist[i].filter != EVFILT_USER || !AK_KQ_IS_OURS(eventlist[i].ident)) continue;
+      uint64_t ident = eventlist[i].ident;
+      int64_t data = eventlist[i].data;
+      restoreEvent(kq, &ident, &eventlist[i].filter, &eventlist[i].flags, &eventlist[i].fflags, &data);
+      eventlist[i].ident = (uintptr_t)ident;
+      eventlist[i].data = (intptr_t)data;
+    }
+    return n;
+  }
+  // The rare call that watches a stand-in: through kevent64, with the lists converted.
+  struct kevent64_s *changes = calloc((size_t)nchanges, sizeof *changes);
+  struct kevent64_s *events = nevents ? calloc((size_t)nevents, sizeof *events) : NULL;
+  for (int i = 0; i < nchanges; i++)
+    changes[i] = (struct kevent64_s){ changelist[i].ident, changelist[i].filter, changelist[i].flags, changelist[i].fflags,
+                                      changelist[i].data, (uint64_t)(uintptr_t)changelist[i].udata, { 0, 0 } };
+  int n = kevent64(kq, changes, nchanges, events, nevents, 0, timeout);
+  for (int i = 0; i < n; i++)
+    eventlist[i] = (struct kevent){ (uintptr_t)events[i].ident, events[i].filter, events[i].flags, events[i].fflags,
+                                    (intptr_t)events[i].data, (void *)(uintptr_t)events[i].udata };
+  free(changes);
+  free(events);
+  return n;
 }
 
 // Wait for a stand-in to finish (or not, with WNOHANG). Returns 1 when it has finished, 0 when

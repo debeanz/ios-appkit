@@ -9,6 +9,9 @@ NSNotificationName const NSWorkspaceScreensDidSleepNotification = @"NSWorkspaceS
 NSNotificationName const NSWorkspaceScreensDidWakeNotification = @"NSWorkspaceScreensDidWakeNotification";
 NSNotificationName const NSWorkspaceWillPowerOffNotification = @"NSWorkspaceWillPowerOffNotification";
 NSNotificationName const NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification = @"NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification";
+NSNotificationName const NSWorkspaceWillLaunchApplicationNotification = @"NSWorkspaceWillLaunchApplicationNotification";
+NSNotificationName const NSWorkspaceDidLaunchApplicationNotification = @"NSWorkspaceDidLaunchApplicationNotification";
+NSNotificationName const NSWorkspaceDidTerminateApplicationNotification = @"NSWorkspaceDidTerminateApplicationNotification";
 NSString *const NSWorkspaceApplicationKey = @"NSWorkspaceApplicationKey";
 NSString *const NSWorkspaceLaunchConfigurationArguments = @"NSWorkspaceLaunchConfigurationArguments";
 NSString *const NSWorkspaceLaunchConfigurationEnvironment = @"NSWorkspaceLaunchConfigurationEnvironment";
@@ -50,8 +53,70 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
   return center;
 }
 
-// Only this app is visible to itself on iOS.
-- (NSArray<NSRunningApplication *> *)runningApplications { return @[ NSRunningApplication.currentApplication ]; }
+// Only this app is visible to itself on iOS, and the game Steam started in it.
+- (NSArray<NSRunningApplication *> *)runningApplications {
+  NSRunningApplication *game = [NSRunningApplication runningApplicationWithProcessIdentifier:AKGamePid()];
+  return game && !game.isTerminated ? @[ NSRunningApplication.currentApplication, game ] : @[ NSRunningApplication.currentApplication ];
+}
+
+#pragma mark Launching an app: a Mac game Steam downloaded
+
+// Steam starts a game's .app this way, as on the Mac. It runs in this process
+// (MacPrograms.m); Steam gets its NSRunningApplication and the workspace notifications.
+- (NSRunningApplication *)launchApplicationAtURL:(NSURL *)url
+                                         options:(NSUInteger)options
+                                   configuration:(NSDictionary<NSString *, id> *)configuration
+                                           error:(NSError **)error {
+  NSArray *arguments = configuration[NSWorkspaceLaunchConfigurationArguments];
+  NSDictionary *environment = configuration[NSWorkspaceLaunchConfigurationEnvironment];
+  fprintf(stderr, "[AppKitShim] NSWorkspace: launch %s (%lu arguments, %lu environment variables)\n", url.path.UTF8String,
+          (unsigned long)([arguments isKindOfClass:NSArray.class] ? arguments.count : 0),
+          (unsigned long)([environment isKindOfClass:NSDictionary.class] ? environment.count : 0));
+  pid_t pid = AKLaunchMacApplication(url, [arguments isKindOfClass:NSArray.class] ? arguments : nil,
+                                     [environment isKindOfClass:NSDictionary.class] ? environment : nil, error);
+  if (pid <= 0) return nil;
+  AKGameDidLaunch(pid);
+  return [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+}
+
+- (void)openApplicationAtURL:(NSURL *)url
+               configuration:(NSWorkspaceOpenConfiguration *)configuration
+           completionHandler:(void (^)(NSRunningApplication *app, NSError *error))completionHandler {
+  NSMutableDictionary *legacy = [NSMutableDictionary dictionary];
+  if (configuration.arguments) legacy[NSWorkspaceLaunchConfigurationArguments] = configuration.arguments;
+  if (configuration.environment) legacy[NSWorkspaceLaunchConfigurationEnvironment] = configuration.environment;
+  NSError *error;
+  NSRunningApplication *app = [self launchApplicationAtURL:url options:0 configuration:legacy error:&error];
+  if (completionHandler)
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ completionHandler(app, app ? nil : error); });
+}
+
+- (BOOL)launchApplication:(NSString *)appName {
+  NSURL *url = [appName hasPrefix:@"/"] ? [NSURL fileURLWithPath:appName] : nil;
+  return url && [self launchApplicationAtURL:url options:0 configuration:@{} error:NULL] != nil;
+}
+
+static void postAppNotification(NSNotificationName name, pid_t pid) {
+  NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+  if (!app) return;
+  NSWorkspace *ws = NSWorkspace.sharedWorkspace;
+  NSDictionary *info = @{
+    NSWorkspaceApplicationKey: app,
+    @"NSApplicationProcessIdentifier": @(pid),
+    @"NSApplicationPath": app.bundleURL.path ?: @"",
+    @"NSApplicationBundleIdentifier": app.bundleIdentifier ?: @"",
+    @"NSApplicationName": app.localizedName ?: @"",
+  };
+  [ws.notificationCenter postNotificationName:name object:ws userInfo:info];
+}
+
+void AKGameDidLaunch(pid_t pid) {
+  postAppNotification(NSWorkspaceWillLaunchApplicationNotification, pid);
+  postAppNotification(NSWorkspaceDidLaunchApplicationNotification, pid);
+  postAppNotification(NSWorkspaceDidActivateApplicationNotification, pid);
+}
+
+void AKGameDidEnd(pid_t pid) { postAppNotification(NSWorkspaceDidTerminateApplicationNotification, pid); }
 - (NSRunningApplication *)frontmostApplication { return NSRunningApplication.currentApplication; }
 - (NSRunningApplication *)menuBarOwningApplication { return NSRunningApplication.currentApplication; }
 

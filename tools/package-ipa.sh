@@ -55,6 +55,9 @@ for fw in "$FW_DIR"/*.framework; do
   [ -d "$fw" ] && cp -R "$fw" "$app/Frameworks/" && echo "  embedded Frameworks/$(basename "$fw")"
 done
 [ -d "$app/Frameworks/AppKitShim.framework" ] || { echo "ERROR: no AppKitShim.framework in $FW_DIR"; exit 1; }
+# The routes, for the games Steam downloads: the app converts their binaries on the device
+# and links their system libraries the same way (src/MacPrograms.m).
+[ -n "$ROUTES" ] && cp "$ROUTES" "$app/client/routes.json"
 echo "laid out $(du -sh "$app" | cut -f1) in Steam.app"
 
 echo "=== Plan the surgery (retag-plan over the bundled client) ==="

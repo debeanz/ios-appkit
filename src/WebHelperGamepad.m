@@ -41,7 +41,18 @@ static void send(AKWHPad *pad, int code, BOOL pressed) {
   AKWHSendControllerButton(pad.index, code, pressed);
 }
 
+BOOL AKGameIsRunning(void);
+
 static void update(AKWHPad *pad, GCExtendedGamepad *g) {
+  // While a game runs (MacPrograms.m) the controller is the game's: Big Picture, hidden under
+  // it, mustn't move or open menus too. Held buttons are let go first.
+  if (AKGameIsRunning()) {
+    for (int code = 0; pad.down; code++)
+      if (pad.down & bit(code)) { send(pad, code, NO); pad.down &= ~bit(code); }
+    pad.homeDown = NO;
+    pad.swallowed = 0;
+    return;
+  }
   uint64_t held = pad.down, now = 0;
   if (g.buttonA.pressed) now |= bit(kButtonA);
   if (g.buttonB.pressed) now |= bit(kButtonB);
