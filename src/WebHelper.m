@@ -198,12 +198,18 @@ static void serviceMaster(void) {
 int AKWebHelperMain(int argc, char **argv) {
   openLog();
   uint32_t steamPid = (uint32_t)getpid();
+  NSString *clientUI;
   NSMutableString *line = [NSMutableString string];
   for (int i = 0; i < argc; i++) {
     [line appendFormat:@"%s%s", i ? " " : "", argv[i]];
     if (strncmp(argv[i], "-steampid=", 10) == 0) steamPid = (uint32_t)strtoul(argv[i] + 10, NULL, 10);
+    if (strncmp(argv[i], "-clientui=", 10) == 0) clientUI = @(argv[i] + 10);
   }
   AKWHLog(YES, @"Safari-engine web helper starting: %@", line);
+  // Steam Helper sits beside clientui, as in Steam's own folder.
+  if (clientUI)
+    AKWHFontsSetPaths(clientUI, [clientUI.stringByDeletingLastPathComponent
+                                    stringByAppendingPathComponent:@"Frameworks/Steam Helper.app/Contents/MacOS/Steam Helper"]);
 
   gClients = [NSMutableArray array];
   char name[128];

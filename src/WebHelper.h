@@ -53,3 +53,8 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg);
 void AKWHLoopbackInstall(WKWebViewConfiguration *configuration);
 void AKWHLoopbackMapHost(NSString *host, NSString *root, NSArray<NSDictionary *> *routes);
 void AKWHLoopbackSetCookie(NSDictionary *cookie);
+
+// Steam's encrypted interface fonts (WebHelperFonts.m): where clientui and the Steam Helper
+// binary (which holds the key) are, and the font a /custom_fonts/*.uifont?<name> URL names.
+void AKWHFontsSetPaths(NSString *clientUI, NSString *helperBinary);
+NSData *AKWHFontForURL(NSURL *url);

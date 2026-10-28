@@ -157,7 +157,14 @@ static void serveFile(AKWHLoad *load, AKWHHostMapping *m) {
   NSString *range = [request valueForHTTPHeaderField:@"Range"];
   dispatch_async(gFileQueue, ^{
     NSString *file = fileForPath(m, url.path ?: @"");
-    NSData *data = file ? [NSData dataWithContentsOfFile:file options:NSDataReadingMappedIfSafe error:nil] : nil;
+    NSData *data;
+    if ([url.path.lowercaseString hasPrefix:@"/custom_fonts/"] && [url.path.lowercaseString hasSuffix:@".uifont"]) {
+      // Steam's own fonts, decrypted from their package (WebHelperFonts.m).
+      data = AKWHFontForURL(url);
+      file = [NSString stringWithFormat:@"%@.ttf", url.query ?: @"font"];
+    } else if (file) {
+      data = [NSData dataWithContentsOfFile:file options:NSDataReadingMappedIfSafe error:nil];
+    }
     NSMutableDictionary *headers = [@{ @"Access-Control-Allow-Origin": @"*", @"Cache-Control": @"no-cache" } mutableCopy];
     NSInteger status = 200;
     NSData *body = data;
