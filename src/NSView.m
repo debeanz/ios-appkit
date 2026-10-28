@@ -2,6 +2,7 @@
 #import "AppKitShim/NSTextInputContext.h"
 #import "AppKitShim/NSTrackingArea.h"
 #import <QuartzCore/QuartzCore.h>
+#import <objc/message.h>
 
 // A UIView subclass that calls back into its owning NSView for drawing and layout, so NSView
 // subclasses that override -drawRect: or -setFrameSize: keep working. Input lives in InputBridge.m.
@@ -110,8 +111,16 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 - (void)setWantsLayer:(BOOL)flag { _wantsLayer = flag; }
 
+// As in AppKit, a layer-backed view's layer comes from -makeBackingLayer when the view
+// overrides it — SDL's Metal view returns a CAMetalLayer there, and the window surface it
+// renders through needs that layer, not a plain one.
 - (CALayer *)layer {
-  if (!_hostedLayer && _wantsLayer) self.layer = [CALayer layer];
+  if (!_hostedLayer && _wantsLayer) {
+    SEL make = NSSelectorFromString(@"makeBackingLayer");
+    CALayer *layer = nil;
+    if ([self respondsToSelector:make]) layer = ((CALayer *(*)(id, SEL))objc_msgSend)(self, make);
+    self.layer = layer ?: [CALayer layer];
+  }
   return _hostedLayer;
 }
 

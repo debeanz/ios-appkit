@@ -314,6 +314,57 @@ static int gRedirected;
 // Steam loads some of its libraries later (chromehtml, which starts the helper, among them),
 // so redirect each new image's imports as it arrives. dyld also calls this for every image
 // already loaded when the callback is registered.
+#pragma mark The web helper's windows
+
+// The web helper draws Big Picture through SDL: it creates a window, takes its pixel surface
+// and paints CEF's frames into it with SDL's software renderer — no OpenGL calls of its own.
+// But it asks for the window with SDL's OpenGL flag set, and SDL's macOS backend then loads
+// desktop OpenGL (OpenGL.framework/Libraries/libGL.dylib), which iOS doesn't have, so the
+// window was never created ("CreateOutputWindow: failed to create window"). The helper's
+// two window calls come here and drop that flag; SDL then backs the surface with Metal.
+#define AK_SDL_WINDOW_OPENGL 0x2LL
+
+typedef uint32_t SDLProps;
+static void *(*gSDLCreateWindowWithProperties)(SDLProps);
+static void *(*gSDLCreatePopupWindow)(void *, int, int, int, int, uint64_t);
+static int64_t (*gSDLGetNumberProperty)(SDLProps, const char *, int64_t);
+static bool (*gSDLSetNumberProperty)(SDLProps, const char *, int64_t);
+static bool (*gSDLSetBooleanProperty)(SDLProps, const char *, bool);
+static const char *(*gSDLGetError)(void);
+
+static void *hostSDLCreateWindowWithProperties(SDLProps props) {
+  int64_t flags = gSDLGetNumberProperty(props, "SDL.window.create.flags", 0);
+  if (flags & AK_SDL_WINDOW_OPENGL) gSDLSetNumberProperty(props, "SDL.window.create.flags", flags & ~AK_SDL_WINDOW_OPENGL);
+  gSDLSetBooleanProperty(props, "SDL.window.create.opengl", false);
+  void *window = gSDLCreateWindowWithProperties(props);
+  hostlog(@"web helper window (flags 0x%llx, OpenGL dropped): %@", flags,
+          window ? @"created" : [NSString stringWithFormat:@"failed: %s", gSDLGetError()]);
+  return window;
+}
+
+static void *hostSDLCreatePopupWindow(void *parent, int x, int y, int w, int h, uint64_t flags) {
+  void *window = gSDLCreatePopupWindow(parent, x, y, w, h, flags & ~(uint64_t)AK_SDL_WINDOW_OPENGL);
+  if (!window) hostlog(@"web helper popup window failed: %s", gSDLGetError());
+  return window;
+}
+
+static void redirectHelperWindows(const char *image) {
+  gSDLCreateWindowWithProperties = (__typeof__(gSDLCreateWindowWithProperties))dlsym(RTLD_DEFAULT, "SDL_CreateWindowWithProperties");
+  gSDLCreatePopupWindow = (__typeof__(gSDLCreatePopupWindow))dlsym(RTLD_DEFAULT, "SDL_CreatePopupWindow");
+  gSDLGetNumberProperty = (__typeof__(gSDLGetNumberProperty))dlsym(RTLD_DEFAULT, "SDL_GetNumberProperty");
+  gSDLSetNumberProperty = (__typeof__(gSDLSetNumberProperty))dlsym(RTLD_DEFAULT, "SDL_SetNumberProperty");
+  gSDLSetBooleanProperty = (__typeof__(gSDLSetBooleanProperty))dlsym(RTLD_DEFAULT, "SDL_SetBooleanProperty");
+  gSDLGetError = (__typeof__(gSDLGetError))dlsym(RTLD_DEFAULT, "SDL_GetError");
+  if (!gSDLCreateWindowWithProperties || !gSDLCreatePopupWindow || !gSDLGetNumberProperty ||
+      !gSDLSetNumberProperty || !gSDLSetBooleanProperty || !gSDLGetError) {
+    hostlog(@"  FAIL  SDL functions for the web helper's windows not found");
+    return;
+  }
+  int n = gRebind(image, "SDL_CreateWindowWithProperties", (void *)hostSDLCreateWindowWithProperties)
+        + gRebind(image, "SDL_CreatePopupWindow", (void *)hostSDLCreatePopupWindow);
+  hostlog(@"  web helper window creation redirected (%d)", n);
+}
+
 static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
   Dl_info info;
   if (!dladdr(mh, &info) || !info.dli_fname) return;
@@ -324,6 +375,7 @@ static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
     gRedirected += n;
     hostlog(@"  CreateSimpleProcess redirected in %s (%d)", strrchr(info.dli_fname, '/') + 1, n);
   }
+  if (strstr(info.dli_fname, "Steam Helper.app/Contents/MacOS/Steam Helper")) redirectHelperWindows(info.dli_fname);
 }
 
 // Point every Steam image's CreateSimpleProcess at the host's, and register the helper's
