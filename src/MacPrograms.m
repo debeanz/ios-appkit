@@ -1088,6 +1088,31 @@ static NSString *programOf(NSBundle *app, NSURL *appURL) {
   return [NSFileManager.defaultManager fileExistsAtPath:program] ? program : nil;
 }
 
+// The app's own C++ libraries a game uses (the OpenGL stack: AKOpenGL, Mesa, and MoltenVK,
+// which Zink opens later), loaded before the game is. A game may bring its own operator new and
+// delete (GameMaker's MemoryManager); the loader then binds them into every library loaded
+// after it, while libc++ itself keeps the system's — so MoltenVK's strings were made by the
+// game's allocator and freed by the system's ("pointer being freed was not allocated"). On a
+// Mac a game's allocator is everyone's; here it stays the game's and its plugins'.
+static void preloadSharedLibraries(void) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    for (NSString *lib in @[ @"AKOpenGL.framework/AKOpenGL", @"libMoltenVK.dylib" ]) {
+      NSString *path = [frameworksDir() stringByAppendingPathComponent:lib];
+      if (![NSFileManager.defaultManager fileExistsAtPath:path]) continue;
+      // AKOpenGL as NSOpenGL.m opens it; MoltenVK as Zink and AKOpenGL do, privately.
+      int mode = [lib hasPrefix:@"AKOpenGL"] ? RTLD_GLOBAL : RTLD_LOCAL;
+      if (!dlopen(path.fileSystemRepresentation, RTLD_NOW | mode)) gameLog(@"%@ doesn't load: %s", lib, dlerror());
+    }
+  });
+}
+
+// Whether the game defines operator new itself (then it shares it only with its own libraries).
+static void noteOwnAllocator(void *image) {
+  void *mine = dlsym(image, "_Znwm");
+  if (mine && AKAddressIsInGame(mine)) gameLog(@"it has its own operator new/delete; the app's libraries keep the system's");
+}
+
 pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
                              NSError **error) {
   appURL = appURL.URLByStandardizingPath;
@@ -1174,6 +1199,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     gGameImageCount = 0;
     pthread_mutex_unlock(&gGameLock);
   };
+  preloadSharedLibraries();
   // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.
   void *image = dlopen(program.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
   if (!image) {
@@ -1188,6 +1214,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     rebound += AKRebindSymbol(prefix.fileSystemRepresentation, "_NSGetExecutablePath", (void *)gameExecutablePath);
   }
   gameLog(@"loaded (%d images of its own); %d main-bundle and program-path calls redirected", (int)gGameImageCount, rebound);
+  noteOwnAllocator(image);
 
   NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObject:program];
   for (id a in arguments) if ([a isKindOfClass:NSString.class]) [args addObject:a];
