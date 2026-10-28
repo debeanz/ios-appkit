@@ -49,6 +49,7 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic, copy) NSString *loadedURL;
 @property(nonatomic, copy) NSString *startURL;               // the first page Steam loaded in it
 @property(nonatomic) BOOL lostPage;                          // its page process ended; not reloaded yet
+@property(nonatomic, copy) NSDictionary *viewportArguments;  // as last given to WebKit (placeView)
 @property(nonatomic, strong) NSMutableArray *outbox;   // messages for the page, sent together
 @property(nonatomic) CFAbsoluteTime pingSent;           // see startWatchingPages
 @property(nonatomic) unsigned stuckReports;
@@ -209,6 +210,11 @@ static void playVideosInline(WKWebViewConfiguration *c) {
   c.allowsPictureInPictureMediaPlayback = NO;
   SEL requires = NSSelectorFromString(@"_setInlineMediaPlaybackRequiresPlaysInlineAttribute:");
   if ([c respondsToSelector:requires]) ((void (*)(id, SEL, BOOL))[c methodForSelector:requires])(c, requires, NO);
+  // Pages are laid out wider than the screen and zoomed out (placeView); iOS would enlarge
+  // their running text to make up for it, which the store's pages don't expect.
+  SEL autosizing = NSSelectorFromString(@"_setTextAutosizingEnabled:");
+  if ([c.preferences respondsToSelector:autosizing])
+    ((void (*)(id, SEL, BOOL))[c.preferences methodForSelector:autosizing])(c.preferences, autosizing, NO);
 }
 
 static WKWebViewConfiguration *steamConfiguration(void) {
@@ -285,32 +291,54 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
   return wv;
 }
 
-// A view showing `frame` of the stage at `scale`: its own size (what the page lays out to) is
-// the frame's divided by the scale.
-static void placeView(UIView *v, CGRect frame, double scale) {
+// A page shown in `frame` of the stage at `scale`: it lays out frame.size / scale CSS pixels
+// big (Big Picture asks for at least 853x534, more than a phone's screen in points) and is
+// drawn at scale. WebKit is given that layout width and scale as viewport arguments (what a
+// page's viewport tag says, but taking precedence over it), so it draws straight at the
+// screen's resolution. Without that switch (it's private) the view is made frame.size / scale
+// points big and shrunk with a transform, which draws about half as many pixels again as the
+// screen shows. WKWebView's pageZoom isn't used either way: viewport units ignore it (100vw
+// stayed the unzoomed width and Big Picture stopped short of the screen's edges).
+static void placeView(AKWHBrowser *b, CGRect frame, double scale) {
+  WKWebView *v = b.webView;
+  SEL override = NSSelectorFromString(@"_overrideViewportWithArguments:");
+  if ([v respondsToSelector:override]) {
+    v.transform = CGAffineTransformIdentity;
+    v.frame = frame;
+    if (frame.size.width < 1 || frame.size.height < 1) return;
+    NSString *s = [NSString stringWithFormat:@"%.6f", scale];
+    NSDictionary *args = @{ @"width": [NSString stringWithFormat:@"%.0f", round(frame.size.width / scale)],
+                            @"initial-scale": s, @"minimum-scale": s, @"maximum-scale": s,
+                            @"user-scalable": @"no", @"viewport-fit": @"cover" };
+    if ([args isEqualToDictionary:b.viewportArguments]) return;
+    b.viewportArguments = args;
+    ((void (*)(id, SEL, id))[v methodForSelector:override])(v, override, args);
+    static BOOL told;
+    if (!told) { told = YES; AKWHLog(NO, @"pages are drawn at the screen's resolution (viewport %@ wide at %@)", args[@"width"], s); }
+    return;
+  }
   v.transform = CGAffineTransformIdentity;
   v.bounds = CGRectMake(0, 0, frame.size.width / scale, frame.size.height / scale);
   v.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
   v.transform = CGAffineTransformMakeScale(scale, scale);
 }
 
-// Where a browser's view goes. A window gets its size in CSS pixels (the screen divided by its
-// zoom) and its view is scaled down to fill the screen; WKWebView's pageZoom isn't used
-// because viewport units ignore it (100vw stays the unzoomed width), which left Big Picture
-// stopping short of the screen's right and bottom edges. BrowserViews take their bounds (CSS
-// pixels of the parent window) at the parent's scale; the shared context stays 1x1.
+// Where a browser's view goes: a window fills the screen at its zoom (the screen in CSS
+// pixels is the screen in points divided by it); BrowserViews take their bounds (CSS pixels
+// of the parent window) at the parent's zoom; the shared context stays 1x1.
 static void layoutBrowser(AKWHBrowser *b) {
   UIView *stage = hostView();
   if (!b.webView || !stage) return;
   b.webView.autoresizingMask = UIViewAutoresizingNone;
   if (b.type == kSharedJSContextType) {
-    placeView(b.webView, CGRectMake(0, 0, 1, 1), 1);
+    b.webView.transform = CGAffineTransformIdentity;
+    b.webView.frame = CGRectMake(0, 0, 1, 1);
   } else if (b.viewId) {
     AKWHBrowser *parent = b.parent;
     CGRect pf = parent.webView ? parent.webView.frame : stage.bounds;
     double z = parent ? parent.zoom : b.zoom;
-    placeView(b.webView, CGRectMake(pf.origin.x + b.cssBounds.origin.x * z, pf.origin.y + b.cssBounds.origin.y * z,
-                                    b.cssBounds.size.width * z, b.cssBounds.size.height * z), z);
+    placeView(b, CGRectMake(pf.origin.x + b.cssBounds.origin.x * z, pf.origin.y + b.cssBounds.origin.y * z,
+                            b.cssBounds.size.width * z, b.cssBounds.size.height * z), z);
     b.webView.hidden = !b.viewVisible || b.cssBounds.size.width <= 0 || b.cssBounds.size.height <= 0;
   } else {
     // A whole number of CSS pixels wide, the scale adjusted to match: a fractional width left
@@ -318,7 +346,7 @@ static void layoutBrowser(AKWHBrowser *b) {
     CGSize s = stage.bounds.size;
     double width = ceil(s.width / b.zoom - 0.01), scale = s.width / width;
     b.zoom = scale;   // what its BrowserViews are placed with
-    placeView(b.webView, CGRectMake(0, 0, s.width, ceil(s.height / scale - 0.01) * scale), scale);
+    placeView(b, CGRectMake(0, 0, s.width, ceil(s.height / scale - 0.01) * scale), scale);
   }
 }
 
@@ -1016,7 +1044,10 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   WKWebView *wv = (WKWebView *)g.view;
   AKWHBrowser *b = browserForWebView(wv);
   if (!b.knownToSteam || b.viewId) return;
-  CGPoint p = [g locationInView:wv];   // the view's own size is the window's, in CSS pixels
+  // In the window's CSS pixels: the scroll view's coordinates are the page's, zoomed.
+  CGPoint p = [g locationInView:wv.scrollView];
+  CGFloat zoom = wv.scrollView.zoomScale > 0 ? wv.scrollView.zoomScale : 1;
+  p = CGPointMake(p.x / zoom, p.y / zoom);
   if (g.state == UIGestureRecognizerStateBegan) {
     AKWHSend(kAKWHTouchGesture, b.handle, @{ @"browser_handle": @(b.handle), @"gesture": @5, @"x": @(p.x), @"y": @(p.y) });
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
