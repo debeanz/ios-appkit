@@ -48,7 +48,9 @@ void AKWHLog(BOOL console, NSString *fmt, ...) {
   if (console) fprintf(stderr, "[WebHelper] %s\n", text);
 }
 
+// Once per app run: a helper Steam restarts keeps writing after the first one's lines.
 static void openLog(void) {
+  if (gLogFile) return;
   NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
   gLogFile = fopen([docs stringByAppendingPathComponent:@"web-helper.log"].fileSystemRepresentation, "w");
   if (gLogFile) setvbuf(gLogFile, NULL, _IOLBF, 0);
@@ -195,8 +197,21 @@ static void serviceMaster(void) {
 
 #pragma mark Main
 
+// Ending this helper as a crashed Steam Helper would: the connection loop stops and
+// AKWebHelperMain returns 1, so the stand-in process exits and Steam's client starts a new
+// helper ("Restart webhelper process") and builds its interface again. Any thread.
+static atomic_int gExitStatus;
+
+void AKWHExitForRestart(void) {
+  atomic_store(&gExitStatus, 1);
+  atomic_store(&gShutdown, true);
+  if (gMasterEvent) AKSteamEventSet(gMasterEvent);
+}
+
 int AKWebHelperMain(int argc, char **argv) {
   openLog();
+  atomic_store(&gShutdown, false);
+  atomic_store(&gExitStatus, 0);
   uint32_t steamPid = (uint32_t)getpid();
   NSString *clientUI;
   NSMutableString *line = [NSMutableString string];
@@ -233,10 +248,13 @@ int AKWebHelperMain(int argc, char **argv) {
       for (AKWebHelperClient *client in [gClients copy]) serviceClient(client);
     }
   }
-  AKWHLog(YES, @"stopped");
+  int status = atomic_load(&gExitStatus);
+  AKWHLog(YES, @"stopped%@", status ? @" (exiting for Steam to start a new helper)" : @"");
   @synchronized(AKWebHelperClient.class) { gClient = nil; }
   [gClients removeAllObjects];
   AKSteamEventFree(gMasterEvent);
+  gMasterEvent = NULL;
   AKSteamStreamClose(gMaster);
-  return 0;
+  gMaster = NULL;
+  return status;
 }

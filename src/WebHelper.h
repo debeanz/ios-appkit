@@ -17,6 +17,7 @@ enum {
   kAKWHJSExecutePromise = 34,
   kAKWHJSRaiseException = 35,
   kAKWHJSRegisterMethod = 36,
+  kAKWHOpenSteamURL = 41,
   kAKWHJSReleaseCallback = 37,
   kAKWHPopupCreated = 44,
   kAKWHPostURL = 45,
@@ -46,6 +47,9 @@ NSString *AKWHCommandName(uint32_t cmd);
 
 // Send a command to Steam's client. Any thread.
 BOOL AKWHSend(uint32_t cmd, uint32_t browser, NSDictionary *fields);
+
+// End this helper as a crashed Steam Helper would, so Steam starts a new one (WebHelper.m).
+void AKWHExitForRestart(void);
 
 // A command from Steam, delivered on the main thread in the order Steam sent them.
 void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg);

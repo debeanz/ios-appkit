@@ -46,16 +46,29 @@ static NSURLSession *gSession;
 static dispatch_queue_t gFileQueue;
 static unsigned gServed, gProxied;
 
+// A host mapped again adds to what it had: Steam maps https://steamloopback.host twice, its
+// interface's folders at start and the signed-in user's (assets/, screenshots/, ...) after
+// login. A route for the same URL prefix replaces the old one.
 void AKWHLoopbackMapHost(NSString *host, NSString *root, NSArray<NSDictionary *> *routes) {
   if (!host.length || !root.length) return;
   AKWHHostMapping *m = [AKWHHostMapping new];
   m.root = root;
-  m.routes = routes ?: @[];
+  NSUInteger count;
   @synchronized(AKWHHostMapping.class) {
     if (!gHosts) gHosts = [NSMutableDictionary dictionary];
+    NSMutableArray<NSDictionary *> *merged = [NSMutableArray array];
+    NSMutableSet *prefixes = [NSMutableSet set];
+    for (NSDictionary *route in routes ?: @[]) {
+      [merged addObject:route];
+      if (route[@"relative_url"]) [prefixes addObject:route[@"relative_url"]];
+    }
+    for (NSDictionary *route in gHosts[host.lowercaseString].routes)
+      if (![prefixes containsObject:route[@"relative_url"] ?: @""]) [merged addObject:route];
+    m.routes = merged;
+    count = merged.count;
     gHosts[host.lowercaseString] = m;
   }
-  AKWHLog(NO, @"serving https://%@ from %@ (%lu routes)", host, root, (unsigned long)m.routes.count);
+  AKWHLog(NO, @"serving https://%@ from %@ (%lu routes)", host, root, (unsigned long)count);
 }
 
 static AKWHHostMapping *mappingFor(NSString *host) {

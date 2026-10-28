@@ -491,8 +491,14 @@ function akwhInstall(win, config) {
             const view = views.get(m.id);
             if (view) {
               if (m.ev === 'can-go-back-forward-changed') { view.canGoBack = !!m.a[0]; view.canGoForward = !!m.a[1]; }
-              if (m.ev === 'steam-url' && view.steamURLCallback) view.steamURLCallback.apply(null, m.a || []);
-              else view.emit(m.ev, m.a || []);
+              if (m.ev === 'steam-url') {
+                // The page's handler first (a few purchase links); what it doesn't take
+                // (Install, Play, a demo) goes to Steam, as Steam Helper does.
+                const handled = view.steamURLCallback ? view.steamURLCallback.apply(null, m.a || []) : false;
+                if (!handled) tell('browser', 'OpenSteamURL', [String((m.a || [])[0] || ''), view.id]);
+              } else {
+                view.emit(m.ev, m.a || []);
+              }
             }
           } else if (m.t === 'ws') {
             const socket = sockets.get(m.id);

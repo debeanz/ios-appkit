@@ -18,6 +18,7 @@
 // WebHelperLoopback.m. Big Picture lays itself out for at least its window's
 // minwidth/minheight (853x534) CSS pixels; a phone in landscape is about 932x430 points, so a
 // popup gets a window that big and its view is scaled down to the screen.
+#import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import <WebKit/WebKit.h>
@@ -47,7 +48,6 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic) BOOL viewVisible;
 @property(nonatomic) double zoom;
 @property(nonatomic, copy) NSString *loadedURL;
-@property(nonatomic, copy) NSString *startURL;               // the first page Steam loaded in it
 @property(nonatomic) BOOL lostPage;                          // its page process ended; not reloaded yet
 @property(nonatomic, copy) NSDictionary *viewportArguments;  // as last given to WebKit (placeView)
 @property(nonatomic, strong) NSMutableArray *outbox;   // messages for the page, sent together
@@ -72,11 +72,15 @@ static NSDictionary *gPendingOpen;                   // the latest window.open, 
 static uint64_t gBuildID;
 static unsigned gConsoleLines;
 
+static BOOL gRestarting;   // this helper is ending for Steam to start a new one (pageProcessEnded)
+static CFTimeInterval gLastTouch;   // when a finger last went down anywhere in the app
+
 static void closeSockets(AKWHBrowser *b);
 static void layoutBrowser(AKWHBrowser *b);
 static void watchTouchesAndKeyboard(UIWindow *window);
 static void logWindows(NSString *when);
 static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args);
+static WKWebView *focusedWebView(void);
 
 #pragma mark Browsers
 
@@ -639,6 +643,7 @@ static void installBridge(AKWHBrowser *b) {
 }
 
 static void createSteamBrowser(uint32_t requestId, NSDictionary *msg) {
+  gRestarting = NO;   // a (new) helper's first browser
   uint32_t type = [msg[@"browser_type"] unsignedIntValue];
   AKWHBrowser *b = newBrowser(type, @"", 1);
   b.createdBySteam = YES;
@@ -663,7 +668,6 @@ static void loadURL(AKWHBrowser *b, NSString *url) {
   if (!b.webView || !url.length) return;
   if ([url isEqualToString:b.loadedURL] && !b.lostPage) return;   // Steam sends its first URL twice
   b.loadedURL = url;
-  if (!b.startURL) b.startURL = url;
   b.lostPage = NO;
   if (b.createdBySteam) installBridge(b);
   AKWHLog(YES, @"browser %u loads %@", b.index, url);
@@ -859,7 +863,9 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     else if ([args.firstObject intValue] == 1)
       [stage bringSubviewToFront:v.webView];
   } else if ([name isEqualToString:@"SetFocus"]) {
-    if ([args.firstObject boolValue]) [v.webView becomeFirstResponder];
+    // Big Picture's keyboard calls SetFocus(false) then SetFocus(true) for every key it types:
+    // only a view that doesn't have the focus yet takes it.
+    if ([args.firstObject boolValue] && focusedWebView() != v.webView) [v.webView becomeFirstResponder];
   } else if ([name isEqualToString:@"PostMessage"]) {
     enqueue(v, @{ @"t": @"parent-message", @"a": args ?: @[] });
   } else {
@@ -915,6 +921,16 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     if ([m[@"name"] isEqualToString:@"PostMessageToParent"]) {
       AKWHBrowser *owner = b.viewOwner;
       if (owner) enqueue(owner, @{ @"t": @"bv", @"id": @(b.viewId), @"ev": @"message", @"a": m[@"args"] ?: @[] });
+    } else if ([m[@"name"] isEqualToString:@"OpenSteamURL"]) {
+      // A steam:// link from a BrowserView for Steam to carry out (CMsgOpenSteamURL), on
+      // behalf of the window the view is in.
+      NSArray *args = m[@"args"];
+      AKWHBrowser *view = args.count > 1 ? viewFor(b, [args[1] unsignedIntValue]) : nil;
+      AKWHBrowser *window = view.parent.knownToSteam ? view.parent : b;
+      NSString *url = [args.firstObject isKindOfClass:NSString.class] ? args.firstObject : @"";
+      AKWHLog(YES, @"Steam link from page %u: %@", view.index, url);
+      AKWHSend(kAKWHOpenSteamURL, window.handle, @{ @"browser_handle": @(window.handle), @"url": url,
+                                                    @"referrer": view.webView.URL.absoluteString ?: @"" });
     } else {
       AKWHLog(NO, @"page %u: Browser.%@ ignored", b.index, m[@"name"]);
     }
@@ -1064,23 +1080,25 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   return YES;
 }
 
-// WebKit's private input delegate: asked before a focused field starts a keyboard session.
-// The answer stays WebKit's own (0, "automatic": only for focus the user caused); each
-// request is logged so focus that keeps bouncing shows up in the log.
+// WebKit's private input delegate: asked before a focused field brings up the keyboard. Only
+// a field the finger just tapped gets the iPhone's keyboard (_WKFocusStartsInputSessionPolicy
+// 1, allow); focus from anything else stays without it (2, disallow) - with a controller,
+// Big Picture shows its own keyboard, and the keys it types arrive through evaluateJavaScript,
+// which WebKit counts as the user's doing, so the iPhone's came up with every letter.
 - (NSInteger)_webView:(WKWebView *)webView decidePolicyForFocusedElement:(id)info {
+  BOOL tapped = CACurrentMediaTime() - gLastTouch < 1.5;
   static unsigned logged;
-  if (++logged <= 200) {
-    id type = nil, byUser = nil, placeholder = nil;
+  if (++logged <= 100) {
+    id type = nil, placeholder = nil;
     @try {
       type = [info valueForKey:@"type"];
-      byUser = [info valueForKey:@"userInitiated"];
       placeholder = [info valueForKey:@"placeholder"];
     } @catch (NSException *e) {
     }
-    AKWHLog(YES, @"page %u: keyboard asked for a focused field (input type %@, by the user %@, placeholder \"%@\")",
-            browserForWebView(webView).index, type, byUser, placeholder ?: @"");
+    AKWHLog(NO, @"page %u: field focused (input type %@, placeholder \"%@\"): %@", browserForWebView(webView).index, type,
+            placeholder ?: @"", tapped ? @"tapped, keyboard shown" : @"not tapped, no keyboard");
   }
-  return 0;
+  return tapped ? 1 : 2;
 }
 
 - (void)webViewDidClose:(WKWebView *)webView {
@@ -1118,6 +1136,23 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   if (v.viewOwner && v.viewId && !v.isPopupView) enqueue(v.viewOwner, @{ @"t": @"bv", @"id": @(v.viewId), @"ev": event, @"a": args });
 }
 
+// A BrowserView's history the way Steam Helper reports it: {index, entries: [{url}]}, the
+// back-forward list oldest first and the one showing. Big Picture's store keeps its own
+// navigation in step with it (a bare address there made it navigate again: the page kept
+// jumping back to its top, and Back stopped working).
+static void historyChanged(AKWHBrowser *b) {
+  WKWebView *wv = b.webView;
+  if (!wv || !b.viewId || b.isPopupView) return;
+  WKBackForwardList *list = wv.backForwardList;
+  NSMutableArray *entries = [NSMutableArray array];
+  for (WKBackForwardListItem *item in list.backList) [entries addObject:@{ @"url": item.URL.absoluteString ?: @"" }];
+  NSUInteger index = entries.count;
+  [entries addObject:@{ @"url": (list.currentItem.URL ?: wv.URL).absoluteString ?: @"" }];
+  for (WKBackForwardListItem *item in list.forwardList) [entries addObject:@{ @"url": item.URL.absoluteString ?: @"" }];
+  viewEvent(b, @"history-changed", @[ @{ @"index": @(index), @"entries": entries } ]);
+  viewEvent(b, @"can-go-back-forward-changed", @[ @(wv.canGoBack), @(wv.canGoForward) ]);
+}
+
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
   AKWHBrowser *b = browserForWebView(webView);
@@ -1126,6 +1161,12 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   // Steam URL callback, which hands them to Steam, as Steam Helper does.
   if ([scheme isEqualToString:@"steam"] && b.viewOwner && b.viewId) {
     enqueue(b.viewOwner, @{ @"t": @"bv", @"id": @(b.viewId), @"ev": @"steam-url", @"a": @[ action.request.URL.absoluteString ?: @"" ] });
+    decisionHandler(WKNavigationActionPolicyCancel);
+    return;
+  }
+  if ([scheme isEqualToString:@"steam"] && b.knownToSteam) {   // from one of Steam's windows
+    AKWHSend(kAKWHOpenSteamURL, b.handle, @{ @"browser_handle": @(b.handle), @"url": action.request.URL.absoluteString ?: @"",
+                                             @"referrer": webView.URL.absoluteString ?: @"" });
     decisionHandler(WKNavigationActionPolicyCancel);
     return;
   }
@@ -1147,14 +1188,14 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   AKWHBrowser *b = browserForWebView(webView);
   NSString *url = webView.URL.absoluteString ?: @"";
   closeSockets(b);   // the previous document's
-  if (gNumberWindowsFrom && b.type == kSharedJSContextType) {
-    // After the app reloaded the interface itself: its windows' numbers carry on.
-    [webView evaluateJavaScript:[NSString stringWithFormat:@"window.__akwhNextId = %u", gNumberWindowsFrom] completionHandler:nil];
-    gNumberWindowsFrom = 0;
-  }
   if (b.knownToSteam)
     AKWHSend(kAKWHURLChanged, b.handle, @{ @"browser_handle": @(b.handle), @"url": url, @"bNewNavigation": @YES });
-  viewEvent(b, @"history-changed", @[ url ]);
+  historyChanged(b);
+}
+
+// A page moving within its document (history.pushState, an anchor): a new history entry.
+- (void)_webView:(WKWebView *)webView navigation:(WKNavigation *)navigation didSameDocumentNavigation:(NSInteger)type {
+  historyChanged(browserForWebView(webView));
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
@@ -1181,24 +1222,43 @@ static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args) {
   AKWHLog(YES, @"page %u stopped loading: %@", browserForWebView(webView).index, error.localizedDescription);
 }
 
-// A page process ended. Steam's pages share one (popups belong to the shared context), so
-// every window goes at once. As Chromium's Steam Helper does, Steam is told about each
-// browser it knows (CMsgRenderProcessTerminated) and decides what to rebuild; the shared
-// context then takes its next PostURL even if it is the same address. If Steam hasn't
-// reloaded it a few seconds later, the app does: the shared context's first address (not
-// the route it had moved to, which brought back the script but not its windows), with
-// window numbers carrying on past the dead windows', which are taken off the screen without
-// telling Steam they closed (Big Picture's window asked for Steam to quit with it).
-static uint32_t gNumberWindowsFrom;
+// A page process ended. Steam's own pages share one (its windows are the shared context's
+// popups), so its whole interface goes at once. Steam Helper restarts Chromium's renderer
+// for its browsers, but Steam's script and windows can't be put back by reloading pages here
+// (the interface came back as a Steam logo that never finished loading): Steam has to build
+// them again. So the helper ends as a crashed Steam Helper does - its pages are cleared off
+// the screen without telling Steam they closed (Big Picture's window asked for Steam to quit
+// with it) - and Steam's client starts a new helper and its interface, still signed in. A web
+// page in a BrowserView (the store) has a process of its own and just reloads.
 
 static NSString *terminationReason(NSInteger reason) {
   switch (reason) {   // _WKProcessTerminationReason
     case 0: return @"it went over its memory limit";
     case 1: return @"it used too much CPU";
     case 2: return @"the app asked";
-    case 3: return @"it crashed";
+    case 3: return @"it crashed (or iOS ended it for memory)";
     default: return [NSString stringWithFormat:@"WebKit reason %ld", (long)reason];
   }
+}
+
+static void restartForSteam(void) {
+  if (gRestarting) return;
+  gRestarting = YES;
+  AKWHLog(YES, @"Steam's interface lost its page process; ending this helper so Steam starts a new one");
+  for (AKWHBrowser *b in [gBrowsers copy]) {
+    b.knownToSteam = NO;
+    removeBrowser(b);
+  }
+  gBrowsers = nil;
+  gMethods = nil;
+  gMethodOwner = 0;
+  gBridgeInstalled = NO;
+  gSteamConfig = nil;   // a new one, with the bridge script for the new helper's methods
+  gPendingOpen = nil;
+  gNextIndex = 0x4000;
+  gSystemKeyHandle = 0;
+  gSteamSendsSystemKeys = NO;
+  AKWHExitForRestart();
 }
 
 static void pageProcessEnded(WKWebView *webView, NSString *why) {
@@ -1207,24 +1267,13 @@ static void pageProcessEnded(WKWebView *webView, NSString *why) {
   b.lostPage = YES;
   AKWHLog(YES, @"page %u's web content process ended: %@", b.index, why);
   closeSockets(b);
-  if (b.knownToSteam) AKWHSend(kAKWHRenderProcessTerminated, b.handle, @{ @"browser_handle": @(b.handle) });
-  if (b.type != kSharedJSContextType) return;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-    if (!b.lostPage || !b.webView || ![gBrowsers containsObject:b]) return;   // Steam saw to it
-    uint32_t next = 2;
-    for (AKWHBrowser *other in [gBrowsers copy]) {
-      if (other.index < 0x4000) next = MAX(next, other.index + 1);
-      if (other != b && other.lostPage && !other.createdBySteam) {
-        other.knownToSteam = NO;
-        removeBrowser(other);
-      }
-    }
-    gNumberWindowsFrom = next;
-    AKWHLog(YES, @"Steam didn't reload its interface; reloading %@ (new windows from %u)", b.startURL, next);
+  if (!(b.viewId && !b.isPopupView)) {
+    // One of Steam's pages: the others went with it. After this turn (they all report now).
+    dispatch_async(dispatch_get_main_queue(), ^{ restartForSteam(); });
+  } else {
     b.lostPage = NO;
-    b.loadedURL = b.startURL;
-    [b.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:b.startURL ?: @"about:blank"]]];
-  });
+    [webView reload];
+  }
 }
 
 - (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason {
@@ -1281,6 +1330,7 @@ static void logWindows(NSString *when) {
 
 @implementation AKWHTouchWatcher
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+  gLastTouch = CACurrentMediaTime();
   static unsigned logged;
   UITouch *t = touches.anyObject;
   if (++logged <= 30) AKWHLog(NO, @"touch at %@ lands on %@", NSStringFromCGPoint([t locationInView:nil]), describeView(t.view));
