@@ -111,7 +111,13 @@ static NSDictionary<NSString *, UIColor *> *AKSystemColors(void) {
 }
 + (NSColor *)colorWithCGColor:(CGColorRef)cg { return cg ? [self ak_with:[UIColor colorWithCGColor:cg]] : nil; }
 + (NSColor *)colorWithCatalogName:(NSString *)catalog colorName:(NSString *)name {
-  return [self ak_with:AKSystemColors()[name]];
+  UIColor *ui = AKSystemColors()[name];
+  if (!ui) {
+    fprintf(stderr, "[AppKitShim] NSColor: no mapping for catalog color %s/%s; using gray\n",
+            catalog.UTF8String, name.UTF8String);
+    ui = UIColor.systemGrayColor;
+  }
+  return [self ak_with:ui];
 }
 
 + (NSColor *)clearColor { return [self ak_with:UIColor.clearColor]; }
@@ -127,9 +133,16 @@ static NSDictionary<NSString *, UIColor *> *AKSystemColors(void) {
 
 // Every other named system color (+controlAccentColor, +labelColor, ...) is added on first
 // use from the table, so this class answers the same names AppKit does.
+// A system color name the table doesn't have still gets a color, not nil: Chromium converts
+// these straight to its own colors and CHECKs that the conversion worked. The name is logged
+// so it can be given a proper mapping.
 + (BOOL)resolveClassMethod:(SEL)sel {
   NSString *name = NSStringFromSelector(sel);
   UIColor *ui = AKSystemColors()[name];
+  if (!ui && [name hasSuffix:@"Color"] && ![name containsString:@":"]) {
+    fprintf(stderr, "[AppKitShim] NSColor: no mapping for system color +%s; using gray\n", name.UTF8String);
+    ui = UIColor.systemGrayColor;
+  }
   if (ui) {
     IMP imp = imp_implementationWithBlock(^NSColor *(id cls) { return [NSColor ak_with:ui]; });
     class_addMethod(object_getClass(self), sel, imp, "@@:");
@@ -139,6 +152,12 @@ static NSDictionary<NSString *, UIColor *> *AKSystemColors(void) {
 }
 
 + (NSInteger)currentControlTint { return 1; }  // NSBlueControlTint
+
+// The two alternating row backgrounds of a table (Chromium reads both by index).
++ (NSArray<NSColor *> *)alternatingContentBackgroundColors {
+  return @[ [self ak_with:UIColor.systemBackgroundColor], [self ak_with:UIColor.secondarySystemBackgroundColor] ];
+}
++ (NSArray<NSColor *> *)controlAlternatingRowBackgroundColors { return [self alternatingContentBackgroundColors]; }
 
 - (CGColorRef)CGColor { return _color.CGColor; }
 

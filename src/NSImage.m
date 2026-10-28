@@ -76,10 +76,38 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
   return _cg;
 }
 
++ (instancetype)imageRepWithData:(NSData *)data { return [[self alloc] initWithData:data]; }
++ (NSArray<NSImageRep *> *)imageRepsWithData:(NSData *)data {
+  NSBitmapImageRep *rep = [self imageRepWithData:data];
+  return rep ? @[ rep ] : @[];
+}
+
+- (NSColorSpace *)colorSpace { return NSColorSpace.sRGBColorSpace; }
+
 - (BOOL)drawInRect:(NSRect)rect {
   CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
   if (!ctx || !self.CGImage) return NO;
   CGContextDrawImage(ctx, rect, self.CGImage);
+  return YES;
+}
+
+// Draw the part `from` of the image (the whole image when it is empty) into `rect`, at
+// opacity `fraction`. AppKit rects have a bottom-left origin; a CGImage crop is top-left.
+- (BOOL)drawInRect:(NSRect)rect fromRect:(NSRect)from operation:(NSInteger)op
+          fraction:(CGFloat)fraction respectFlipped:(BOOL)respectFlipped hints:(NSDictionary *)hints {
+  CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
+  CGImageRef image = self.CGImage;
+  if (!ctx || !image) return NO;
+  CGImageRef part = NULL;
+  if (!NSIsEmptyRect(from)) {
+    CGFloat h = CGImageGetHeight(image);
+    part = CGImageCreateWithImageInRect(image, CGRectMake(from.origin.x, h - NSMaxY(from), from.size.width, from.size.height));
+  }
+  CGContextSaveGState(ctx);
+  CGContextSetAlpha(ctx, fraction);
+  CGContextDrawImage(ctx, rect, part ?: image);
+  CGContextRestoreGState(ctx);
+  if (part) CGImageRelease(part);
   return YES;
 }
 

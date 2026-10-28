@@ -99,6 +99,14 @@ completionHandler:(void (^)(NSRunningApplication *, NSError *))completionHandler
 - (NSImage *)iconForFile:(NSString *)fullPath { return nil; }
 - (NSImage *)iconForContentType:(id)contentType { return nil; }
 
+// The display accessibility settings, answered from iOS's equivalents (Chromium's native
+// theme and Steam's UI read these to pick contrast, transparency and animation).
+- (BOOL)accessibilityDisplayShouldReduceMotion { return UIAccessibilityIsReduceMotionEnabled(); }
+- (BOOL)accessibilityDisplayShouldReduceTransparency { return UIAccessibilityIsReduceTransparencyEnabled(); }
+- (BOOL)accessibilityDisplayShouldIncreaseContrast { return UIAccessibilityDarkerSystemColorsEnabled(); }
+- (BOOL)accessibilityDisplayShouldInvertColors { return UIAccessibilityIsInvertColorsEnabled(); }
+- (BOOL)accessibilityDisplayShouldDifferentiateWithoutColor { return UIAccessibilityShouldDifferentiateWithoutColor(); }
+
 
 AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER
