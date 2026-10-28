@@ -599,9 +599,31 @@ static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
   ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
 }
 
+// Where a thread is running right now, as image+offset (and the nearest symbol): Steam's
+// threads have no names, so this is what tells a busy one apart.
+static NSString *threadLocation(thread_act_t thread) {
+#if defined(__arm64__)
+  arm_thread_state64_t state;
+  mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+  if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) != KERN_SUCCESS) return @"?";
+  NSMutableString *out = [NSMutableString string];
+  uintptr_t addrs[2] = { (uintptr_t)arm_thread_state64_get_pc(state), (uintptr_t)arm_thread_state64_get_lr(state) };
+  for (int i = 0; i < 2; i++) {
+    Dl_info info;
+    if (!dladdr((void *)addrs[i], &info) || !info.dli_fname) { [out appendFormat:@"%@%p", i ? @" < " : @"", (void *)addrs[i]]; continue; }
+    const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
+    [out appendFormat:@"%@%s+0x%lx", i ? @" < " : @"", image, (unsigned long)(addrs[i] - (uintptr_t)info.dli_fbase)];
+    if (info.dli_sname) [out appendFormat:@" (%s)", info.dli_sname];
+  }
+  return out;
+#else
+  return @"?";
+#endif
+}
+
 // Where this process's CPU time goes right now: the total (100% = one core) and the busiest
-// threads by name. A phone that runs hot shows here which part is doing it. (WebKit's
-// pages run in their own process and aren't counted.)
+// threads, by name and by where they are running. A phone that runs hot shows here which
+// part is doing it. (WebKit's pages run in their own process and aren't counted.)
 static NSString *cpuReport(void) {
   thread_act_array_t threads;
   mach_msg_type_number_t count = 0;
@@ -614,7 +636,11 @@ static NSString *cpuReport(void) {
     if (thread_info(threads[i], THREAD_EXTENDED_INFO, (thread_info_t)&info, &n) == KERN_SUCCESS) {
       double percent = info.pth_cpu_usage * 100.0 / TH_USAGE_SCALE;
       total += percent;
-      if (percent >= 3) [busy addObject:@[ @(percent), info.pth_name[0] ? @(info.pth_name) : @"(unnamed)" ]];
+      if (percent >= 3) {
+        NSString *name = info.pth_name[0] ? @(info.pth_name) : @"(unnamed)";
+        if (percent >= 10) name = [name stringByAppendingFormat:@" [%@]", threadLocation(threads[i])];
+        [busy addObject:@[ @(percent), name ]];
+      }
     }
     mach_port_deallocate(mach_task_self(), threads[i]);
   }
