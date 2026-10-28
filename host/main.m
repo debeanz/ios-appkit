@@ -229,6 +229,8 @@ static NSArray<NSString *> *argumentsFromFile(NSString *name, NSArray<NSString *
   for (NSString *line in [custom componentsSeparatedByString:@"\n"]) {
     NSString *t = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     if (!t.length || [t hasPrefix:@"#"]) continue;
+    // V8's flags travel as one Chromium switch whose value holds several space-separated flags.
+    if ([t hasPrefix:@"--js-flags="]) { [args addObject:t]; continue; }
     for (NSString *word in [t componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet])
       if (word.length) [args addObject:word];
   }
@@ -254,16 +256,28 @@ static NSArray<NSString *> *launchArguments(void) {
 // can do neither, so the host points the client's calls to CreateSimpleProcess here, and
 // this runs the helper in-process through the shim (the packager made it a loadable
 // library). Chromium normally splits itself into renderer/GPU/utility processes; here it
-// has to stay in one, which these flags ask for. JavaScript runs without a JIT (V8's
-// interpreter), since iOS only allows generating code under a debugger. Pages render at 1.5x,
-// not the screen's 3x: Chromium draws every pixel on the CPU here, so 3x is four times the
-// pixels per frame. 1.5x roughly halves the raster work versus 2x and still reads clearly on
-// a phone; the scale is easy to retune (lower = faster and softer, higher = sharper).
+// has to stay in one, which these flags ask for.
+//
+// JavaScript runs in V8's interpreter (--jitless). This V8 writes generated code in place at
+// the address it runs it from (MAP_JIT + pthread_jit_write_protect_np), and on A15+/M2+
+// devices with iOS 26+ (TXM) MAP_JIT is refused without the dynamic-codesigning entitlement;
+// the only JIT those devices allow is a debugger-authorized, execute-only region written
+// through a separate alias, which V8 would have to be rebuilt to use. So the interpreter is
+// tuned instead: bytecode is never flushed (re-compiling it is the expensive part without a
+// JIT), feedback vectors are allocated up front (inline caches are the interpreter's main
+// speed-up, and lazy allocation leaves them off until a function has run several times), and
+// a larger young generation means fewer garbage collections.
+//
+// Pages render at 1.5x, not the screen's 3x: Chromium draws every pixel on the CPU here, so 3x
+// is four times the pixels per frame; four raster threads use the efficiency cores for it.
+// Reduced motion asks the UI to skip animations, which at software-rendered frame rates mostly
+// show up as stutter.
 static NSArray<NSString *> *webHelperArguments(void) {
   return argumentsFromFile(@"webhelper-args", @[
     @"--single-process", @"--no-sandbox", @"--no-zygote", @"--in-process-gpu",
-    @"--disable-gpu", @"--disable-gpu-compositing", @"--js-flags=--jitless",
-    @"--force-device-scale-factor=1.5",
+    @"--disable-gpu", @"--disable-gpu-compositing",
+    @"--js-flags=--jitless --no-flush-bytecode --no-lazy-feedback-allocation --max-semi-space-size=32",
+    @"--force-device-scale-factor=1.5", @"--num-raster-threads=4", @"--force-prefers-reduced-motion",
     @"--use-mock-keychain", @"--enable-logging=stderr",
   ], @"extra web helper (CEF) arguments");
 }
