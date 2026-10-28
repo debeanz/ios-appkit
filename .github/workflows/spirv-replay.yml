@@ -1,0 +1,58 @@
+# Replay a SPIR-V shader captured on the phone (Documents/gl-shaders, written by AKOpenGL in
+# front of MoltenVK) through the SPIRV-Cross that MoltenVK v1.4.2 converts shaders with, built
+# with AddressSanitizer, so a crash in its conversion to Metal shows exactly what went wrong.
+# Input: the .spv file, base64-encoded (`base64 -w0 last-vertex.spv`).
+name: spirv-replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      spirv:
+        description: The shader (.spv), base64
+        required: true
+      stage:
+        description: vertex or fragment
+        default: vertex
+
+jobs:
+  replay:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Tools (SPIRV-Tools for validation and disassembly)
+        run: brew install spirv-tools
+
+      - name: SPIRV-Cross at MoltenVK v1.4.2's revision, with AddressSanitizer
+        run: |
+          REV=$(curl -sfL https://raw.githubusercontent.com/KhronosGroup/MoltenVK/v1.4.2/ExternalRevisions/SPIRV-Cross_repo_revision)
+          git init -q cross && cd cross
+          git remote add origin https://github.com/KhronosGroup/SPIRV-Cross
+          git fetch -q --depth 1 origin "$REV" && git checkout -q FETCH_HEAD
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSPIRV_CROSS_ENABLE_TESTS=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+          cmake --build build --target spirv-cross -j 4
+          echo "SPIRV-Cross $REV"
+
+      - name: Validate, disassemble and convert to Metal as MoltenVK does on iOS
+        run: |
+          echo "${{ inputs.spirv }}" | base64 -d > shader.spv
+          ls -l shader.spv
+          spirv-val --target-env vulkan1.3 shader.spv 2>&1 | tee val.txt || true
+          spirv-dis shader.spv -o shader.spvasm || true
+          ASAN_OPTIONS=detect_leaks=0 ./cross/build/spirv-cross shader.spv --msl --msl-ios --msl-version 30200 \
+            --msl-decoration-binding --msl-argument-buffers --msl-argument-buffer-tier 1 \
+            --msl-force-native-arrays \
+            --output shader.metal 2>&1 | tee cross.txt || true
+          echo "--- without argument buffers"
+          ASAN_OPTIONS=detect_leaks=0 ./cross/build/spirv-cross shader.spv --msl --msl-ios --msl-version 30200 \
+            --output shader-plain.metal 2>&1 | tee cross-plain.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spirv-replay
+          path: |
+            shader.spv
+            shader.spvasm
+            shader*.metal
+            *.txt
