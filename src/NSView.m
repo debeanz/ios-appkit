@@ -111,6 +111,11 @@ static void AKViewDidMoveToWindow(NSView *view) {
 
 - (void)setWantsLayer:(BOOL)flag { _wantsLayer = flag; }
 
+// Desktop-OpenGL and trackpad-touch switches; iOS views are always full resolution and get
+// touches through UIKit.
+- (void)setWantsBestResolutionOpenGLSurface:(BOOL)flag {}
+- (void)setAcceptsTouchEvents:(BOOL)flag {}
+
 // As in AppKit, a layer-backed view's layer comes from -makeBackingLayer when the view
 // overrides it — SDL's Metal view returns a CAMetalLayer there, and the window surface it
 // renders through needs that layer, not a plain one.

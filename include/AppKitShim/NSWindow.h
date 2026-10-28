@@ -34,6 +34,11 @@ extern NSString *const NSBackingPropertyOldScaleFactorKey;
                           styleMask:(NSWindowStyleMask)style
                             backing:(NSBackingStoreType)backing
                               defer:(BOOL)defer;
+- (instancetype)initWithContentRect:(NSRect)rect
+                          styleMask:(NSWindowStyleMask)style
+                            backing:(NSBackingStoreType)backing
+                              defer:(BOOL)defer
+                             screen:(NSScreen *)screen;
 
 @property (nonatomic, strong) NSView *contentView;
 @property (nonatomic, weak) id delegate;

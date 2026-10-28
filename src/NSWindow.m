@@ -84,6 +84,15 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   return self;
 }
 
+// Every window here is on the one iPhone screen; SDL creates its windows through this one.
+- (instancetype)initWithContentRect:(NSRect)rect
+                          styleMask:(NSWindowStyleMask)style
+                            backing:(NSBackingStoreType)backing
+                              defer:(BOOL)defer
+                             screen:(NSScreen *)screen {
+  return [self initWithContentRect:rect styleMask:style backing:backing defer:defer];
+}
+
 - (NSInteger)windowNumber { return _windowNumber; }
 
 - (void)setContentView:(NSView *)contentView {
