@@ -293,15 +293,14 @@ static int (*gWebHelperMain)(int, char **);
 
 #pragma mark Which web engine
 
-// Steam's interface can be drawn by Chromium (Valve's Steam Helper, in-process: no JIT and no
-// GPU on iOS, so slow) or by Safari's engine (the shim's WebHelper.m stands in for Steam
-// Helper and shows pages in WKWebView). Chromium stays the default until the Safari engine
-// can show the whole interface; a three-finger long press switches (see AppDelegate). The
-// choice applies from the next launch.
+// Steam's interface can be drawn by Safari's engine (the shim's WebHelper.m stands in for
+// Steam Helper and shows pages in WKWebView), the default, or by Chromium (Valve's Steam
+// Helper, in-process: no JIT and no GPU on iOS, so slow), kept as a fallback. A three-finger
+// long press switches (see AppDelegate); the choice applies from the next launch.
 static NSString *const kEngineKey = @"SteamWebEngine";
 
 static BOOL safariEngine(void) {
-  return [[[NSUserDefaults standardUserDefaults] stringForKey:kEngineKey] isEqualToString:@"safari"];
+  return ![[[NSUserDefaults standardUserDefaults] stringForKey:kEngineKey] isEqualToString:@"chromium"];
 }
 
 // Steam computes the helper's path as <executable dir>/../Frameworks/..., which on a Mac is
@@ -599,28 +598,22 @@ static void hostSetContents(CALayer *layer, SEL cmd, id contents) {
   ((void (*)(id, SEL, id))gSetContents)(layer, cmd, contents);
 }
 
-// Where a thread is running right now: its call stack as image+offset (and the nearest
-// symbol). Steam's threads have no names, and a busy one is usually parked in a kernel wait
-// that something keeps waking, so the callers are what tell it apart. The thread is stopped
-// only while its frame pointers are copied (no locks taken then: symbolizing comes after).
-static NSString *threadLocation(thread_act_t thread) {
+// A thread's call stack right now (return addresses, innermost first). The thread is stopped
+// only while its frame pointers are copied: nothing that takes a lock happens meanwhile.
+static int captureStack(thread_act_t thread, uintptr_t *frames, int max) {
+  int n = 0;
 #if defined(__arm64__)
-  thread_act_t me = mach_thread_self();
-  mach_port_deallocate(mach_task_self(), me);
-  if (thread == me) return @"the heartbeat itself";
   pthread_t pt = pthread_from_mach_thread_np(thread);
   uintptr_t top = pt ? (uintptr_t)pthread_get_stackaddr_np(pt) : 0;
   uintptr_t bottom = pt ? top - pthread_get_stacksize_np(pt) : 0;
-  uintptr_t frames[16];
-  int n = 0;
-  if (thread_suspend(thread) != KERN_SUCCESS) return @"?";
+  if (thread_suspend(thread) != KERN_SUCCESS) return 0;
   arm_thread_state64_t state;
   mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
   if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
     frames[n++] = (uintptr_t)arm_thread_state64_get_pc(state);
     frames[n++] = (uintptr_t)arm_thread_state64_get_lr(state);
     uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(state);
-    while (n < 16 && top && fp >= bottom && fp + 16 <= top && !(fp & 7)) {
+    while (n < max && top && fp >= bottom && fp + 16 <= top && !(fp & 7)) {
       uintptr_t next = ((uintptr_t *)fp)[0], ret = ((uintptr_t *)fp)[1];
       if (!ret) break;
       frames[n++] = ret;
@@ -629,31 +622,87 @@ static NSString *threadLocation(thread_act_t thread) {
     }
   }
   thread_resume(thread);
-  NSMutableArray<NSString *> *out = [NSMutableArray array];
-  NSString *previous = nil;
-  for (int i = 0; i < n && out.count < 10; i++) {
-    uintptr_t a = frames[i] & 0x0000000fffffffffULL;   // return addresses may carry a pointer signature
-    Dl_info info;
-    NSString *frame;
-    if (!dladdr((void *)a, &info) || !info.dli_fname) {
-      frame = [NSString stringWithFormat:@"%p", (void *)a];
-    } else {
-      const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
-      frame = [NSString stringWithFormat:@"%s+0x%lx", image, (unsigned long)(a - (uintptr_t)info.dli_fbase)];
-      if (info.dli_sname) frame = [frame stringByAppendingFormat:@" (%s)", info.dli_sname];
-    }
-    if (![frame isEqualToString:previous]) [out addObject:frame];
-    previous = frame;
-  }
-  return [out componentsJoinedByString:@" < "];
-#else
-  return @"?";
+  for (int i = 0; i < n; i++) frames[i] &= 0x0000000fffffffffULL;   // drop pointer signatures
 #endif
+  return n;
+}
+
+static NSString *describeFrame(uintptr_t a) {
+  Dl_info info;
+  if (!dladdr((void *)a, &info) || !info.dli_fname) return [NSString stringWithFormat:@"%p", (void *)a];
+  const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
+  NSString *frame = [NSString stringWithFormat:@"%s+0x%lx", image, (unsigned long)(a - (uintptr_t)info.dli_fbase)];
+  return info.dli_sname ? [frame stringByAppendingFormat:@" (%s)", info.dli_sname] : frame;
+}
+
+static BOOL isSystemFrame(uintptr_t a) {
+  Dl_info info;
+  return !dladdr((void *)a, &info) || !info.dli_fname || strncmp(info.dli_fname, "/usr/lib/", 9) == 0 ||
+         strncmp(info.dli_fname, "/System/", 8) == 0 || strstr(info.dli_fname, "/dyld") != NULL;
+}
+
+// Where the busy threads spend their time: each thread over 8% is sampled 40 times over two
+// seconds, and each sample counts toward its innermost frame in Steam's or the app's code
+// (else the system call it is in, named with its nearest outside caller). Runs off the main
+// thread, so the main thread can be sampled too; the result goes to the log.
+static void profileBusyThreads(void) {
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    thread_act_array_t threads;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return;
+    thread_act_t me = mach_thread_self();
+    thread_act_t mainThread = pthread_mach_thread_np(pthread_main_thread_np());
+    NSMutableArray<NSArray *> *picked = [NSMutableArray array];   // [thread, name, percent]
+    for (mach_msg_type_number_t i = 0; i < count; i++) {
+      thread_extended_info_data_t info;
+      mach_msg_type_number_t n = THREAD_EXTENDED_INFO_COUNT;
+      double percent = thread_info(threads[i], THREAD_EXTENDED_INFO, (thread_info_t)&info, &n) == KERN_SUCCESS
+                           ? info.pth_cpu_usage * 100.0 / TH_USAGE_SCALE : 0;
+      if (threads[i] != me && percent >= 8 && picked.count < 4) {
+        NSString *name = threads[i] == mainThread ? @"main" : info.pth_name[0] ? @(info.pth_name) : @"(unnamed)";
+        [picked addObject:@[ @(threads[i]), name, @(percent) ]];
+      } else {
+        mach_port_deallocate(mach_task_self(), threads[i]);
+      }
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)threads, count * sizeof(thread_t));
+    mach_port_deallocate(mach_task_self(), me);
+    if (!picked.count) return;
+
+    enum { kSamples = 40, kDepth = 32 };
+    NSMutableArray<NSCountedSet *> *tallies = [NSMutableArray array];
+    for (NSUInteger t = 0; t < picked.count; t++) [tallies addObject:[NSCountedSet set]];
+    for (int s = 0; s < kSamples; s++) {
+      for (NSUInteger t = 0; t < picked.count; t++) {
+        uintptr_t frames[kDepth];
+        int n = captureStack([picked[t][0] unsignedIntValue], frames, kDepth);
+        if (!n) continue;
+        int own = -1;
+        for (int i = 0; i < n && own < 0; i++) if (!isSystemFrame(frames[i])) own = i;
+        NSString *where = own >= 0 ? describeFrame(frames[own])
+                                   : [NSString stringWithFormat:@"%@ (system only)", describeFrame(frames[0])];
+        if (own > 0) where = [where stringByAppendingFormat:@" in %@", describeFrame(frames[0])];
+        [tallies[t] addObject:where];
+      }
+      usleep(50000);
+    }
+    for (NSUInteger t = 0; t < picked.count; t++) {
+      NSCountedSet *tally = tallies[t];
+      NSArray *top = [tally.allObjects sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+        return [@([tally countForObject:b]) compare:@([tally countForObject:a])];
+      }];
+      NSMutableArray *parts = [NSMutableArray array];
+      for (NSUInteger i = 0; i < top.count && i < 4; i++)
+        [parts addObject:[NSString stringWithFormat:@"%lu%% %@", (unsigned long)([tally countForObject:top[i]] * 100 / kSamples), top[i]]];
+      hostlog(@"profile of %@ thread (%.0f%% CPU): %@", picked[t][1], [picked[t][2] doubleValue], [parts componentsJoinedByString:@"; "]);
+      mach_port_deallocate(mach_task_self(), [picked[t][0] unsignedIntValue]);
+    }
+  });
 }
 
 // Where this process's CPU time goes right now: the total (100% = one core) and the busiest
-// threads, by name and by where they are running. A phone that runs hot shows here which
-// part is doing it. (WebKit's pages run in their own process and aren't counted.)
+// threads by name (profileBusyThreads says where they run). A phone that runs hot shows here
+// which part is doing it. (WebKit's pages run in their own process and aren't counted.)
 static NSString *cpuReport(void) {
   thread_act_array_t threads;
   mach_msg_type_number_t count = 0;
@@ -668,7 +717,6 @@ static NSString *cpuReport(void) {
       total += percent;
       if (percent >= 3) {
         NSString *name = info.pth_name[0] ? @(info.pth_name) : @"(unnamed)";
-        if (percent >= 10) name = [name stringByAppendingFormat:@" [%@]", threadLocation(threads[i])];
         [busy addObject:@[ @(percent), name ]];
       }
     }
@@ -839,10 +887,10 @@ static void bringUpClient(void) {
     [restart addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
     [top presentViewController:restart animated:YES completion:nil];
   };
-  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Safari (WebKit) - current" : @"Safari (WebKit) - experimental"
+  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Safari (WebKit) - current" : @"Safari (WebKit)"
                                            style:UIAlertActionStyleDefault
                                          handler:^(UIAlertAction *a) { if (!safari) choose(@"safari", @"Safari's engine"); }]];
-  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Chromium" : @"Chromium - current"
+  [menu addAction:[UIAlertAction actionWithTitle:safari ? @"Chromium (slower, fallback)" : @"Chromium - current"
                                            style:UIAlertActionStyleDefault
                                          handler:^(UIAlertAction *a) { if (safari) choose(@"chromium", @"Chromium"); }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -878,8 +926,10 @@ static void bringUpClient(void) {
   NSTimer *heartbeat = [NSTimer timerWithTimeInterval:10 repeats:YES block:^(NSTimer *t) {
     int frames = gSurfaceFrames;
     ++beats;
-    if (beats <= 6 || beats % 3 == 0)
+    if (beats <= 6 || beats % 3 == 0) {
       hostlog(@"main thread turning (%ds); page frames %.1f/s; CPU %@", beats * 10, (frames - framesBefore) / 10.0, cpuReport());
+      profileBusyThreads();
+    }
     framesBefore = frames;
   }];
   [NSRunLoop.mainRunLoop addTimer:heartbeat forMode:NSRunLoopCommonModes];

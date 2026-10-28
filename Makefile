@@ -65,6 +65,7 @@ test: $(LIB)
 	$(CC) $(CFLAGS) tests/smoke.m -Lbuild/$(SDK) -lAppKitShim \
 	  -framework UIKit -framework Foundation -framework CoreGraphics \
 	  -framework AudioToolbox -framework QuartzCore -framework CoreVideo -framework Metal -framework ImageIO -framework WebKit \
+	  -framework GameController \
 	  -o $(BUILD)/smoke
 	@echo "linked $(BUILD)/smoke"
 

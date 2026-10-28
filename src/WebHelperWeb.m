@@ -244,9 +244,13 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
   wv.allowsLinkPreview = NO;
   wv.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
   if (appPage) {
-    // Steam's windows are apps, not documents: they lay out to the window and scroll inside.
+    // Steam's windows are apps, not documents: they lay out to the window and scroll inside,
+    // with nothing of the web view's own showing (scroll bars, the white behind the page).
     wv.scrollView.bounces = NO;
     wv.scrollView.scrollEnabled = NO;
+    wv.scrollView.showsVerticalScrollIndicator = NO;
+    wv.scrollView.showsHorizontalScrollIndicator = NO;
+    if (@available(iOS 15.0, *)) wv.underPageBackgroundColor = UIColor.blackColor;
   }
   if (@available(iOS 16.4, *)) wv.inspectable = YES;
   // WebKit asks this before a focused field brings up the keyboard (logged, see
@@ -286,7 +290,12 @@ static void layoutBrowser(AKWHBrowser *b) {
                                     b.cssBounds.size.width * z, b.cssBounds.size.height * z), z);
     b.webView.hidden = !b.viewVisible || b.cssBounds.size.width <= 0 || b.cssBounds.size.height <= 0;
   } else {
-    placeView(b.webView, stage.bounds, b.zoom);
+    // A whole number of CSS pixels wide, the scale adjusted to match: a fractional width left
+    // a hairline of the page's background down the right edge.
+    CGSize s = stage.bounds.size;
+    double width = ceil(s.width / b.zoom - 0.01), scale = s.width / width;
+    b.zoom = scale;   // what its BrowserViews are placed with
+    placeView(b.webView, CGRectMake(0, 0, s.width, ceil(s.height / scale - 0.01) * scale), scale);
   }
 }
 
@@ -549,6 +558,7 @@ static void installBridge(AKWHBrowser *b) {
   AKWHLog(YES, @"SteamClient bridge ready: %lu methods from Steam, screen %.0fx%.0f CSS px (zoom %.2f)",
           (unsigned long)gMethods.count, floor(s.width / z), floor(s.height / z), z);
   startWatchingPages();
+  AKWHGamepadStart();
 }
 
 static void createSteamBrowser(uint32_t requestId, NSDictionary *msg) {
@@ -590,6 +600,29 @@ static void callbackToPage(uint64_t handle, NSDictionary *msg) {
   AKWHBrowser *b = browserForIndex((uint32_t)(handle >> 32));
   if (!b) { AKWHLog(NO, @"callback %llu: its page is gone", handle); return; }
   enqueue(b, @{ @"t": @"call", @"h": @(handle & 0xffffffffu), @"a": msg[@"arguments"] ?: @[] });
+}
+
+#pragma mark Controller input for the pages
+
+// The page's System.UI.RegisterForSystemKeyEvents callback (registered with Steam, which
+// calls it for the Steam/Quick Access buttons it sees), and whether Steam ever has.
+static uint64_t gSystemKeyHandle;
+static BOOL gSteamSendsSystemKeys;
+
+void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed) {
+  for (AKWHBrowser *b in gBrowsers)
+    if (b.webView && !b.viewId) enqueue(b, @{ @"t": @"controller", @"c": @(controller), @"b": @(button), @"p": @(pressed) });
+}
+
+void AKWHSendSystemKey(uint32_t key, uint32_t controller) {
+  if (!gSystemKeyHandle || gSteamSendsSystemKeys) return;
+  NSDictionary *(^field)(NSString *, uint32_t) = ^(NSString *name, uint32_t v) {
+    return @{ @"name": name, @"value": @{ @"int_value": @(v) } };
+  };
+  callbackToPage(gSystemKeyHandle, @{ @"arguments": @[ @{
+    @"is_object": @YES,
+    @"object_properties": @[ field(@"eKey", key), field(@"nControllerIndex", controller), field(@"nAppID", 0) ],
+  } ] });
 }
 
 void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
@@ -634,6 +667,7 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
         }];
       break;
     case kAKWHJSExecuteCallback:
+      if ([msg[@"function_handle"] unsignedLongLongValue] == gSystemKeyHandle && gSystemKeyHandle) gSteamSendsSystemKeys = YES;
       callbackToPage([msg[@"function_handle"] unsignedLongLongValue], msg);
       break;
     case kAKWHJSReleaseCallback: {
@@ -738,6 +772,13 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     [v.webView goBack];
   } else if ([name isEqualToString:@"GoForward"]) {
     [v.webView goForward];
+  } else if ([name isEqualToString:@"SetWindowStackingOrder"]) {
+    // EWindowStackingOrder: 1 above the other views (an opened menu), 2 just above its window.
+    UIView *stage = hostView();
+    if ([args.firstObject intValue] == 2 && v.parent.webView.superview == stage)
+      [stage insertSubview:v.webView aboveSubview:v.parent.webView];
+    else if ([args.firstObject intValue] == 1)
+      [stage bringSubviewToFront:v.webView];
   } else if ([name isEqualToString:@"SetFocus"]) {
     if ([args.firstObject boolValue]) [v.webView becomeFirstResponder];
   } else if ([name isEqualToString:@"PostMessage"]) {
@@ -755,11 +796,16 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
   NSDictionary *m = message.body;
   NSString *op = m[@"op"];
   if ([op isEqualToString:@"call"]) {
+    NSArray *args = globalizeHandles(m[@"args"] ?: @[], b);
+    if ([m[@"name"] isEqualToString:@"System.UI.RegisterForSystemKeyEvents"]) {
+      id handle = [args.firstObject isKindOfClass:NSDictionary.class] ? args.firstObject[@"function_handle"] : nil;
+      if (handle) gSystemKeyHandle = [handle unsignedLongLongValue];
+    }
     AKWHSend(kAKWHJSMethodCall, b.handle, @{
       @"browser_handle": @(b.handle),
       @"owning_browser_handle": @(gMethodOwner ?: b.handle),
       @"name": m[@"name"] ?: @"",
-      @"arguments": globalizeHandles(m[@"args"] ?: @[], b),
+      @"arguments": args,
     });
   } else if ([op isEqualToString:@"release"]) {
     AKWHSend(kAKWHJSReleaseCallback, b.handle, @{

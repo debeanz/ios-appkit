@@ -24,6 +24,12 @@ const { canon, walk, parseYaml, parseJson } = require('./ios-sdk-gap.js');
 
 const SHIM = '@rpath/AppKitShim.framework/AppKitShim';
 
+// Libraries iOS has but the shim must stand in front of anyway, because it answers some of
+// their functions itself (the umbrella lists the shim's code first): CoreAudio's Mac
+// hardware calls start iOS's in-process audio hardware layer, whose Bluetooth plug-in then
+// kept a thread a quarter busy for nothing (src/CoreAudioHAL.m).
+const THROUGH_SHIM = new Set(['/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio']);
+
 // /System/Library/{,Private}Frameworks/N.framework/Versions/V/B -> .../N.framework/B
 function iosPath(p) {
   const m = p.match(/^(\/System\/Library\/(?:Private)?Frameworks\/[^/]+\.framework)\/Versions\/[^/]+\/([^/]+)$/);
@@ -197,7 +203,7 @@ function route() {
     // the SDK doesn't list still resolve when the real library is reached, so they only
     // count against a library that doesn't exist on iOS at all.
     const lacking = syms.filter(s => !(present && (reaches(ios, canon(s)) || atRuntime.has(s))));
-    const action = present && lacking.length === 0 ? (ios === p ? 'keep' : 'flatten') : 'shim';
+    const action = present && lacking.length === 0 && !THROUGH_SHIM.has(p) ? (ios === p ? 'keep' : 'flatten') : 'shim';
     // A shim-routed library that exists on iOS is forwarded whole by the umbrella.
     if (action === 'shim' && present) reexports.add(ios);
     lackingOf[p] = lacking;

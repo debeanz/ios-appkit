@@ -58,3 +58,11 @@ void AKWHLoopbackSetCookie(NSDictionary *cookie);
 // binary (which holds the key) are, and the font a /custom_fonts/*.uifont?<name> URL names.
 void AKWHFontsSetPaths(NSString *clientUI, NSString *helperBinary);
 NSData *AKWHFontForURL(NSURL *url);
+
+// Controllers (WebHelperGamepad.m) and what they send the pages (WebHelperWeb.m): a button
+// as SteamClient.Input's controller message (EGamepadButton code), and Steam's system keys
+// (0 the Steam menu, 1 Quick Access) through the page's RegisterForSystemKeyEvents callback.
+// Main thread.
+void AKWHGamepadStart(void);
+void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed);
+void AKWHSendSystemKey(uint32_t key, uint32_t controller);

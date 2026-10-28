@@ -204,6 +204,9 @@ function akwhInstall(win, config) {
     return { unregister() { store.delete(callback); } };
   };
 
+  // Controller buttons from the app (WebHelperGamepad.m): (controller index, EGamepadButton,
+  // pressed, x, y), as Steam Helper calls these back.
+  const controllerInput = new Set();
   const screenCss = () => config.screen || { width: win.innerWidth, height: win.innerHeight };
   const builtins = {
     'Window.BringToFront': windowOp('BringToFront'),
@@ -265,7 +268,7 @@ function akwhInstall(win, config) {
 
     'Input.EnableControllerAnalogInputMessages': noop,
     'Input.RegisterForControllerAnalogInputMessages': registration(new Set()),
-    'Input.RegisterForControllerInputMessages': registration(new Set()),
+    'Input.RegisterForControllerInputMessages': registration(controllerInput),
     'Input.RegisterForKeyboardDeviceChanges': registration(new Set()),
     'Input.RegisterForTouchMenuInputMessages': registration(new Set()),
     'Input.RegisterForTouchMenuMessages': registration(new Set()),
@@ -338,20 +341,33 @@ function akwhInstall(win, config) {
     DialogResponse() {}
     SetVRKeyboardVisibility() {}
     AddHeader(key, value) { this.send('AddHeader', [String(key), String(value)]); }
+    // EWindowStackingOrder: 1 above the other views, 2 just above its window.
+    SetWindowStackingOrder(order) { this.send('SetWindowStackingOrder', [+order || 0]); }
   }
-  builtins['BrowserView.Create'] = (options) => {
+  // A method of Steam Helper's BrowserView this one lacks goes to the app, which logs it,
+  // instead of throwing in the page (a missing one took down the Big Picture menu).
+  const unknownMethods = {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string' || prop in target || !/^[A-Z]/.test(prop)) return Reflect.get(target, prop, receiver);
+      return function () { target.send(prop, Array.from(arguments)); };
+    },
+  };
+  const newView = () => {
     const view = new BrowserView(nextView++);
     views.set(view.id, view);
+    return { view, page: new Proxy(view, unknownMethods) };
+  };
+  builtins['BrowserView.Create'] = (options) => {
+    const { view, page } = newView();
     post({ op: 'bv-create', id: view.id, options: JSON.parse(JSON.stringify(options || {})) });
-    return view;
+    return page;
   };
   builtins['BrowserView.CreatePopup'] = (options) => {
-    const view = new BrowserView(nextView++);
-    views.set(view.id, view);
+    const { view, page } = newView();
     const opts = JSON.parse(JSON.stringify(options || {}));
     post({ op: 'bv-createpopup', id: view.id, options: opts });
     const parent = opts.parentPopupBrowserID != null ? opts.parentPopupBrowserID : 0;
-    return { strCreateURL: 'about:blank?browserviewpopup=1&requestid=' + view.id + '&parentpopup=' + parent, browserView: view };
+    return { strCreateURL: 'about:blank?browserviewpopup=1&requestid=' + view.id + '&parentpopup=' + parent, browserView: page };
   };
   builtins['BrowserView.Destroy'] = (view) => {
     if (!view || !views.has(view.id)) return;
@@ -480,6 +496,10 @@ function akwhInstall(win, config) {
           } else if (m.t === 'ws') {
             const socket = sockets.get(m.id);
             if (socket) socket.__deliver(m);
+          } else if (m.t === 'controller') {
+            for (const fn of Array.from(controllerInput)) {
+              try { fn(m.c, m.b, !!m.p, 0, 0); } catch (e) { reportError(e); }
+            }
           } else if (m.t === 'parent-message') {
             for (const fn of Array.from(parentMessageListeners)) fn.apply(null, m.a || []);
           } else if (m.t === 'methods') {
@@ -511,7 +531,11 @@ function akwhInstall(win, config) {
     };
   }
   win.addEventListener('error', (e) => reportError((e.error && e.error.stack) || (e.message + ' at ' + e.filename + ':' + e.lineno)));
-  win.addEventListener('unhandledrejection', (e) => reportError('unhandled rejection: ' + ((e.reason && e.reason.stack) || e.reason)));
+  win.addEventListener('unhandledrejection', (e) => {
+    let reason = e.reason && e.reason.stack;
+    if (!reason) { try { reason = JSON.stringify(e.reason); } catch (ignored) {} }
+    reportError('unhandled rejection: ' + (reason || String(e.reason)));
+  });
 
   // A phone-sized page: the width of the window, no zooming, no text inflation, no long-press
   // callouts. Steam writes its popups' documents itself (document.write), so this runs again
