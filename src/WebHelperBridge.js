@@ -537,8 +537,30 @@ function akwhInstall(win, config) {
     reportError('unhandled rejection: ' + (reason || String(e.reason)));
   });
 
+  // A long press opens Steam's context menu (WebHelperWeb.m reports it to Steam). The click
+  // WebKit may still make where the finger lifts must not also open what was pressed: one
+  // near that point, until shortly after the finger is up, is dropped.
+  let pressed = null;
+  Object.defineProperty(win, '__akwhLongPress', {
+    value: (x, y, lifted) => {
+      if (!lifted) pressed = { x, y, until: 0 };
+      else if (pressed) pressed.until = Date.now() + 400;
+    },
+    configurable: true,
+  });
+  const swallowPressClick = (e) => {
+    if (!pressed) return;
+    const p = pressed;
+    pressed = null;
+    if ((!p.until || Date.now() < p.until) && Math.abs(e.clientX - p.x) < 24 && Math.abs(e.clientY - p.y) < 24) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  };
+
   // A phone-sized page: the width of the window, no zooming, no text inflation, no long-press
-  // callouts. Steam writes its popups' documents itself (document.write), so this runs again
+  // callouts or text selection outside fields (an app, not a document). Steam writes its
+  // popups' documents itself (document.write, which also drops listeners), so this runs again
   // after that.
   function fitDocument(doc) {
     try {
@@ -585,10 +607,25 @@ function akwhInstall(win, config) {
           }
         }).observe(root, { childList: true, subtree: true });
       }
+      if (root && !root.__akwhPressClick) {
+        root.__akwhPressClick = true;
+        doc.addEventListener('click', swallowPressClick, true);
+        // One-line fields (account names, codes, search) are typed as they are: no automatic
+        // capitals or corrections, unless the page asked for them. Chat boxes keep both.
+        doc.addEventListener('focusin', (e) => {
+          const el = e.target;
+          if (!el || el.tagName !== 'INPUT') return;
+          if (!el.hasAttribute('autocapitalize')) el.setAttribute('autocapitalize', 'off');
+          if (!el.hasAttribute('autocorrect')) el.setAttribute('autocorrect', 'off');
+          if (!el.hasAttribute('spellcheck')) el.spellcheck = false;
+        }, true);
+      }
       if (!doc.getElementById('__akwh_style')) {
         const style = doc.createElement('style');
         style.id = '__akwh_style';
-        style.textContent = 'html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}' +
+        style.textContent = 'html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;' +
+                            '-webkit-user-select:none;user-select:none}' +
+                            'input,textarea,[contenteditable],[contenteditable] *{-webkit-user-select:text;user-select:text}' +
                             '*{-webkit-touch-callout:none}';
         doc.head.appendChild(style);
       }

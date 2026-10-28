@@ -54,7 +54,8 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @implementation AKWHBrowser
 @end
 
-@interface AKWHWebDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler>
+@interface AKWHWebDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UIGestureRecognizerDelegate>
+- (void)longPressed:(UILongPressGestureRecognizer *)g;
 @end
 
 static NSMutableArray<AKWHBrowser *> *gBrowsers;
@@ -251,6 +252,12 @@ static WKWebView *makeWebView(AKWHBrowser *b, WKWebViewConfiguration *config, BO
     wv.scrollView.showsVerticalScrollIndicator = NO;
     wv.scrollView.showsHorizontalScrollIndicator = NO;
     if (@available(iOS 15.0, *)) wv.underPageBackgroundColor = UIColor.blackColor;
+    // A long press is the touch screen's right click (see -longPressed:).
+    UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:gDelegate action:@selector(longPressed:)];
+    press.delegate = gDelegate;
+    press.cancelsTouchesInView = NO;
+    press.delaysTouchesEnded = NO;
+    [wv addGestureRecognizer:press];
   }
   if (@available(iOS 16.4, *)) wv.inspectable = YES;
   // WebKit asks this before a focused field brings up the keyboard (logged, see
@@ -927,6 +934,35 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
     b.knownToSteam = YES;
   }
   return wv;
+}
+
+// Long press: a touch screen's context menu. Chromium's Steam Helper reports it to Steam
+// (CMsgTouchGesture, ETouchGesture 5, in the window's CSS pixels), Steam hands it to the
+// window's Browser.RegisterForGestureEvents listener, and Big Picture turns it into a
+// contextmenu event where the finger is (a game's options, say). WebKit reports no such
+// gesture, so this recognizer does, with the tap an iPhone gives for a context menu; the page
+// (WebHelperBridge.js) swallows the click WebKit may still make where the finger lifts, so
+// the item pressed isn't opened as well. Only for Steam's windows: its listener looks in the
+// window, so a press on a menu over it would land on whatever is behind the menu.
+- (void)longPressed:(UILongPressGestureRecognizer *)g {
+  WKWebView *wv = (WKWebView *)g.view;
+  AKWHBrowser *b = browserForWebView(wv);
+  if (!b.knownToSteam || b.viewId) return;
+  CGPoint p = [g locationInView:wv];   // the view's own size is the window's, in CSS pixels
+  if (g.state == UIGestureRecognizerStateBegan) {
+    AKWHSend(kAKWHTouchGesture, b.handle, @{ @"browser_handle": @(b.handle), @"gesture": @5, @"x": @(p.x), @"y": @(p.y) });
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    AKWHLog(NO, @"page %u: long press at %.0f,%.0f", b.index, p.x, p.y);
+  }
+  if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled)
+    [wv evaluateJavaScript:[NSString stringWithFormat:@"window.__akwhLongPress && window.__akwhLongPress(%.1f, %.1f, %@)", p.x, p.y,
+                                                      g.state == UIGestureRecognizerStateBegan ? @"false" : @"true"]
+         completionHandler:nil];
+}
+
+// Alongside WebKit's own recognizers: the press only adds to them.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
+  return YES;
 }
 
 // WebKit's private input delegate: asked before a focused field starts a keyboard session.

@@ -35,6 +35,7 @@ enum {
   kAKWHJSMethodCall = 110,
   kAKWHPopupHTMLWindow = 122,
   kAKWHSetHTMLTitle = 131,
+  kAKWHTouchGesture = 143,
   kAKWHURLChanged = 144,
 };
 
