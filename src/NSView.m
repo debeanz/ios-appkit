@@ -310,19 +310,21 @@ static BOOL AKMeasuresFromBottom(NSView *superview) { return superview && !super
 - (NSUInteger)allowedTouchTypes { return 0; }
 - (void)setAllowedTouchTypes:(NSUInteger)types {}
 
-// The superview's list may hold the last reference to this view. Keep the view alive until
-// it is fully detached and told so, as AppKit does; releasing it mid-detach let a client's
-// -dealloc run on a half-removed view (Chromium crashed there opening Steam's menu).
+// The superview's list may hold the last reference to this view, and AppKit doesn't let go of
+// it there: the removed view is autoreleased, so it lives until the current event is done.
+// Mac code relies on that — Steam brings a popup to the front with
+//   [view removeFromSuperview]; [superview addSubview:view positioned:... relativeTo:nil];
+// holding no reference of its own in between. Releasing on the spot freed the view first
+// (Steam's menu crashed opening, on -dealloc and then on the re-add).
 - (void)removeFromSuperview {
   if (!self.superview) return;
-  __attribute__((objc_precise_lifetime)) NSView *keepAlive = self;
+  CFAutorelease(CFBridgingRetain(self));
   NSWindow *oldWindow = self.window;
   [self viewWillMoveToSuperview:nil];
   if (oldWindow) AKViewWillMoveToWindow(self, nil);
   [self _ak_detachFromSuperview];
   [self viewDidMoveToSuperview];
   if (oldWindow) AKViewDidMoveToWindow(self);
-  (void)keepAlive;
 }
 
 - (void)_ak_detachFromSuperview {
