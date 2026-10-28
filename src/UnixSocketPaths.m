@@ -9,6 +9,7 @@
 // libSystem is routed through the shim umbrella, so the client's socket calls bind here.
 #import <dlfcn.h>
 #import <errno.h>
+#import <stddef.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
