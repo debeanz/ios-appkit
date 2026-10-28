@@ -89,5 +89,7 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 // Escape hatch: the backing UIView, so Metal layers and CEF's compositor can attach.
 #if __has_include(<UIKit/UIKit.h>)
 @property (nonatomic, readonly) UIView *backingView;
+// Whether an OpenGL context draws this view at the screen's resolution or in points.
+@property (nonatomic, assign) BOOL wantsBestResolutionOpenGLSurface;
 #endif
 @end

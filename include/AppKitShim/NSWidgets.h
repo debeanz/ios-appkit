@@ -265,21 +265,40 @@ typedef NS_ENUM(NSInteger, NSScrollerStyle) { NSScrollerStyleLegacy = 0, NSScrol
 
 #pragma mark OpenGL
 
-// Desktop OpenGL doesn't exist on iOS. AppKit returns nil from these initialisers when the
-// requested format isn't available, and callers fall back (Chromium uses Metal anyway).
+// Desktop OpenGL for the Mac games Steam starts, over AKOpenGL.framework (Mesa's OpenGL with
+// Zink on MoltenVK; NSOpenGL.m). Outside a game the initialisers return nil, as AppKit does
+// when no format matches, and callers fall back (Steam's own interface never draws with GL).
 @interface NSOpenGLPixelFormat : NSObject
 - (instancetype)initWithAttributes:(const uint32_t *)attribs;
+- (instancetype)initWithCGLPixelFormatObj:(void *)pix;
+- (void *)CGLPixelFormatObj;
+- (void)getValues:(int32_t *)vals forAttribute:(uint32_t)attrib forVirtualScreen:(int32_t)screen;
+@property (nonatomic, readonly) int32_t numberOfVirtualScreens;
 @end
 
 @interface NSOpenGLContext : NSObject
 + (NSOpenGLContext *)currentContext;
 + (void)clearCurrentContext;
 - (instancetype)initWithFormat:(NSOpenGLPixelFormat *)format shareContext:(NSOpenGLContext *)share;
+- (instancetype)initWithCGLContextObj:(void *)ctx;
+- (void *)CGLContextObj;
+@property (nonatomic, readonly) NSOpenGLPixelFormat *pixelFormat;
+@property (nonatomic, weak) NSView *view;
 - (void)makeCurrentContext;
 - (void)flushBuffer;
+- (void)update;
+- (void)clearDrawable;
+- (void)setValues:(const int32_t *)vals forParameter:(NSInteger)param;
+- (void)getValues:(int32_t *)vals forParameter:(NSInteger)param;
 @end
 
 @interface NSOpenGLView : NSView
++ (NSOpenGLPixelFormat *)defaultPixelFormat;
+- (instancetype)initWithFrame:(NSRect)frame pixelFormat:(NSOpenGLPixelFormat *)format;
 @property (nonatomic, strong) NSOpenGLPixelFormat *pixelFormat;
 @property (nonatomic, strong) NSOpenGLContext *openGLContext;
+- (void)prepareOpenGL;
+- (void)reshape;
+- (void)update;
+- (void)clearGLContext;
 @end

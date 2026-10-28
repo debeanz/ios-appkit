@@ -154,6 +154,13 @@ CVReturn CVDisplayLinkStop(CVDisplayLinkRef link) {
 
 Boolean CVDisplayLinkIsRunning(CVDisplayLinkRef link) { return link && AKLink(link).running; }
 
+// Seconds per refresh of the link's display (the panel's fastest rate: ProMotion goes to 120 Hz).
+double CVDisplayLinkGetActualOutputVideoRefreshPeriod(CVDisplayLinkRef link) {
+  UIScreen *screen = link ? AKScreenForDisplayID(AKLink(link).display) : nil;
+  NSInteger fps = (screen ?: UIScreen.mainScreen).maximumFramesPerSecond;
+  return fps > 0 ? 1.0 / fps : 0;
+}
+
 CGDirectDisplayID CVDisplayLinkGetCurrentCGDisplay(CVDisplayLinkRef link) { return link ? AKLink(link).display : kCGNullDirectDisplay; }
 
 CVReturn CVDisplayLinkSetCurrentCGDisplay(CVDisplayLinkRef link, CGDirectDisplayID displayID) {

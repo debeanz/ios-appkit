@@ -3,6 +3,7 @@
 #import "AppKitShim/NSTrackingArea.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 // Coordinates. AppKit measures from the bottom-left: window points go up from the bottom of
 // the content area, and a view's own points do too unless it says -isFlipped (the default is
@@ -190,9 +191,13 @@ static BOOL AKMeasuresFromBottom(NSView *superview) { return superview && !super
 
 - (void)setWantsLayer:(BOOL)flag { _wantsLayer = flag; }
 
-// Desktop-OpenGL and trackpad-touch switches; iOS views are always full resolution and get
-// touches through UIKit.
-- (void)setWantsBestResolutionOpenGLSurface:(BOOL)flag {}
+// Whether an OpenGL context draws this view at the screen's resolution (NSOpenGL.m) or in
+// points. Touches always come through UIKit.
+static char kBestResolutionKey;
+- (void)setWantsBestResolutionOpenGLSurface:(BOOL)flag {
+  objc_setAssociatedObject(self, &kBestResolutionKey, @(flag), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+- (BOOL)wantsBestResolutionOpenGLSurface { return [objc_getAssociatedObject(self, &kBestResolutionKey) boolValue]; }
 - (void)setAcceptsTouchEvents:(BOOL)flag {}
 
 // As in AppKit, a layer-backed view's layer comes from -makeBackingLayer when the view

@@ -16,7 +16,7 @@ concurrency:
 jobs:
   ipa:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -59,6 +59,24 @@ jobs:
           plain=$(names 'LC_LOAD_DYLIB$' || true)
           [ -z "$plain" ] || { echo "ERROR: umbrella has plain dependencies:"; echo "$plain"; exit 1; }
           [ -z "$missing" ] || { echo "ERROR: re-exports the linker did not write:"; echo "$missing"; exit 1; }
+
+      - name: Restore the OpenGL stack (MoltenVK + Mesa OSMesa/Zink; the gl workflow fills the cache)
+        id: glcache
+        uses: actions/cache@v4
+        with:
+          path: build/gl
+          key: gl-${{ hashFiles('tools/gl/**') }}
+
+      - name: Build the OpenGL stack (only when the cache is empty)
+        if: steps.glcache.outputs.cache-hit != 'true'
+        run: bash tools/gl/build.sh build/gl
+
+      - name: Build AKOpenGL.framework (OpenGL for Mac games) and stage the stack
+        run: |
+          make opengl SDK=device GL_DIR=build/gl
+          cp build/gl/libOSMesa.dylib build/gl/libMoltenVK.dylib build/device/
+          otool -L build/device/AKOpenGL.framework/AKOpenGL | head
+          echo "AKOpenGL exports $(nm -gU build/device/AKOpenGL.framework/AKOpenGL | wc -l) symbols of its own"
 
       - name: Verify the shim exports what only it can provide
         run: |

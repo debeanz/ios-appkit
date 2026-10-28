@@ -111,10 +111,26 @@ umbrella:
 	cp framework/Info.plist $(UMBRELLA)/Info.plist
 	@echo "built $(UMBRELLA)/AppKitShim (re-exports $(CORE_NAME) + $(words $(REEXPORT_TBDS)) iOS libraries)"
 
+# Desktop OpenGL for Mac games (opengl/AKOpenGL.m): CGL, GLU and Apple's GL extensions, plus a
+# re-export of Mesa's libOSMesa (built by tools/gl/build.sh into GL_DIR), so a game whose
+# OpenGL.framework points here gets every gl* function straight from Mesa. @loader_path/.. is
+# the app's Frameworks dir, where libOSMesa.dylib and libMoltenVK.dylib sit.
+GL_DIR ?= build/gl
+OPENGL := $(BUILD)/AKOpenGL.framework
+opengl:
+	mkdir -p $(OPENGL)
+	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/AKOpenGL.framework/AKOpenGL \
+	  -compatibility_version 1.0 -current_version 1.0 -Wl,-rpath,@loader_path/.. \
+	  opengl/AKOpenGL.m -Wl,-reexport_library,$(GL_DIR)/libOSMesa.dylib \
+	  -framework Foundation -framework UIKit -framework QuartzCore -framework IOSurface \
+	  -o $(OPENGL)/AKOpenGL
+	sed 's/AppKitShim/AKOpenGL/g' framework/Info.plist > $(OPENGL)/Info.plist
+	@echo "built $(OPENGL)/AKOpenGL (re-exports $(GL_DIR)/libOSMesa.dylib)"
+
 coverage:
 	node tools/gen-coverage.js data/ios-gap.json src/implemented.json COVERAGE.md coverage.json
 
 clean:
 	rm -rf build
 
-.PHONY: all test framework umbrella coverage clean
+.PHONY: all test framework umbrella opengl coverage clean

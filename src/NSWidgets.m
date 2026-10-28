@@ -540,25 +540,4 @@ AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
 
-#pragma mark OpenGL
-
-@implementation NSOpenGLPixelFormat
-- (instancetype)initWithAttributes:(const uint32_t *)attribs { return nil; }
-
-AK_UNIMPLEMENTED_FORWARDER
-AK_UNIMPLEMENTED_CLASS_FORWARDER
-@end
-
-@implementation NSOpenGLContext
-+ (NSOpenGLContext *)currentContext { return nil; }
-+ (void)clearCurrentContext {}
-- (instancetype)initWithFormat:(NSOpenGLPixelFormat *)format shareContext:(NSOpenGLContext *)share { return nil; }
-- (void)makeCurrentContext {}
-- (void)flushBuffer {}
-
-AK_UNIMPLEMENTED_FORWARDER
-AK_UNIMPLEMENTED_CLASS_FORWARDER
-@end
-
-@implementation NSOpenGLView
-@end
+// NSOpenGLPixelFormat, NSOpenGLContext and NSOpenGLView: NSOpenGL.m.

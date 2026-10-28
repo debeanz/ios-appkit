@@ -3,6 +3,7 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/SecurityMac.h"
 #import <Security/Security.h>
+#import <objc/runtime.h>
 
 #define AK_SEC(ret, cname, sym, params) ret cname params __asm__("_" #sym); ret cname params
 
@@ -181,4 +182,42 @@ AK_SEC(OSStatus, AKAuthorizationRightGet, AuthorizationRightGet, (const char *ri
 AK_SEC(OSStatus, AKAuthorizationRightSet, AuthorizationRightSet,
        (void *authorization, const char *rightName, const void *definition, const void *description, const void *bundle, const void *table)) {
   return AKErrAuthorizationDenied;
+}
+
+#pragma mark Keychain search and certificate data
+
+// Old Mac keychain searches (games look for root certificates or saved passwords this way).
+// iOS has no file keychains to open or search, so: no such keychain, nothing found.
+enum { AKErrSecNoSuchKeychain = -25294, AKErrSecItemNotFound = -25300, AKErrSecUnimplemented = -4 };
+
+AK_SEC(OSStatus, AKSecKeychainOpen, SecKeychainOpen, (const char *pathName, void **keychain)) {
+  if (keychain) *keychain = NULL;
+  return AKErrSecNoSuchKeychain;
+}
+AK_SEC(OSStatus, AKSecKeychainSearchCreateFromAttributes, SecKeychainSearchCreateFromAttributes,
+       (const void *keychainOrArray, uint32_t itemClass, const void *attrList, void **searchRef)) {
+  if (searchRef) *searchRef = NULL;
+  return AKErrSecItemNotFound;
+}
+AK_SEC(OSStatus, AKSecKeychainSearchCopyNext, SecKeychainSearchCopyNext, (void *searchRef, void **itemRef)) {
+  if (itemRef) *itemRef = NULL;
+  return AKErrSecItemNotFound;
+}
+AK_SEC(OSStatus, AKSecKeychainItemCopyContent, SecKeychainItemCopyContent,
+       (void *itemRef, uint32_t *itemClass, void *attrList, UInt32 *length, void **outData)) {
+  if (length) *length = 0;
+  if (outData) *outData = NULL;
+  return AKErrSecItemNotFound;
+}
+// The certificate's DER bytes as a CSSM_DATA {length, data}: iOS has SecCertificateCopyData.
+typedef struct { size_t Length; uint8_t *Data; } AKCSSMData;
+AK_SEC(OSStatus, AKSecCertificateGetData, SecCertificateGetData, (SecCertificateRef certificate, AKCSSMData *data)) {
+  if (!certificate || !data) return AKErrSecUnimplemented;
+  // CSSM_DATA points into the certificate; keep the bytes alive with the certificate.
+  static const char kDataKey = 0;
+  NSData *der = CFBridgingRelease(SecCertificateCopyData(certificate));
+  objc_setAssociatedObject((__bridge id)certificate, &kDataKey, der, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  data->Length = der.length;
+  data->Data = (uint8_t *)der.bytes;
+  return 0;
 }

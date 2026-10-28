@@ -54,6 +54,10 @@ fi
 for fw in "$FW_DIR"/*.framework; do
   [ -d "$fw" ] && cp -R "$fw" "$app/Frameworks/" && echo "  embedded Frameworks/$(basename "$fw")"
 done
+# Plain libraries next to them: Mesa (libOSMesa) and MoltenVK, the OpenGL stack for Mac games.
+for lib in "$FW_DIR"/*.dylib; do
+  [ -f "$lib" ] && cp "$lib" "$app/Frameworks/" && echo "  embedded Frameworks/$(basename "$lib")"
+done
 [ -d "$app/Frameworks/AppKitShim.framework" ] || { echo "ERROR: no AppKitShim.framework in $FW_DIR"; exit 1; }
 # The routes, for the games Steam downloads: the app converts their binaries on the device
 # and links their system libraries the same way (src/MacPrograms.m).

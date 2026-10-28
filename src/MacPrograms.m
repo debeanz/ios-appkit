@@ -110,8 +110,18 @@ static NSDictionary<NSString *, NSDictionary *> *clientRoutes(void) {
 
 // Where a game binary's library reference should point here. A name already routed comes
 // back unchanged, so converting again is harmless.
+static NSString *const kOpenGLName = @"@rpath/AKOpenGL.framework/AKOpenGL";
+
 static NSString *routeLibrary(NSString *name, NSString *programDir, NSString *fileDir) {
   if ([name hasPrefix:@"@executable_path/"]) return fromExecutablePath(name, programDir, fileDir);
+  // OpenGL, and the libGL and libGLU inside it: Mesa's OpenGL (Zink on MoltenVK) through
+  // AKOpenGL.framework, which re-exports Mesa and adds CGL, GLU and Apple's extensions.
+  static BOOL haveOpenGL;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    haveOpenGL = [NSFileManager.defaultManager fileExistsAtPath:[frameworksDir() stringByAppendingPathComponent:@"AKOpenGL.framework/AKOpenGL"]];
+  });
+  if (haveOpenGL && [name hasPrefix:@"/System/Library/Frameworks/OpenGL.framework/"]) return kOpenGLName;
   NSDictionary *route = clientRoutes()[name];
   if ([route[@"to"] isKindOfClass:NSString.class]) return route[@"to"];
   if (![name hasPrefix:@"/System/Library/"] && ![name hasPrefix:@"/usr/lib/"]) return name;   // @loader_path, @rpath, the game's own
@@ -829,7 +839,11 @@ static NSUInteger reportMissingImports(NSString *path, NSString *bundlePath) {
     uint32_t ordinal = GET_LIBRARY_ORDINAL(s->n_desc);
     if (ordinal == SELF_LIBRARY_ORDINAL || ordinal > libs.count || s->n_un.n_strx >= symtab->strsize) continue;
     NSString *lib = libs[ordinal - 1];
-    if ([lib isEqualToString:kShimName]) lib = shimPath();
+    if ([lib hasPrefix:@"@rpath/"]) {   // one of the app's (the shim, OpenGL); a game's own are checked themselves
+      NSString *inApp = [frameworksDir() stringByAppendingPathComponent:[lib substringFromIndex:7]];
+      if (![NSFileManager.defaultManager fileExistsAtPath:inApp]) continue;
+      lib = inApp;
+    }
     if (![lib hasPrefix:@"/"] || [lib hasPrefix:bundlePath]) continue;   // its own libraries are checked themselves
     const char *name = strs + s->n_un.n_strx;
     if (*name != '_') continue;
