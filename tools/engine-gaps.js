@@ -112,7 +112,14 @@ function main() {
     for (const file of walkFiles(root)) {
       const rel = path.relative(root, file);
       let buf;
-      try { buf = fs.readFileSync(file); } catch { continue; }
+      try {
+        const head = Buffer.alloc(4), fd = fs.openSync(file, 'r');
+        const got = fs.readSync(fd, head, 0, 4, 0);
+        fs.closeSync(fd);
+        const magic = got === 4 ? head.readUInt32BE(0) : 0;
+        if (magic !== 0xcafebabe && magic !== 0xcafebabf && magic !== 0xcffaedfe) continue;
+        buf = fs.readFileSync(file);
+      } catch { continue; }
       if (buf.length < 32 || !mg.slices(buf).length) continue;
       for (const [re, what] of CODEGEN) if (re.test('/' + rel)) e.codegen.push(`${rel}: ${what}`);
       const { slice, why } = arm64Slice(buf);

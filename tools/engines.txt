@@ -1,6 +1,11 @@
 # Mac builds of game engines, checked against the shim on every IPA build (tools/engine-gaps.js).
-# <name> <url>; a .dmg is mounted and copied, a .zip unpacked.
+# <name> <url>; a .dmg is mounted and copied, a .zip unpacked, a .pkg expanded.
 sdl3   https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.dmg
 sdl2   https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.dmg
 love   https://github.com/love2d/love/releases/download/11.5/love-11.5-macos.zip
 godot  https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_macos.universal.zip
+godot3 https://github.com/godotengine/godot/releases/download/3.6.3-stable/Godot_v3.6.3-stable_osx.universal.zip
+# Unity's Mac players (IL2CPP), one per long-term-support line: 2021.3, 2022.3, Unity 6.
+unity2021 https://download.unity3d.com/download_unity/88f88f591b2e/MacEditorTargetInstaller/UnitySetup-Mac-IL2CPP-Support-for-Editor-2021.3.45f2.pkg
+unity2022 https://download.unity3d.com/download_unity/96770f904ca7/MacEditorTargetInstaller/UnitySetup-Mac-IL2CPP-Support-for-Editor-2022.3.62f3.pkg
+unity6    https://download.unity3d.com/download_unity/ee7790f1426a/MacEditorTargetInstaller/UnitySetup-Mac-IL2CPP-Support-for-Editor-6000.0.85f1.pkg
