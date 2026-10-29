@@ -135,12 +135,17 @@ void AKGameAppEnded(void) {
 }
 
 - (void)stop:(id)sender {
-  if (AKIsGameThread()) gGameStopped = YES;
-  else self.running = NO;
+  if (AKIsGameThread()) {
+    fprintf(stderr, "[AppKitShim] game: -[NSApp stop:]: its event loop ends\n");
+    gGameStopped = YES;
+  } else {
+    self.running = NO;
+  }
 }
 
 // On a game's main thread, exit() ends the game only (InProcessExec.m).
 - (void)terminate:(id)sender {
+  if (AKIsGameThread()) fprintf(stderr, "[AppKitShim] game: -[NSApp terminate:]: it quits\n");
   id<NSApplicationDelegate> delegate = self.delegate;
   if ([delegate respondsToSelector:@selector(applicationWillTerminate:)]) {
     [delegate applicationWillTerminate:[NSNotification notificationWithName:NSApplicationWillTerminateNotification object:self]];

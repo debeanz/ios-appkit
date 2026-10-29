@@ -926,9 +926,10 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   if (!bundlePath || !dladdr(header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundlePath) || hasPrefix(info.dli_fname, real)))
     return;
   // Its IOKit HID calls (gamepads) are answered from GameController, its sound goes to iOS's
-  // output unit.
+  // output unit, and its busy waits on the clock rest the core.
   AKGameBindControllers(header, slide, info.dli_fname);
   AKGameBindAudio(header, slide);
+  AKGameBindClock(header, slide);
   const struct mach_header_64 *mh = (const void *)header;
   const uint8_t *lc = (const uint8_t *)(mh + 1);
   for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
@@ -1053,11 +1054,21 @@ static void gameSignalled(pid_t pid, int sig) {
   pthread_mutex_lock(&gGameLock);
   CFRunLoopRef loop = gGameRunLoop ? (CFRunLoopRef)CFRetain(gGameRunLoop) : NULL;
   pthread_mutex_unlock(&gGameLock);
-  if (!loop) { gameLog(@"can't ask it to quit: it isn't running an event loop"); return; }
-  gameLog(@"asking it to quit (signal %d)", sig);
-  CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, ^{ [NSApp terminate:nil]; });
-  CFRunLoopWakeUp(loop);
-  CFRelease(loop);
+  if (loop) {
+    gameLog(@"asking it to quit (signal %d)", sig);
+    CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, ^{ [NSApp terminate:nil]; });
+    CFRunLoopWakeUp(loop);
+    CFRelease(loop);
+  } else {
+    gameLog(@"can't ask it to quit: it isn't running an event loop");
+  }
+  // Steam's Exit Game always ends it: one still running 5 s on (stuck in its own code, or with no
+  // event loop to ask) ends for Steam and the screen, its thread left where it is.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (loop ? 5 : 0) * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    if (gGamePid != pid) return;
+    gameLog(@"it didn't quit within 5 s: ended for Steam");
+    AKInProcessForceExit(pid, 0);
+  });
 }
 
 static void gameEnded(pid_t pid, int status) {

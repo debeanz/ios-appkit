@@ -70,7 +70,15 @@
 - (BOOL)isTerminated { return _game ? kill(_pid, 0) != 0 : NO; }   // kill knows stand-ins (InProcessExec.m)
 - (BOOL)isFinishedLaunching { return YES; }
 
-- (BOOL)activateWithOptions:(NSApplicationActivationOptions)options { return self == NSRunningApplication.currentApplication || !self.isTerminated; }
+// Steam raising a running game (Big Picture's Resume, or the game chosen in its menu): the game
+// comes back from under Steam's overlay.
+- (BOOL)activateWithOptions:(NSApplicationActivationOptions)options {
+  if (AKGamePid() && self.processIdentifier == AKGamePid()) {
+    fprintf(stderr, "[AppKitShim] game: Steam raises it\n");
+    dispatch_async(dispatch_get_main_queue(), ^{ AKGameOverlayHide(); });
+  }
+  return self == NSRunningApplication.currentApplication || !self.isTerminated;
+}
 - (BOOL)hide { return NO; }   // an app can't background itself on iOS
 - (BOOL)unhide { return NO; }
 // A game is asked to quit, as AppKit asks an app; this app can't end itself that way.

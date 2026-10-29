@@ -874,6 +874,7 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     v.viewVisible = [args.firstObject boolValue];
     layoutBrowser(v);
     if (v.viewVisible) [hostView() bringSubviewToFront:v.webView];
+    AKWHGameOverlayMenu(v.name, v.viewVisible);
   } else if ([name isEqualToString:@"LoadURL"] && args.count) {
     NSURL *url = [NSURL URLWithString:args[0]];
     if (url) [v.webView loadRequest:[NSURLRequest requestWithURL:url]];

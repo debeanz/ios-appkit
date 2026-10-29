@@ -111,6 +111,7 @@ int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement
 int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol));
 const char *AKInProcessCurrentPath(void);   // the program this thread is the main thread of, or NULL
 void AKInProcessDetach(pid_t pid);
+void AKInProcessForceExit(pid_t pid, int status);   // one that didn't end when asked
 void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
 void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig));
 
@@ -184,3 +185,14 @@ void AKGameBindControllers(const struct mach_header *header, intptr_t slide, con
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 // GameTimers.m: repeating NSTimers made on a game's main thread fire late rather than skip a tick.
 void AKGameInstallTimers(void);
+// GameTimers.m: a game library's clock reads rest the core while its code spins on them.
+void AKGameBindClock(const struct mach_header *header, intptr_t slide);
+
+// WebHelperGamepad.m: Steam's overlay - Big Picture over a running game (View + Menu, or the
+// Home button) - and Menu or View as a game should see them (held back to tell them from that
+// chord). Main thread, but for the two a game's thread asks.
+@class GCController;
+BOOL AKGameOverlayShown(void);
+void AKGameOverlayHide(void);    // back to the game
+void AKGameOverlayReset(void);   // the game ended
+BOOL AKControllerMenuViewPressed(GCController *controller, BOOL menu);

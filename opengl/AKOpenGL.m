@@ -656,30 +656,29 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
   glFinish();   // OSMesa copies the finished frame into the bound surface
   IOSurfaceRef shown = c->surfaces[c->slot];
   unbind(c);
+  // On screen from this thread, in a transaction of its own: queued behind Steam's busy main
+  // thread, frames reached the screen late and unevenly.
   CALayer *layer = c->layer;
   if (layer) {
-    CFRetain(shown);
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [CATransaction begin];
-      [CATransaction setDisableActions:YES];
-      layer.contents = (__bridge id)shown;
-      [CATransaction commit];
-      CFRelease(shown);
-    });
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    layer.contents = (__bridge id)shown;
+    [CATransaction commit];
   }
   c->slot = (c->slot + 1) % 3;
   // Now and then, follow the view's size (rotation, a window resized).
   if (++c->frames % 30 == 0) dispatch_async(dispatch_get_main_queue(), ^{ measure(c); });
   bind(c);
 
-  if (c->swapInterval > 0) {
-    static mach_timebase_info_data_t tb;
-    if (!tb.denom) mach_timebase_info(&tb);
-    uint64_t period = 1000000000ull / 60 * tb.denom / tb.numer;
-    uint64_t now = mach_absolute_time();
-    if (c->lastPresent && now < c->lastPresent + period) mach_wait_until(c->lastPresent + period);
-    c->lastPresent = mach_absolute_time();
-  }
+  // Frames go out at most once per 60 Hz refresh (more with a longer swap interval), waiting
+  // asleep: a game that turned vsync off (GameMaker does) would otherwise keep a core busy timing
+  // its frames, which heats a phone.
+  static mach_timebase_info_data_t tb;
+  if (!tb.denom) mach_timebase_info(&tb);
+  uint64_t period = 1000000000ull / 60 * tb.denom / tb.numer * (uint64_t)MAX(c->swapInterval, 1);
+  uint64_t now = mach_absolute_time();
+  if (c->lastPresent && now < c->lastPresent + period) mach_wait_until(c->lastPresent + period);
+  c->lastPresent = mach_absolute_time();
   CFTimeInterval t = CACurrentMediaTime();
   if (!c->logStart) c->logStart = t;
   c->framesSinceLog++;

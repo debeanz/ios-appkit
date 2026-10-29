@@ -202,6 +202,18 @@ static void finishProc(ak_vproc *p, int status) {
   if (gExitObserver) gExitObserver(pid, status);
 }
 
+// A stand-in process that didn't end when asked: it ends now as far as everyone else can tell
+// (waitpid, kqueue, the exit observer), while its thread, stuck in its own code, is left as it is.
+static ak_vproc *findProc(pid_t pid);   // with gProcLock held
+
+void AKInProcessForceExit(pid_t pid, int status) {
+  pthread_mutex_lock(&gProcLock);
+  ak_vproc *p = findProc(pid);
+  BOOL running = p && p->running;
+  pthread_mutex_unlock(&gProcLock);
+  if (running) finishProc(p, status);
+}
+
 // A process the caller won't waitpid for (Steam starts games through NSWorkspace, as on the
 // Mac, and so never reaps them): it disappears when it ends, so kill(pid, 0) says it's gone.
 void AKInProcessDetach(pid_t pid) {

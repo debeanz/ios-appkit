@@ -8,6 +8,8 @@
 #import "AKShimPrivate.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <mach/mach_time.h>
+#import <sys/time.h>
 
 @interface AKGameTimer : NSObject {
 @public
@@ -83,5 +85,52 @@ void AKGameInstallTimers(void) {
         class_getInstanceMethod(meta, @selector(timerWithTimeInterval:repeats:block:)), (IMP)timerWithBlock);
     gScheduledWithBlock = method_setImplementation(
         class_getInstanceMethod(meta, @selector(scheduledTimerWithTimeInterval:repeats:block:)), (IMP)scheduledWithBlock);
+  });
+}
+
+#pragma mark Busy waits
+
+// A game's frame limiter that spins on the clock until its next frame (GameMaker's
+// WaitForVBlank, polling Timing_Time) keeps a core at full speed between frames, which heats a
+// phone. When a game's own code reads the clock back to back with next to nothing between — over
+// a thousand times in a row — each read waits 0.15 ms asleep first: the loop still sees the time
+// pass, to within that, but the core rests. Code doing real work between reads never trips it.
+static uint64_t gSpinGap;   // mach ticks: reads closer than this are a spin
+
+static void restIfSpinning(void) {
+  static __thread uint64_t last;
+  static __thread unsigned streak;
+  uint64_t now = mach_absolute_time();
+  if (now - last < gSpinGap) {
+    if (++streak > 1000) {
+      usleep(150);
+      now = mach_absolute_time();
+    }
+  } else {
+    streak = 0;
+  }
+  last = now;
+}
+
+static uint64_t gameMachAbsoluteTime(void) {
+  restIfSpinning();
+  return mach_absolute_time();
+}
+
+static int gameGettimeofday(struct timeval *tv, void *tz) {
+  restIfSpinning();
+  return gettimeofday(tv, tz);
+}
+
+void AKGameBindClock(const struct mach_header *header, intptr_t slide) {
+  if (!gSpinGap) {
+    mach_timebase_info_data_t tb;
+    mach_timebase_info(&tb);
+    gSpinGap = 2000ull * tb.denom / tb.numer;   // 2 µs
+  }
+  AKRebindImports(header, slide, ^void *(const char *symbol) {
+    if (strcmp(symbol, "_mach_absolute_time") == 0) return (void *)gameMachAbsoluteTime;
+    if (strcmp(symbol, "_gettimeofday") == 0) return (void *)gameGettimeofday;
+    return NULL;
   });
 }

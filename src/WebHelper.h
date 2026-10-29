@@ -72,3 +72,5 @@ NSData *AKWHFontForURL(NSURL *url);
 void AKWHGamepadStart(void);
 void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed);
 void AKWHSendSystemKey(uint32_t key, uint32_t controller);
+// WebHelperGamepad.m: one of Big Picture's popups shown or hidden (its menus over a game).
+void AKWHGameOverlayMenu(NSString *name, BOOL visible);

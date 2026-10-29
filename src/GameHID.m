@@ -89,10 +89,16 @@ static int64_t trigger(float v) { return MAX(0, MIN(255, lroundf(v * 255.0f))); 
 // What an element of the X360 layout reads on a GameController gamepad right now.
 static int64_t readElement(AKHIDDevice *d, AKHIDElement *e) {
   GCExtendedGamepad *g = d->controller.extendedGamepad;
-  if (!g) return 0;
+  // With Steam's overlay over the game, the controller drives Steam: the game sees it at rest.
+  if (!g || AKGameOverlayShown()) return 0;
   if (e->page == 9) {
     GCControllerButtonInput *b = nil;
     switch (e->usage) {
+      // Start and Back as Steam lets them through: held back a moment, to tell them from the
+      // View + Menu chord that opens Steam's overlay (WebHelperGamepad.m).
+      case 9: return AKControllerMenuViewPressed(d->controller, YES);
+      case 10: return AKControllerMenuViewPressed(d->controller, NO);
+      case 11: return 0;   // Home is Steam's button
       case 1: b = g.buttonA; break;
       case 2: b = g.buttonB; break;
       case 3: b = g.buttonX; break;
@@ -101,9 +107,6 @@ static int64_t readElement(AKHIDDevice *d, AKHIDElement *e) {
       case 6: b = g.rightShoulder; break;
       case 7: b = g.leftThumbstickButton; break;
       case 8: b = g.rightThumbstickButton; break;
-      case 9: b = g.buttonMenu; break;
-      case 10: b = g.buttonOptions; break;
-      case 11: b = g.buttonHome; break;
       case 12: b = g.dpad.up; break;
       case 13: b = g.dpad.down; break;
       case 14: b = g.dpad.left; break;

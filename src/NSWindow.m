@@ -1,5 +1,6 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/NSTrackingArea.h"
+#import <objc/message.h>
 
 NSNotificationName const NSWindowDidBecomeKeyNotification = @"NSWindowDidBecomeKeyNotification";
 NSNotificationName const NSWindowDidResignKeyNotification = @"NSWindowDidResignKeyNotification";
@@ -237,6 +238,19 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   [NSNotificationCenter.defaultCenter postNotificationName:NSWindowWillCloseNotification object:self];
   [self orderOut:nil];
   [NSApp _unregisterWindow:self];
+  if (_gameWindow) [self _ak_gameWindowClosed];
+}
+
+// A game's last window gone: Steam's interface shows again (it was hidden under the game), and
+// the game quits if its delegate asks to after its last window closes, as AppKit has it do.
+- (void)_ak_gameWindowClosed {
+  for (NSWindow *w in NSApp.windows) if (w._ak_gameWindow && w.visible) return;
+  fprintf(stderr, "[AppKitShim] game: its last window closed\n");
+  AKOnMainSync(^{ AKWHStageView().hidden = NO; });
+  id delegate = NSApp.delegate;
+  if (AKIsGameThread() && [delegate respondsToSelector:@selector(applicationShouldTerminateAfterLastWindowClosed:)] &&
+      ((BOOL (*)(id, SEL, id))objc_msgSend)(delegate, @selector(applicationShouldTerminateAfterLastWindowClosed:), NSApp))
+    [NSApp terminate:self];
 }
 
 - (void)setAlphaValue:(CGFloat)a { _alphaValue = a; AKOnMainSync(^{ self->_contentView.backingView.alpha = a; }); }
@@ -399,5 +413,6 @@ void AKGameWindowsClose(void) {
     w.keyWindow = NO;
     [NSApp _unregisterWindow:w];
   }
+  AKGameOverlayReset();
   AKWHStageView().hidden = NO;
 }
