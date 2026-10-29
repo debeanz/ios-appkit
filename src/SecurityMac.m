@@ -141,6 +141,11 @@ AK_SEC(OSStatus, AKSecTrustSettingsCopyCertificates, SecTrustSettingsCopyCertifi
   if (certs) *certs = NULL;
   return AKErrSecItemNotFound; // no per-user trust-settings store on iOS
 }
+AK_SEC(OSStatus, AKSecTrustCopyAnchorCertificates, SecTrustCopyAnchorCertificates, (CFArrayRef *anchors)) {
+  if (!anchors) return AKErrSecParam;
+  *anchors = CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);   // iOS doesn't list its roots
+  return 0;
+}
 AK_SEC(OSStatus, AKSecTrustSettingsCopyTrustSettings, SecTrustSettingsCopyTrustSettings, (const void *cert, uint32_t domain, const void **settings)) {
   if (settings) *settings = NULL;
   return AKErrSecItemNotFound;

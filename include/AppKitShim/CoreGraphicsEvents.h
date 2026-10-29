@@ -79,6 +79,12 @@ CG_EXTERN void CGEventTapEnable(CFMachPortRef tap, bool enable);
 CG_EXTERN bool CGEventSourceKeyState(CGEventSourceStateID stateID, CGKeyCode key);
 CG_EXTERN bool CGEventSourceButtonState(CGEventSourceStateID stateID, CGMouseButton button);
 CG_EXTERN CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID);
+// An event source: the state it was made for, and how long events it posts quiet the local
+// keyboard and mouse (nothing to quiet here; kept for the getter).
+CG_EXTERN CGEventSourceRef CGEventSourceCreate(CGEventSourceStateID stateID) CF_RETURNS_RETAINED;
+CG_EXTERN CGEventSourceStateID CGEventSourceGetSourceStateID(CGEventSourceRef source);
+CG_EXTERN void CGEventSourceSetLocalEventsSuppressionInterval(CGEventSourceRef source, double seconds);
+CG_EXTERN double CGEventSourceGetLocalEventsSuppressionInterval(CGEventSourceRef source);
 CG_EXTERN double CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID stateID, CGEventType eventType);
 CG_EXTERN uint32_t CGEventSourceCounterForEventType(CGEventSourceStateID stateID, CGEventType eventType);
 CG_EXTERN void CGGetLastMouseDelta(int32_t *deltaX, int32_t *deltaY);
@@ -117,6 +123,8 @@ CG_EXTERN const CFStringRef kCGWindowIsOnscreen;
 
 CG_EXTERN CGWindowLevel CGWindowLevelForKey(CGWindowLevelKey key);
 CG_EXTERN CFArrayRef CGWindowListCopyWindowInfo(CGWindowListOption option, CGWindowID relativeToWindow) CF_RETURNS_RETAINED;
+// The same windows as bare CGWindowIDs (the array holds the numbers themselves, not CFNumbers).
+CG_EXTERN CFArrayRef CGWindowListCreate(CGWindowListOption option, CGWindowID relativeToWindow) CF_RETURNS_RETAINED;
 CG_EXTERN CFArrayRef CGWindowListCreateDescriptionFromArray(CFArrayRef windowArray) CF_RETURNS_RETAINED;
 // Window images are screen capture: unavailable, NULL.
 CG_EXTERN CGImageRef CGWindowListCreateImage(CGRect screenBounds, CGWindowListOption listOption, CGWindowID windowID,

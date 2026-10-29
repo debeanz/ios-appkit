@@ -72,6 +72,23 @@ CG_EXTERN CGError CGWarpMouseCursorPosition(CGPoint newCursorPosition);
 CG_EXTERN CGError CGDisplayMoveCursorToPoint(CGDirectDisplayID display, CGPoint point);
 CG_EXTERN CGError CGAssociateMouseAndMouseCursorPosition(boolean_t connected);
 
+// Capturing displays (games going fullscreen: SDL, LÖVE): the app already has the whole screen,
+// so capturing succeeds and changes nothing; the shielding level is macOS's own value.
+CG_EXTERN CGError CGCaptureAllDisplays(void);
+CG_EXTERN CGError CGReleaseAllDisplays(void);
+CG_EXTERN CGError CGDisplayCapture(CGDirectDisplayID display);
+CG_EXTERN CGError CGDisplayRelease(CGDirectDisplayID display);
+CG_EXTERN int32_t CGShieldingWindowLevel(void);
+
+// Gamma: iOS has no per-app display gamma. The table read back is the identity; one set is
+// accepted and has no effect (SDL_SetWindowGammaRamp and the like report success, as a Mac
+// would, and the picture stays as the game draws it).
+typedef float CGGammaValue;
+CG_EXTERN CGError CGGetDisplayTransferByTable(CGDirectDisplayID display, uint32_t capacity, CGGammaValue *redTable,
+                                              CGGammaValue *greenTable, CGGammaValue *blueTable, uint32_t *sampleCount);
+CG_EXTERN CGError CGSetDisplayTransferByTable(CGDirectDisplayID display, uint32_t tableSize, const CGGammaValue *redTable,
+                                              const CGGammaValue *greenTable, const CGGammaValue *blueTable);
+
 // Screen recording permission. iOS apps can't capture the screen this way, so: denied.
 CG_EXTERN bool CGPreflightScreenCaptureAccess(void);
 CG_EXTERN bool CGRequestScreenCaptureAccess(void);

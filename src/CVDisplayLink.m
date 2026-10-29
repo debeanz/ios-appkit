@@ -2,6 +2,7 @@
 #import "AKShimPrivate.h"
 #import <QuartzCore/QuartzCore.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
 
 // Timestamps use microseconds for video time and mach ticks for host time, like macOS.
 static const int32_t AKVideoTimeScale = 1000000;
@@ -140,15 +141,41 @@ void CVDisplayLinkRelease(CVDisplayLinkRef link) {
 // Links calling a game's code: they stop when it ends (GameTeardown.m).
 static NSHashTable<AKDisplayLink *> *gGameLinks;
 
+static void noteGameLink(AKDisplayLink *l) {
+  @synchronized (AKDisplayLink.class) {
+    if (!gGameLinks) gGameLinks = [NSHashTable weakObjectsHashTable];
+    [gGameLinks addObject:l];
+  }
+}
+
 CVReturn CVDisplayLinkSetOutputCallback(CVDisplayLinkRef link, CVDisplayLinkOutputCallback callback, void *userInfo) {
   if (!link) return kCVReturnInvalidArgument;
   AKLink(link).callback = callback;
   AKLink(link).userInfo = userInfo;
-  if (callback && AKAddressIsInGame((const void *)callback)) @synchronized (AKDisplayLink.class) {
-    if (!gGameLinks) gGameLinks = [NSHashTable weakObjectsHashTable];
-    [gGameLinks addObject:AKLink(link)];
-  }
+  if (callback && AKAddressIsInGame((const void *)callback)) noteGameLink(AKLink(link));
   return kCVReturnSuccess;
+}
+
+// The block form: kept on the link for as long as it is set, and called through a trampoline.
+// A link whose block is a game's code stops with the game like one with a game's callback.
+static const char kHandlerKey = 0;
+
+static CVReturn callHandler(CVDisplayLinkRef link, const CVTimeStamp *now, const CVTimeStamp *outputTime, CVOptionFlags flagsIn,
+                            CVOptionFlags *flagsOut, void *context) {
+  CVDisplayLinkOutputHandler handler = (__bridge CVDisplayLinkOutputHandler)context;
+  return handler ? handler(link, now, outputTime, flagsIn, flagsOut) : kCVReturnSuccess;
+}
+
+CVReturn CVDisplayLinkSetOutputHandler(CVDisplayLinkRef link, CVDisplayLinkOutputHandler handler) {
+  if (!link) return kCVReturnInvalidArgument;
+  AKDisplayLink *l = AKLink(link);
+  objc_setAssociatedObject(l, &kHandlerKey, handler, OBJC_ASSOCIATION_COPY);
+  id kept = objc_getAssociatedObject(l, &kHandlerKey);
+  CVReturn r = CVDisplayLinkSetOutputCallback(link, kept ? callHandler : NULL, (__bridge void *)kept);
+  // A block's code pointer sits after its isa, flags and reserved words.
+  struct { void *isa; int flags, reserved; void *invoke; } *block = (__bridge void *)kept;
+  if (block && AKAddressIsInGame(block->invoke)) noteGameLink(l);
+  return r;
 }
 
 void AKGameDisplayLinksStop(void) {
@@ -161,6 +188,7 @@ void AKGameDisplayLinksStop(void) {
     [l stop];
     l.callback = NULL;
     l.userInfo = NULL;
+    objc_setAssociatedObject(l, &kHandlerKey, nil, OBJC_ASSOCIATION_COPY);
   }
 }
 

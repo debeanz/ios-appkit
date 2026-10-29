@@ -20,6 +20,9 @@ CV_EXPORT CVDisplayLinkRef CVDisplayLinkRetain(CVDisplayLinkRef displayLink);
 CV_EXPORT void CVDisplayLinkRelease(CVDisplayLinkRef displayLink);
 
 CV_EXPORT CVReturn CVDisplayLinkSetOutputCallback(CVDisplayLinkRef displayLink, CVDisplayLinkOutputCallback callback, void *userInfo);
+typedef CVReturn (^CVDisplayLinkOutputHandler)(CVDisplayLinkRef displayLink, const CVTimeStamp *inNow, const CVTimeStamp *inOutputTime,
+                                               CVOptionFlags flagsIn, CVOptionFlags *flagsOut);
+CV_EXPORT CVReturn CVDisplayLinkSetOutputHandler(CVDisplayLinkRef displayLink, CVDisplayLinkOutputHandler handler);
 CV_EXPORT CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink);
 CV_EXPORT CVReturn CVDisplayLinkStop(CVDisplayLinkRef displayLink);
 CV_EXPORT Boolean CVDisplayLinkIsRunning(CVDisplayLinkRef displayLink);

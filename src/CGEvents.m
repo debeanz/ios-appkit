@@ -140,6 +140,29 @@ CGPoint CGEventGetLocation(CGEventRef e) { return e ? AKEv(e).location : CGPoint
 CGEventFlags CGEventGetFlags(CGEventRef e) { return e ? AKEv(e).flags : 0; }
 void CGEventSetFlags(CGEventRef e, CGEventFlags flags) { if (e) AKEv(e).flags = flags; }
 CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID) { return (CGEventFlags)[NSEvent modifierFlags] & AKFlagMask; }
+
+@interface AKCGEventSource : NSObject
+@property (nonatomic) CGEventSourceStateID stateID;
+@property (nonatomic) double suppressionInterval;
+@end
+@implementation AKCGEventSource
+@end
+
+CGEventSourceRef CGEventSourceCreate(CGEventSourceStateID stateID) {
+  AKCGEventSource *s = [AKCGEventSource new];
+  s.stateID = stateID;
+  s.suppressionInterval = 0.25;   // macOS's default
+  return (CGEventSourceRef)CFBridgingRetain(s);
+}
+CGEventSourceStateID CGEventSourceGetSourceStateID(CGEventSourceRef source) {
+  return source ? ((__bridge AKCGEventSource *)(void *)source).stateID : kCGEventSourceStateHIDSystemState;
+}
+void CGEventSourceSetLocalEventsSuppressionInterval(CGEventSourceRef source, double seconds) {
+  if (source) ((__bridge AKCGEventSource *)(void *)source).suppressionInterval = seconds;
+}
+double CGEventSourceGetLocalEventsSuppressionInterval(CGEventSourceRef source) {
+  return source ? ((__bridge AKCGEventSource *)(void *)source).suppressionInterval : 0.25;
+}
 int64_t CGEventGetIntegerValueField(CGEventRef e, CGEventField field) { return e ? AKEv(e).fields[@(field)].longLongValue : 0; }
 
 // The text a key event types: the explicit string, else the key translated through the US
@@ -343,20 +366,38 @@ static NSDictionary *AKWindowInfo(NSWindow *w) {
 }
 
 // Only this app's windows are visible to it; listed front to back.
-CFArrayRef CGWindowListCopyWindowInfo(CGWindowListOption option, CGWindowID relativeTo) {
+static NSArray<NSWindow *> *AKListedWindows(CGWindowListOption option, CGWindowID relativeTo) {
   NSMutableArray *out = [NSMutableArray array];
   for (NSWindow *w in NSApp.windows.reverseObjectEnumerator) {
     if ((option & kCGWindowListOptionIncludingWindow) && (CGWindowID)w.windowNumber != relativeTo) continue;
     if ((option & kCGWindowListOptionOnScreenOnly) && !w.isVisible) continue;
-    [out addObject:AKWindowInfo(w)];
+    [out addObject:w];
   }
+  return out;
+}
+
+CFArrayRef CGWindowListCopyWindowInfo(CGWindowListOption option, CGWindowID relativeTo) {
+  NSMutableArray *out = [NSMutableArray array];
+  for (NSWindow *w in AKListedWindows(option, relativeTo)) [out addObject:AKWindowInfo(w)];
   return (CFArrayRef)CFBridgingRetain(out);
+}
+
+CFArrayRef CGWindowListCreate(CGWindowListOption option, CGWindowID relativeTo) {
+  CFMutableArrayRef out = CFArrayCreateMutable(kCFAllocatorDefault, 0, NULL);
+  for (NSWindow *w in AKListedWindows(option, relativeTo)) CFArrayAppendValue(out, (const void *)(uintptr_t)(CGWindowID)w.windowNumber);
+  return out;
+}
+
+// The array holds bare CGWindowIDs (CGWindowListCreate's); one built of CFNumbers is read too.
+static CGWindowID AKWindowIDAt(CFArrayRef windows, CFIndex i) {
+  uintptr_t v = (uintptr_t)CFArrayGetValueAtIndex(windows, i);
+  return v <= UINT32_MAX ? (CGWindowID)v : (CGWindowID)[(__bridge NSNumber *)(const void *)v unsignedIntValue];
 }
 
 CFArrayRef CGWindowListCreateDescriptionFromArray(CFArrayRef windowArray) {
   NSMutableArray *out = [NSMutableArray array];
-  for (NSNumber *n in (__bridge NSArray *)windowArray) {
-    NSWindow *w = [NSApp windowWithWindowNumber:n.integerValue];
+  for (CFIndex i = 0; windowArray && i < CFArrayGetCount(windowArray); i++) {
+    NSWindow *w = [NSApp windowWithWindowNumber:AKWindowIDAt(windowArray, i)];
     if (w) [out addObject:AKWindowInfo(w)];
   }
   return (CFArrayRef)CFBridgingRetain(out);

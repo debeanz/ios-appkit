@@ -15,6 +15,12 @@ NSArray<id<MTLDevice>> *MTLCopyAllDevicesWithObserver(id<NSObject> *observer, MT
   return device ? @[ device ] : @[];
 }
 
+void MTLRemoveDeviceObserver(id<NSObject> observer) {}
+
+#pragma mark QuartzCore
+
+NSString *const kCAContextCIFilterBehavior = @"ciFilterBehavior";
+
 #pragma mark CoreText
 
 CFArrayRef CTFontCollectionCreateMatchingFontDescriptorsForFamily(CTFontCollectionRef collection, CFStringRef family, CFDictionaryRef options) {

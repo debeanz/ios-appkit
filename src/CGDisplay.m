@@ -207,7 +207,37 @@ CGError CGDisplayRemoveReconfigurationCallback(CGDisplayReconfigurationCallBack 
   return kCGErrorSuccess;
 }
 
-#pragma mark Cursor and capture
+#pragma mark Capture
+
+CGError CGCaptureAllDisplays(void) { return kCGErrorSuccess; }
+CGError CGReleaseAllDisplays(void) { return kCGErrorSuccess; }
+CGError CGDisplayCapture(CGDirectDisplayID display) { return kCGErrorSuccess; }
+CGError CGDisplayRelease(CGDirectDisplayID display) { return kCGErrorSuccess; }
+int32_t CGShieldingWindowLevel(void) { return 2147483628; }   // kCGShieldingWindowLevelKey's level on macOS
+
+#pragma mark Gamma
+
+// Identity, at up to 256 entries per channel (a Mac display's table size); *sampleCount says how
+// many were filled.
+CGError CGGetDisplayTransferByTable(CGDirectDisplayID display, uint32_t capacity, CGGammaValue *red, CGGammaValue *green,
+                                    CGGammaValue *blue, uint32_t *sampleCount) {
+  uint32_t n = capacity < 256 ? capacity : 256;
+  for (uint32_t i = 0; i < n; i++) {
+    CGGammaValue v = n > 1 ? (CGGammaValue)i / (CGGammaValue)(n - 1) : 0;
+    if (red) red[i] = v;
+    if (green) green[i] = v;
+    if (blue) blue[i] = v;
+  }
+  if (sampleCount) *sampleCount = n;
+  return kCGErrorSuccess;
+}
+
+CGError CGSetDisplayTransferByTable(CGDirectDisplayID display, uint32_t size, const CGGammaValue *red, const CGGammaValue *green,
+                                    const CGGammaValue *blue) {
+  return kCGErrorSuccess;
+}
+
+#pragma mark Cursor
 
 CGError CGDisplayHideCursor(CGDirectDisplayID display) { return kCGErrorSuccess; }
 CGError CGDisplayShowCursor(CGDirectDisplayID display) { return kCGErrorSuccess; }

@@ -31,6 +31,7 @@
 #import "NSFontManager.h"
 #import "NSServices.h"
 #import "NSWidgets.h"
+#import "NSGridView.h"
 #import "FoundationMac.h"
 #import "DiskArbitrationMac.h"
 #import "SmallFrameworks.h"

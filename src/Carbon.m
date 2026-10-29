@@ -375,6 +375,9 @@ const CFStringRef kTISPropertyUnicodeKeyLayoutData = CFSTR("TISPropertyUnicodeKe
 const CFStringRef kTISPropertyInputSourceType = CFSTR("TISPropertyInputSourceType");
 const CFStringRef kTISTypeKeyboardLayout = CFSTR("TISTypeKeyboardLayout");
 const CFStringRef kTISNotifySelectedKeyboardInputSourceChanged = CFSTR("AppleSelectedInputSourcesChangedNotification");
+const CFStringRef kTISPropertyLocalizedName = CFSTR("TISPropertyLocalizedName");
+const CFStringRef kTISPropertyInputSourceLanguages = CFSTR("TISPropertyInputSourceLanguages");
+const CFStringRef kTISTypeKeyboardInputMode = CFSTR("TISTypeKeyboardInputMode");
 
 @interface AKInputSource : NSObject
 @property (nonatomic, copy) NSDictionary *properties;
@@ -390,6 +393,8 @@ static AKInputSource *AKUSInputSource(void) {
     source.properties = @{
       (__bridge NSString *)kTISPropertyInputSourceID: @"com.apple.keylayout.US",
       (__bridge NSString *)kTISPropertyInputSourceType: (__bridge NSString *)kTISTypeKeyboardLayout,
+      (__bridge NSString *)kTISPropertyLocalizedName: @"U.S.",
+      (__bridge NSString *)kTISPropertyInputSourceLanguages: @[ @"en" ],
       (__bridge NSString *)kTISPropertyUnicodeKeyLayoutData: AKUSKeyboardLayoutData(),
     };
   });
@@ -400,6 +405,16 @@ TISInputSourceRef TISCopyCurrentKeyboardInputSource(void) { return (TISInputSour
 TISInputSourceRef TISCopyCurrentKeyboardLayoutInputSource(void) { return TISCopyCurrentKeyboardInputSource(); }
 TISInputSourceRef TISCopyCurrentASCIICapableKeyboardLayoutInputSource(void) { return TISCopyCurrentKeyboardInputSource(); }
 CFArrayRef TISCreateASCIICapableInputSourceList(void) { return (CFArrayRef)CFBridgingRetain(@[ AKUSInputSource() ]); }
+
+CFArrayRef TISCreateInputSourceList(CFDictionaryRef properties, Boolean includeAllInstalled) {
+  AKInputSource *us = AKUSInputSource();
+  NSDictionary *wanted = (__bridge NSDictionary *)properties;
+  for (id key in wanted)
+    if (![us.properties[key] isEqual:wanted[key]]) return (CFArrayRef)CFBridgingRetain(@[]);
+  return (CFArrayRef)CFBridgingRetain(@[ us ]);
+}
+
+OSStatus TISSelectInputSource(TISInputSourceRef source) { return noErr; }
 
 // Follows the Get rule: the value belongs to the source, so callers don't release it.
 void *TISGetInputSourceProperty(TISInputSourceRef source, CFStringRef key) {

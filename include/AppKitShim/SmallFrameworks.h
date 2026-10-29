@@ -16,6 +16,7 @@ extern MTLDeviceNotificationName const MTLDeviceWasRemovedNotification;
 extern MTLDeviceNotificationName const MTLDeviceRemovalRequestedNotification;
 // Returns the one built-in GPU; the observer never fires (iOS GPUs aren't removable).
 extern NSArray<id<MTLDevice>> *MTLCopyAllDevicesWithObserver(id<NSObject> *observer, MTLDeviceNotificationHandler handler);
+extern void MTLRemoveDeviceObserver(id<NSObject> observer);
 
 #pragma mark CoreText
 
@@ -31,6 +32,10 @@ extern CFArrayRef CTFontCollectionCreateMatchingFontDescriptorsForFamily(CTFontC
 @interface CAOpenGLLayer : CALayer
 @property (nonatomic, getter=isAsynchronous) BOOL asynchronous;
 @end
+
+// An option key of CAContext (QuartzCore's private remote layer contexts, which Godot's editor
+// embeds its game window with); here only so a binary naming it loads.
+extern NSString *const kCAContextCIFilterBehavior;
 
 #pragma mark CoreFoundation / IOKit
 

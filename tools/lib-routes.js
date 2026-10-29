@@ -31,7 +31,10 @@ const SHIM = '@rpath/AppKitShim.framework/AppKitShim';
 const THROUGH_SHIM = new Set(['/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio']);
 
 // iOS libraries the umbrella forwards for games' sake, not the client's (see route()).
-const FOR_GAMES = ['/System/Library/Frameworks/AVFoundation.framework/AVFoundation'];
+const FOR_GAMES = [
+  '/System/Library/Frameworks/AVFoundation.framework/AVFoundation',   // Mac-only capture presets (Unity)
+  '/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox',   // macOS's AudioUnit framework lives here on iOS (Godot)
+];
 
 // /System/Library/{,Private}Frameworks/N.framework/Versions/V/B -> .../N.framework/B
 function iosPath(p) {

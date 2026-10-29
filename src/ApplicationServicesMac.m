@@ -126,6 +126,7 @@ OSStatus AKGetProcessPID(const void *psn, pid_t *pid) {
 }
 
 void AKSetApplicationIsDaemon(Boolean isDaemon) {} // an iOS app can't become a daemon
+OSStatus AKTransformProcessType(const void *psn, uint32_t transformState) { return noErr; } // already a foreground app
 
 #pragma mark QuickDraw cursor (no hardware cursor on iOS)
 

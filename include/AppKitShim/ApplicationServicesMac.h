@@ -68,6 +68,7 @@ OSErr AKGetFrontProcess(void *psn) __asm__("_GetFrontProcess");
 OSErr AKGetProcessInformation(const void *psn, void *info) __asm__("_GetProcessInformation");
 OSStatus AKGetProcessPID(const void *psn, pid_t *pid) __asm__("_GetProcessPID");
 void AKSetApplicationIsDaemon(Boolean isDaemon) __asm__("_SetApplicationIsDaemon");
+OSStatus AKTransformProcessType(const void *psn, uint32_t transformState) __asm__("_TransformProcessType");
 
 #pragma mark QuickDraw cursor (no hardware cursor on iOS)
 

@@ -221,6 +221,11 @@ void AKGameInstallTimers(void);   // at each launch, before the game loads
 void AKGameFrameTimerState(int *count, CFAbsoluteTime *began, CFAbsoluteTime *ended);
 // GameTimers.m: a game library's clock reads rest the core while its code spins on them.
 void AKGameBindClock(const struct mach_header *header, intptr_t slide);
+// GameLuaJIT.m: a game's LuaJIT runs on its interpreter, its compiler kept off.
+void AKGameBindLuaJIT(const struct mach_header *header, intptr_t slide);
+// MacPrograms.m: what one of a game's binaries, as downloaded, would lack here (nil: nothing;
+// else cannot / helper / missing {library: [names]} / unchecked). GameLibrary.m asks it.
+NSDictionary *AKGameBinaryGaps(NSString *path, NSString *programDir, BOOL isProgram);
 
 // WebHelperGamepad.m: Steam's overlay - Big Picture over a running game (View + Menu, or the
 // Home button) - and Menu or View as a game should see them (held back to tell them from that

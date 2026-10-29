@@ -135,6 +135,13 @@ extern const CFStringRef kTISPropertyUnicodeKeyLayoutData;
 extern const CFStringRef kTISPropertyInputSourceType;
 extern const CFStringRef kTISTypeKeyboardLayout;
 extern const CFStringRef kTISNotifySelectedKeyboardInputSourceChanged;   // never posted: the layout never changes
+extern const CFStringRef kTISPropertyLocalizedName;
+extern const CFStringRef kTISPropertyInputSourceLanguages;
+extern const CFStringRef kTISTypeKeyboardInputMode;
+// The sources whose properties match every one given (all of them for NULL): the one layout,
+// or none. Selecting it succeeds; it is already the one.
+extern CFArrayRef TISCreateInputSourceList(CFDictionaryRef properties, Boolean includeAllInstalled) CF_RETURNS_RETAINED;
+extern OSStatus TISSelectInputSource(TISInputSourceRef source);
 extern TISInputSourceRef TISCopyCurrentKeyboardInputSource(void) CF_RETURNS_RETAINED;
 extern TISInputSourceRef TISCopyCurrentKeyboardLayoutInputSource(void) CF_RETURNS_RETAINED;
 extern TISInputSourceRef TISCopyCurrentASCIICapableKeyboardLayoutInputSource(void) CF_RETURNS_RETAINED;

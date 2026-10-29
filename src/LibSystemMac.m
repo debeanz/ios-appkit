@@ -2,6 +2,7 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/LibSystemMac.h"
 #import <dlfcn.h>
+#import <libkern/OSCacheControl.h>
 #import <syslog.h>
 #import <stdarg.h>
 
@@ -23,6 +24,10 @@ void *AKNSAddressOfSymbol(void *symbol) { return NULL; }
 #pragma mark JIT write-protection
 
 void AKPthreadJitWriteProtectNp(int enabled) { /* RWX JIT memory: nothing to toggle */ }
+
+void AKClearCache(void *start, void *end) {
+  if (end > start) sys_icache_invalidate(start, (size_t)((char *)end - (char *)start));
+}
 
 #pragma mark Process responsibility
 

@@ -974,6 +974,71 @@ static NSUInteger reportMissingImports(NSString *path, NSString *bundlePath) {
   return total;
 }
 
+// The same question for one of a game's binaries as downloaded, before any launch (the
+// installed-games check, GameLibrary.m). Each library is routed as convertFile would route it,
+// and each strong import looked up where it would bind: iOS's library, or the shim and what its
+// umbrella re-exports. AKOpenGL is only asked once it is loaded (loading it for a look would
+// keep its memory). Returns nil when nothing is missing, else any of: cannot (why it can't load
+// at all), helper (a program the game ships that isn't run here), missing ({library: [names]}),
+// unchecked ([what wasn't asked]).
+NSDictionary *AKGameBinaryGaps(NSString *path, NSString *programDir, BOOL isProgram) {
+  NSData *file = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+  if (!file) return @{ @"cannot": @"can't read it" };
+  NSString *why = nil;
+  NSData *code = arm64Code(file, &why);
+  if (!code) return @{ @"cannot": why };
+  const struct mach_header_64 *mh = code.bytes;
+  if (mh->sizeofcmds > code.length - sizeof *mh) return @{ @"cannot": @"bad load commands" };
+  if (mh->filetype == MH_EXECUTE && !isProgram) return @{ @"helper": @YES };
+  NSMutableArray<NSString *> *libs = [NSMutableArray array];
+  const uint8_t *cmds = (const uint8_t *)(mh + 1);
+  uint32_t off = 0;
+  for (uint32_t i = 0; i < mh->ncmds && off + sizeof(struct load_command) <= mh->sizeofcmds; i++) {
+    const struct load_command *lc = (const void *)(cmds + off);
+    if (!lc->cmdsize || off + lc->cmdsize > mh->sizeofcmds) return @{ @"cannot": @"bad load commands" };
+    switch (lc->cmd) {
+      case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LAZY_LOAD_DYLIB: case LC_LOAD_UPWARD_DYLIB: {
+        uint32_t at = ((const struct dylib_command *)lc)->dylib.name.offset;
+        [libs addObject:at < lc->cmdsize ? @((const char *)lc + at) : @""];
+        break;
+      }
+    }
+    off += lc->cmdsize;
+  }
+  NSArray<NSArray<NSString *> *> *imports = importsByLibrary(code);
+  NSString *fileDir = path.stringByDeletingLastPathComponent;
+  NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *missing = [NSMutableDictionary dictionary];
+  NSMutableSet<NSString *> *unchecked = [NSMutableSet set];
+  for (NSUInteger i = 0; i < libs.count && i < imports.count; i++) {
+    if (!imports[i].count) continue;
+    NSString *to = throughShimIfLacking(routeLibrary(libs[i], programDir, fileDir), imports[i], nil);
+    void *h = NULL;
+    if ([to hasPrefix:@"@rpath/"]) {
+      NSString *inApp = [frameworksDir() stringByAppendingPathComponent:[to substringFromIndex:7]];
+      if (![NSFileManager.defaultManager fileExistsAtPath:inApp]) continue;   // the game's own, checked as a file of its own
+      BOOL opengl = [to isEqualToString:kOpenGLName];
+      h = dlopen(inApp.fileSystemRepresentation, RTLD_LAZY | RTLD_LOCAL | (opengl ? RTLD_NOLOAD : 0));
+      if (!h && opengl) { [unchecked addObject:@"OpenGL"]; continue; }
+    } else if ([to hasPrefix:@"/"]) {
+      h = dlopen(to.fileSystemRepresentation, RTLD_LAZY | RTLD_LOCAL);
+    } else {
+      continue;   // the game's own (@loader_path and the like)
+    }
+    NSString *lib = libs[i].lastPathComponent;
+    if (!h) lib = [lib stringByAppendingString:@" (doesn't load here)"];
+    for (NSString *name in imports[i]) {
+      if ([name hasPrefix:@"OBJC_METACLASS_$_"] || (h && dlsym(h, name.UTF8String))) continue;
+      NSString *shown = [name hasPrefix:@"OBJC_CLASS_$_"] ? [@"class " stringByAppendingString:[name substringFromIndex:13]] : name;
+      NSMutableArray *list = missing[lib] ?: (missing[lib] = [NSMutableArray array]);
+      [list addObject:shown];
+    }
+  }
+  NSMutableDictionary *gaps = [NSMutableDictionary dictionary];
+  if (missing.count) gaps[@"missing"] = missing;
+  if (unchecked.count) gaps[@"unchecked"] = unchecked.allObjects;
+  return gaps.count ? gaps : nil;
+}
+
 // What the program links, and where each library now goes.
 static void logLibraries(NSString *program) {
   NSData *file = [NSData dataWithContentsOfFile:program options:NSDataReadingMappedIfSafe error:nil];
@@ -1141,6 +1206,7 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindControllers(header, slide, info.dli_fname);
   AKGameBindAudio(header, slide);
   AKGameBindClock(header, slide);
+  AKGameBindLuaJIT(header, slide);   // LuaJIT's compiler off, its interpreter on (GameLuaJIT.m)
   bindOutput(header, slide);
   AKGameBindProcess(header, slide);   // its heap, exit handlers and dispatch sources (GameTeardown.m)
   snapshotImage(header, slide);

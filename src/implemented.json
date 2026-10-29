@@ -99,7 +99,11 @@
     "SCShareableContent",
     "SCStream",
     "SCStreamConfiguration",
-    "ASWebAuthenticationSessionWebBrowserSessionManager"
+    "ASWebAuthenticationSessionWebBrowserSessionManager",
+    "NSGridView",
+    "NSGridRow",
+    "NSGridColumn",
+    "NSGridCell"
   ],
   "functions": [
     "NSBeep",

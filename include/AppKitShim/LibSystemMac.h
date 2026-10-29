@@ -25,6 +25,10 @@ void *AKNSAddressOfSymbol(void *symbol) __asm__("_NSAddressOfSymbol");
 // maps code memory as writable+executable at once, so toggling is a no-op.
 void AKPthreadJitWriteProtectNp(int enabled) __asm__("_pthread_jit_write_protect_np");
 
+// The compiler runtime's instruction-cache flush for code just written (LuaJIT's compiler links
+// it; with that compiler off here it isn't reached, but it must resolve). Flushes as asked.
+void AKClearCache(void *start, void *end) __asm__("___clear_cache");
+
 // Process "responsibility" (privacy attribution of one process to another). Every iOS process
 // is its own responsible process.
 pid_t AKResponsibilityGetPidResponsibleForPid(pid_t pid) __asm__("_responsibility_get_pid_responsible_for_pid");
