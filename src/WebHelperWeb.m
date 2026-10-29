@@ -261,7 +261,11 @@ static WKWebViewConfiguration *webConfiguration(void) {
       @"(function () {"
        "  var post = function (el) { try { window.webkit.messageHandlers.akwhview.postMessage({ op: 'focus',"
        "    tag: el && el.tagName ? el.tagName : '', type: el && el.type ? String(el.type) : '' }); } catch (e) {} };"
-       "  document.addEventListener('focusin', function (e) { post(e.target); }, true);"
+       "  document.addEventListener('focusin', function (e) {"
+       "    var t = e.target;"
+       "    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) window.__akwhLastField = t;"
+       "    post(t);"
+       "  }, true);"
        "  document.addEventListener('focusout', function (e) { if (!e.relatedTarget) post(null); }, true);"
        "})();";
   [c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:focus injectionTime:WKUserScriptInjectionTimeAtDocumentStart
@@ -291,6 +295,18 @@ static WKWebViewConfiguration *webConfiguration(void) {
        "  Object.defineProperty(window, '__akwhFromParent', { value: function (message, args) {"
        "    listeners.slice().forEach(function (fn) { try { fn(message, args); } catch (e) {} });"
        "  } });"
+       // A page that jumps far up at once is logged, with what had the focus (a carousel moving
+       // right sent the store back to its top).
+       "  var lastY = 0, jumps = 0;"
+       "  window.addEventListener('scroll', function () {"
+       "    var y = window.scrollY;"
+       "    if (lastY - y > 200 && jumps++ < 50) {"
+       "      var a = document.activeElement;"
+       "      try { window.webkit.messageHandlers.akwhview.postMessage({ op: 'log', text: 'jumped up from ' + Math.round(lastY) +"
+       "        ' to ' + Math.round(y) + '; focus on ' + (a ? a.tagName + '.' + String(a.className).slice(0, 80) : 'nothing') }); } catch (e) {}"
+       "    }"
+       "    lastY = y;"
+       "  }, { passive: true });"
        "})();";
   [c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:messaging injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                              forMainFrameOnly:YES]];
@@ -1069,6 +1085,10 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
       enqueue(v, @{ @"t": @"parent-message", @"a": args ?: @[] });
     } else {
       // A web page (the store): to the listeners its SteamClient.BrowserView registered.
+      static unsigned logged;
+      if (++logged <= 300)
+        AKWHLog(NO, @"Big Picture -> page %u: %@ %@", v.index, args.count > 0 ? args[0] : @"",
+                args.count > 1 ? [[args[1] description] substringToIndex:MIN([[args[1] description] length], 200)] : @"");
       NSString *json = jsonString(@[ args.count > 0 ? args[0] : @"", args.count > 1 ? args[1] : @"" ]);
       [v.webView evaluateJavaScript:[NSString stringWithFormat:@"window.__akwhFromParent && window.__akwhFromParent.apply(null, %@)", json]
                   completionHandler:nil];
@@ -1089,8 +1109,13 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
   if ([message.name isEqualToString:@"akwhview"]) {
     if ([op isEqualToString:@"focus"] && [m[@"tag"] isKindOfClass:NSString.class] && [m[@"type"] isKindOfClass:NSString.class])
       viewEvent(b, @"node-has-focus", @[ message.webView.URL.absoluteString ?: @"", m[@"tag"], m[@"type"], @"", @NO ]);
-    else if ([op isEqualToString:@"to-parent"] && [m[@"message"] isKindOfClass:NSString.class] && [m[@"args"] isKindOfClass:NSString.class])
+    else if ([op isEqualToString:@"to-parent"] && [m[@"message"] isKindOfClass:NSString.class] && [m[@"args"] isKindOfClass:NSString.class]) {
+      static unsigned logged;
+      if (++logged <= 300) AKWHLog(NO, @"page %u -> Big Picture: %@ %@", b.index, m[@"message"], [m[@"args"] substringToIndex:MIN([m[@"args"] length], 200)]);
       viewEvent(b, @"message", @[ m[@"message"], m[@"args"] ]);
+    } else if ([op isEqualToString:@"log"] && [m[@"text"] isKindOfClass:NSString.class]) {
+      AKWHLog(NO, @"page %u: %@", b.index, m[@"text"]);
+    }
     return;
   }
   if ([op isEqualToString:@"call"]) {
@@ -1639,6 +1664,8 @@ static NSString *namedKey(uint16_t code, NSString *text) {
 static NSString *const kTypeKeyScript =
   @"(function (down, key, text, paste) {"
    "  var el = document.activeElement;"
+   "  var last = window.__akwhLastField;"
+   "  if ((!el || el === document.body) && last && document.contains(last)) { el = last; try { el.focus(); } catch (e) {} }"
    "  if (!el || el === document.body) return 'nothing focused';"
    "  var codes = { Backspace: 8, Tab: 9, Enter: 13, Escape: 27, End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38,"
    "                ArrowRight: 39, ArrowDown: 40, Delete: 46 };"
@@ -1675,10 +1702,13 @@ void AKWHTypeKey(BOOL down, uint16_t keyCode, NSString *text, BOOL command) {
   NSArray *args = @[ @(down), key ?: @"", key ? @"" : (text ?: @""), paste ];
   NSString *json = jsonString(args);
   NSString *call = [NSString stringWithFormat:@"%@(%@)", kTypeKeyScript, [json substringWithRange:NSMakeRange(1, json.length - 2)]];
-  static unsigned logged;
+  static unsigned logged, missed;
   BOOL log = down && ++logged <= 20;
   uint32_t index = browserForWebView(wv).index;
   [wv evaluateJavaScript:call completionHandler:^(id result, NSError *error) {
-    if (log) AKWHLog(NO, @"key %@ for page %u: %@", key ?: @"(text)", index, error ? error.localizedDescription : result);
+    // Every key that lands nowhere is logged (to 200), the first 20 that land too.
+    BOOL lost = error || [result isEqual:@"nothing focused"];
+    if (log || (down && lost && ++missed <= 200))
+      AKWHLog(NO, @"key %@ for page %u: %@", key ?: @"(text)", index, error ? error.localizedDescription : result);
   }];
 }

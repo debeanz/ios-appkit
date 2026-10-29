@@ -374,25 +374,33 @@ static NSUInteger clearControllerHandlers(void) {
 // the threads library, sound and the graphics stack: a lock held there would be held for good.
 // Those libraries' code ranges are found before any thread is paused (dladdr and friends take
 // locks a paused thread may hold); while one is, only its registers and stack are read.
-static ak_text gLocking[64];
-static int gLockingCount;
+// Two kinds: code that holds a lock shared with the app for as long as it is anywhere on the
+// stack (the allocator, the Objective-C runtime, dyld, libc's streams, the app's OpenGL stack),
+// and code that only does while it runs (a thread asleep under CoreFoundation's run loop, GCD,
+// the threads library's waits or the shim's event pump holds none of their locks).
+static ak_text gLockAny[64], gLockRunning[64];
+static int gLockAnyCount, gLockRunningCount;
 
 static void findLockingCode(void) {
-  static const char *locking[] = { "libsystem_malloc", "libobjc", "/dyld", "libdispatch", "AppKitShimCore", "AKOpenGL",
-                                   "OSMesa", "MoltenVK", "CoreFoundation", "Foundation", "AudioToolbox", "libsystem_pthread",
-                                   "CoreAudio", "AVFAudio" };
-  gLockingCount = 0;
-  for (uint32_t i = 0; i < _dyld_image_count() && gLockingCount < 64; i++) {
+  static const char *any[] = { "libsystem_malloc", "libobjc", "/dyld", "libsystem_c.dylib", "AKOpenGL", "OSMesa", "MoltenVK" };
+  static const char *running[] = { "CoreFoundation", "Foundation", "libdispatch", "libsystem_pthread", "AppKitShimCore",
+                                   "AudioToolbox", "CoreAudio", "AVFAudio" };
+  gLockAnyCount = gLockRunningCount = 0;
+  for (uint32_t i = 0; i < _dyld_image_count(); i++) {
     const char *name = _dyld_get_image_name(i);
-    BOOL match = NO;
-    for (size_t k = 0; k < sizeof locking / sizeof locking[0] && !match; k++) match = name && strstr(name, locking[k]);
+    if (!name) continue;
+    BOOL inAny = NO, inRunning = NO;
+    for (size_t k = 0; k < sizeof any / sizeof any[0] && !inAny; k++) inAny = strstr(name, any[k]) != NULL;
+    for (size_t k = 0; k < sizeof running / sizeof running[0] && !inRunning; k++) inRunning = strstr(name, running[k]) != NULL;
     const struct mach_header_64 *mh = (const void *)_dyld_get_image_header(i);
-    if (!match || AKAddressIsDeadGameCode(mh)) continue;   // a game's own copy (MoltenVK) only held its locks
+    if ((!inAny && !inRunning) || AKAddressIsDeadGameCode(mh)) continue;   // a game's own copy (MoltenVK) only held its locks
     const uint8_t *lc = (const uint8_t *)(mh + 1);
     for (uint32_t j = 0; j < mh->ncmds; j++, lc += ((const struct load_command *)lc)->cmdsize) {
       const struct segment_command_64 *seg = (const void *)lc;
       if (seg->cmd != LC_SEGMENT_64 || strncmp(seg->segname, "__TEXT", 16)) continue;
-      gLocking[gLockingCount++] = (ak_text){ (uintptr_t)mh, (uintptr_t)mh + seg->vmsize };
+      ak_text t = { (uintptr_t)mh, (uintptr_t)mh + seg->vmsize };
+      if (inAny && gLockAnyCount < 64) gLockAny[gLockAnyCount++] = t;
+      else if (inRunning && gLockRunningCount < 64) gLockRunning[gLockRunningCount++] = t;
       break;
     }
   }
@@ -425,9 +433,23 @@ static BOOL runsGameCode(const uintptr_t *frames, int n) {
 
 static BOOL holdsLocks(const uintptr_t *frames, int n) {
   for (int i = 0; i < n; i++)
-    for (int k = 0; k < gLockingCount; k++)
-      if (frames[i] >= gLocking[k].start && frames[i] < gLocking[k].end) return YES;
+    for (int k = 0; k < gLockAnyCount; k++)
+      if (frames[i] >= gLockAny[k].start && frames[i] < gLockAny[k].end) return YES;
+  for (int k = 0; n > 0 && k < gLockRunningCount; k++)   // where it is running now
+    if (frames[0] >= gLockRunning[k].start && frames[0] < gLockRunning[k].end) return YES;
   return NO;
+}
+
+// A thread that never could be stopped, where it was (looked up once it runs again).
+static void logStuckThread(const uintptr_t *frames, int n) {
+  NSMutableArray *where = [NSMutableArray array];
+  for (int i = 0; i < n && where.count < 8; i++) {
+    Dl_info info;
+    if (!dladdr((void *)frames[i], &info) || !info.dli_fname) continue;
+    const char *image = strrchr(info.dli_fname, '/') ? strrchr(info.dli_fname, '/') + 1 : info.dli_fname;
+    [where addObject:[NSString stringWithFormat:@"%s+0x%lx", image, (unsigned long)(frames[i] - (uintptr_t)info.dli_fbase)]];
+  }
+  teardownLog(@"a thread of its couldn't be stopped safely; it is at %@", [where componentsJoinedByString:@" < "]);
 }
 
 // Every thread with its code on the stack, stopped for good once it is somewhere safe. Returns
@@ -452,7 +474,7 @@ static int stopThreads(int *stuck) {
         if (!runsGameCode(frames, n)) { thread_resume(t); break; }   // not the game's
         if (!holdsLocks(frames, n)) { stopped++; break; }            // stays stopped
         thread_resume(t);
-        if (tries == 99) (*stuck)++;
+        if (tries == 99) { (*stuck)++; logStuckThread(frames, n); }
         usleep(10000);
       }
     }

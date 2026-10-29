@@ -8,8 +8,10 @@
 // fit in sun_path (104 bytes), and the container's tmp directory alone is ~90 characters.
 // libSystem is routed through the shim umbrella, so the client's socket calls bind here.
 // The same wrappers also log loopback TCP bind/listen/connect results (see below).
+#import <UIKit/UIKit.h>
 #import <arpa/inet.h>
 #import <dlfcn.h>
+#import <fcntl.h>
 #import <errno.h>
 #import <netinet/in.h>
 #import <pthread.h>
@@ -23,6 +25,10 @@
 
 int bind(int fd, const struct sockaddr *addr, socklen_t len);
 int connect(int fd, const struct sockaddr *addr, socklen_t len);
+static void noteListening(int fd, int backlog);
+static void noteBound(int fd);
+static void noteConnected(int fd, const struct sockaddr *addr, socklen_t len);
+static void forgetSocket(int fd);
 
 static void *realSym(const char *name) {
   static void *libSystem;
@@ -108,6 +114,7 @@ int listen(int fd, int backlog) {
   int (*real)(int, int) = (int (*)(int, int))realSym("listen");
   int rc = real(fd, backlog);
   int e = errno;
+  if (rc == 0) noteListening(fd, backlog);
   struct sockaddr_storage ss;
   socklen_t sl = sizeof ss;
   char host[64];
@@ -195,6 +202,7 @@ ssize_t write(int fd, const void *buf, size_t len) {
 int close(int fd);
 int close(int fd) {
   REAL_ONCE(int (*)(int), close);
+  forgetSocket(fd);
   if (fd >= 0 && fd < AK_TRACK_MAX && gTrackPort[fd]) {
     fprintf(stderr, "[AppKitShim] close fd %d (port %d)\n", fd, gTrackPort[fd]);
     gTracked[fd] = 0;
@@ -229,6 +237,7 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len) {
   if (!remap(addr, len, &local)) {
     int rc = real(fd, addr, len);
     int e = errno;
+    if (rc == 0) noteBound(fd);
     char host[64];
     int port = loopbackPort(addr, host, sizeof host);
     if (port >= 0) logOnce("bind", host, port, rc, e);
@@ -252,6 +261,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len) {
   if (!remap(addr, len, &local)) {
     int rc = real(fd, addr, len);
     int e = errno;
+    if (rc == 0) noteConnected(fd, addr, len);
     char host[64];
     int port;
     // Every loopback target is recorded (a non-blocking connect reports EINPROGRESS and only
@@ -264,4 +274,148 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len) {
     return rc;
   }
   return real(fd, (const struct sockaddr *)&local, (socklen_t)local.sun_len);
+}
+
+#pragma mark Sockets after the app was suspended
+
+// iOS may take back a suspended app's sockets ("defunct" them; Apple's TN2277): a listening
+// socket then never accepts again and a UDP socket fails every call. Steam never notices - its
+// local servers (the UI's transport, its process pipes) stopped taking connections, so Big
+// Picture lost the client for good (installs, game pages, search did nothing) and Steam's
+// network thread spun on a dead socket at full speed. So listening TCP sockets and bound UDP
+// sockets are noted (address, backlog, a UDP socket's peer), and when the app comes back to
+// the foreground each whose address is free again - iOS took it - is made anew on that address
+// and put in its place under the same descriptor (dup2): Steam goes on with it unaware.
+typedef struct {
+  int fd, type, backlog;
+  struct sockaddr_storage addr, peer;
+  socklen_t addrLen, peerLen;
+} ak_sock;
+static ak_sock gSocks[256];
+static int gSockCount;
+static pthread_mutex_t gSockLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void watchForeground(void);
+
+static ak_sock *sockFor(int fd) {   // with gSockLock held
+  for (int i = 0; i < gSockCount; i++) if (gSocks[i].fd == fd) return &gSocks[i];
+  return NULL;
+}
+
+static void noteSocket(int fd, int type, int backlog) {
+  struct sockaddr_storage ss;
+  socklen_t sl = sizeof ss;
+  if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0 || (ss.ss_family != AF_INET && ss.ss_family != AF_INET6)) return;
+  pthread_mutex_lock(&gSockLock);
+  ak_sock *k = sockFor(fd);
+  if (!k && gSockCount < 256) { k = &gSocks[gSockCount++]; memset(k, 0, sizeof *k); }
+  if (k) {
+    k->fd = fd;
+    k->type = type;
+    k->backlog = backlog;
+    k->addr = ss;
+    k->addrLen = sl;
+  }
+  pthread_mutex_unlock(&gSockLock);
+  watchForeground();
+}
+
+static void noteListening(int fd, int backlog) { noteSocket(fd, SOCK_STREAM, backlog); }
+
+static void noteBound(int fd) {
+  int type = 0;
+  socklen_t l = sizeof type;
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &l) == 0 && type == SOCK_DGRAM) noteSocket(fd, SOCK_DGRAM, 0);
+}
+
+static void noteConnected(int fd, const struct sockaddr *addr, socklen_t len) {
+  pthread_mutex_lock(&gSockLock);
+  ak_sock *k = sockFor(fd);
+  if (k && k->type == SOCK_DGRAM && len <= sizeof k->peer) { memcpy(&k->peer, addr, len); k->peerLen = len; }
+  pthread_mutex_unlock(&gSockLock);
+}
+
+static void forgetSocket(int fd) {
+  pthread_mutex_lock(&gSockLock);
+  for (int i = 0; i < gSockCount; i++)
+    if (gSocks[i].fd == fd) { gSocks[i] = gSocks[--gSockCount]; break; }
+  pthread_mutex_unlock(&gSockLock);
+}
+
+static void reviveSockets(void) {
+  int (*realBind)(int, const struct sockaddr *, socklen_t) = (int (*)(int, const struct sockaddr *, socklen_t))realSym("bind");
+  int (*realListen)(int, int) = (int (*)(int, int))realSym("listen");
+  int (*realConnect)(int, const struct sockaddr *, socklen_t) = (int (*)(int, const struct sockaddr *, socklen_t))realSym("connect");
+  int (*realClose)(int) = (int (*)(int))realSym("close");
+  static ak_sock socks[256];
+  pthread_mutex_lock(&gSockLock);
+  int n = gSockCount;
+  memcpy(socks, gSocks, sizeof(ak_sock) * (size_t)n);
+  pthread_mutex_unlock(&gSockLock);
+  int revived = 0;
+  for (int i = 0; i < n; i++) {
+    ak_sock *k = &socks[i];
+    int s = socket(k->addr.ss_family, k->type, 0);
+    if (s < 0) continue;
+    int one = 1;
+    if (k->type == SOCK_STREAM) setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (realBind(s, (struct sockaddr *)&k->addr, k->addrLen) != 0) { realClose(s); continue; }   // still its own: alive
+    int v;
+    socklen_t l = sizeof v;
+    int flags = fcntl(k->fd, F_GETFL);
+    if (flags >= 0) fcntl(s, F_SETFL, flags);
+    setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+    if (getsockopt(k->fd, SOL_SOCKET, SO_RCVBUF, &v, &l) == 0) setsockopt(s, SOL_SOCKET, SO_RCVBUF, &v, sizeof v);
+    l = sizeof v;
+    if (getsockopt(k->fd, SOL_SOCKET, SO_SNDBUF, &v, &l) == 0) setsockopt(s, SOL_SOCKET, SO_SNDBUF, &v, sizeof v);
+    if (k->type == SOCK_STREAM && realListen(s, k->backlog) != 0) { realClose(s); continue; }
+    if (k->type == SOCK_DGRAM && k->peerLen) realConnect(s, (struct sockaddr *)&k->peer, k->peerLen);
+    if (dup2(s, k->fd) < 0) { realClose(s); continue; }
+    realClose(s);
+    char host[64] = "?";
+    int port = 0;
+    if (k->addr.ss_family == AF_INET) {
+      inet_ntop(AF_INET, &((struct sockaddr_in *)&k->addr)->sin_addr, host, sizeof host);
+      port = ntohs(((struct sockaddr_in *)&k->addr)->sin_port);
+    } else {
+      inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&k->addr)->sin6_addr, host, sizeof host);
+      port = ntohs(((struct sockaddr_in6 *)&k->addr)->sin6_port);
+    }
+    fprintf(stderr, "[AppKitShim] %s socket %s:%d (fd %d) was taken back while the app was suspended: made anew\n",
+            k->type == SOCK_STREAM ? "listening" : "UDP", host, port, k->fd);
+    revived++;
+  }
+  if (n) fprintf(stderr, "[AppKitShim] back in the foreground: %d of %d listening/UDP sockets made anew\n", revived, n);
+}
+
+static void watchForeground(void) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillEnterForegroundNotification object:nil
+                                                       queue:nil usingBlock:^(NSNotification *n) { reviveSockets(); }];
+    });
+  });
+}
+
+// What Steam's network thread keeps getting from a socket (an error other than "nothing yet"),
+// once per error: a dead socket it spins on shows here.
+ssize_t recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *from, socklen_t *fromLen);
+ssize_t recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *from, socklen_t *fromLen) {
+  REAL_ONCE(ssize_t (*)(int, void *, size_t, int, struct sockaddr *, socklen_t *), recvfrom);
+  ssize_t n = real_(fd, buf, len, flags, from, fromLen);
+  if (n < 0) {
+    int e = errno;
+    if (e != EAGAIN && e != EINTR) {
+      static int seen[8], nseen;
+      int logged = 0;
+      for (int i = 0; i < nseen; i++) logged |= seen[i] == e;
+      if (!logged && nseen < 8) {
+        seen[nseen++] = e;
+        fprintf(stderr, "[AppKitShim] recvfrom fd %d: %s\n", fd, strerror(e));
+      }
+    }
+    errno = e;
+  }
+  return n;
 }
