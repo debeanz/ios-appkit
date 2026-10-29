@@ -186,6 +186,8 @@ void AKPrepareGameOpenGLViews(void);
 // GameHID.m: a game library's IOKit HID imports, answered from GameController (called for each
 // of the game's images as it loads).
 void AKGameBindControllers(const struct mach_header *header, intptr_t slide, const char *name);
+// GameHID.m: Steam's overlay closed: what is held then stays up for the game until let go.
+void AKGameControllersHoldBack(void);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioStop(void);   // the game ended: its output units go quiet

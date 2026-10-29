@@ -61,6 +61,7 @@ static void send(AKWHPad *pad, int code, BOOL pressed) {
 
 BOOL AKGameIsRunning(void);
 UIView *AKWHStageView(void);
+void AKGameControllersHoldBack(void);   // GameHID.m
 
 static void releaseHeld(AKWHPad *pad) {
   for (int code = 0; pad.down; code++)
@@ -99,6 +100,7 @@ static void setOverlay(BOOL shown, uint32_t controller, uint32_t key) {
     });
   } else {
     AKWHShowGameOverlay(NO);
+    AKGameControllersHoldBack();   // the A that chose Resume isn't the game's
     stage.hidden = YES;   // the game's window is under it
     for (AKWHPad *pad in gPads) releaseHeld(pad);
     AKWHLog(YES, @"Steam overlay closed: back to the game");

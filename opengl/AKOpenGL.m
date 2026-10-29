@@ -647,6 +647,11 @@ CGLError CGLUpdateContext(CGLContextObj ctx) {
 
 CGLError CGLClearDrawable(CGLContextObj ctx) { AKGLSetDrawable(ctx, NULL, 1); return kCGLNoError; }
 
+// Frames put on screen by every context so far (the app watches a game that says it quits
+// for its frames to stop: MacPrograms.m).
+static uint64_t gFramesShown;
+uint64_t AKGLFramesShown(void) { return __atomic_load_n(&gFramesShown, __ATOMIC_RELAXED); }
+
 // The frame just drawn goes on screen and the next surface is bound. With a swap interval
 // the call waits for the next 60 Hz refresh, as a Mac's vsync would.
 CGLError CGLFlushDrawable(CGLContextObj ctx) {
@@ -666,6 +671,7 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
     [CATransaction commit];
   }
   c->slot = (c->slot + 1) % 3;
+  __atomic_add_fetch(&gFramesShown, 1, __ATOMIC_RELAXED);
   // Now and then, follow the view's size (rotation, a window resized).
   if (++c->frames % 30 == 0) dispatch_async(dispatch_get_main_queue(), ^{ measure(c); });
   bind(c);

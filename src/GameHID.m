@@ -61,6 +61,7 @@ typedef struct { AKHIDValueCallback fn; void *context; } AKValueCallback;
   AKHIDCallback removed;
   void *removedContext;
   CFRunLoopTimerRef timer;                // when scheduled on its own
+  uint32_t heldBack;                      // pressed for Steam's overlay: up for the game until let go
 }
 @end
 @implementation AKHIDDevice
@@ -87,10 +88,30 @@ static int64_t stick(float v) { return MAX(-32768, MIN(32767, lroundf(v * 32767.
 static int64_t trigger(float v) { return MAX(0, MIN(255, lroundf(v * 255.0f))); }
 
 // What an element of the X360 layout reads on a GameController gamepad right now.
+static int64_t readNow(AKHIDDevice *d, AKHIDElement *e);
+
+// A button (bit = usage) or trigger (bits 20 and 21) held when Steam's overlay closed went to
+// Steam (A on Resume, B out of its menu): the game sees it up until it is let go.
+static uint32_t holdBackBit(AKHIDElement *e) {
+  if (e->page == 9) return 1u << e->usage;
+  return e->usage == 0x32 ? 1u << 20 : e->usage == 0x35 ? 1u << 21 : 0;
+}
+
 static int64_t readElement(AKHIDDevice *d, AKHIDElement *e) {
-  GCExtendedGamepad *g = d->controller.extendedGamepad;
   // With Steam's overlay over the game, the controller drives Steam: the game sees it at rest.
-  if (!g || AKGameOverlayShown()) return 0;
+  if (!d->controller.extendedGamepad || AKGameOverlayShown()) return 0;
+  int64_t v = readNow(d, e);
+  uint32_t bit = holdBackBit(e);
+  if (bit && (__atomic_load_n(&d->heldBack, __ATOMIC_RELAXED) & bit)) {
+    BOOL down = e->page == 9 ? v != 0 : v > 32;
+    if (down) return 0;
+    __atomic_and_fetch(&d->heldBack, ~bit, __ATOMIC_RELAXED);
+  }
+  return v;
+}
+
+static int64_t readNow(AKHIDDevice *d, AKHIDElement *e) {
+  GCExtendedGamepad *g = d->controller.extendedGamepad;
   if (e->page == 9) {
     GCControllerButtonInput *b = nil;
     switch (e->usage) {
@@ -161,6 +182,16 @@ static AKHIDDevice *deviceFor(GCController *controller) {
     [devices setObject:d forKey:controller];
     hidLog(@"\"%@\" shows to the game as an Xbox 360 controller", controller.vendorName ?: @"controller");
     return d;
+  }
+}
+
+void AKGameControllersHoldBack(void) {
+  @synchronized (AKHIDDevice.class) {
+    for (GCController *c in GCController.controllers) {
+      if (!c.extendedGamepad) continue;
+      AKHIDDevice *d = deviceFor(c);
+      __atomic_store_n(&d->heldBack, ~0u, __ATOMIC_RELAXED);
+    }
   }
 }
 

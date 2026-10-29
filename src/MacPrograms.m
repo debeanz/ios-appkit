@@ -924,16 +924,20 @@ static BOOL hasPrefix(const char *path, NSString *prefix) {
   return prefix && !strncmp(path, prefix.fileSystemRepresentation, strlen(prefix.fileSystemRepresentation));
 }
 
+static void bindOutput(const struct mach_header *header, intptr_t slide);   // its printing (below)
+
 static void imageAdded(const struct mach_header *header, intptr_t slide) {
   NSString *bundlePath = gGameBundlePath, *real = gGameBundleReal;
   Dl_info info;
   if (!bundlePath || !dladdr(header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundlePath) || hasPrefix(info.dli_fname, real)))
     return;
   // Its IOKit HID calls (gamepads) are answered from GameController, its sound goes to iOS's
-  // output unit, and its busy waits on the clock rest the core.
+  // output unit, its busy waits on the clock rest the core, and what it prints is watched for
+  // its quitting.
   AKGameBindControllers(header, slide, info.dli_fname);
   AKGameBindAudio(header, slide);
   AKGameBindClock(header, slide);
+  bindOutput(header, slide);
   const struct mach_header_64 *mh = (const void *)header;
   const uint8_t *lc = (const uint8_t *)(mh + 1);
   for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
@@ -1102,11 +1106,9 @@ static void endGame(pid_t pid) {
 }
 
 // A game that steps from a frame timer (GameTimers.m) and invalidates its last one, making no
-// other, has left its main loop. GameMaker does exactly that after game_end() ("###game_end###",
-// then its scripts freed) and calls nothing that ends the process here, so it sat in its event
-// loop with its last frame on screen. Three seconds with no frame timer (the app in front)
-// end it. A frame timer that stops firing for 10 s while still scheduled only has the game
-// thread's stack logged, once per stall.
+// other, has left its main loop: three seconds with no frame timer (the app in front) end it. A
+// frame timer that stops firing for 10 s while still scheduled only has the game thread's stack
+// logged, once per stall.
 static void watchGameLoop(pid_t pid) {
   __block int quietFor = 0;
   __block BOOL hadFrameTimer = NO, reportedStall = NO;
@@ -1136,6 +1138,128 @@ static void watchGameLoop(pid_t pid) {
     endGame(pid);
   });
   dispatch_resume(timer);
+}
+
+// GameMaker prints "###game_end###<code>" when game_end() runs, frees its scripts, stops
+// drawing and then calls nothing that ends the process here: its thread goes on in its event
+// loop with its last frame on screen. What the game's own code prints is watched for that
+// line. A game that then goes quiet - nothing printed and no frame shown for 4 s - has quit and
+// is ended (its thread's stack logged first). game_change() (DELTARUNE's chapters) ends the
+// game the same way but starts the next at once ("Processing command line" again): that one is
+// left running, as is one still drawing two minutes on.
+static double gLastOutput;      // CFAbsoluteTime of the game's last print
+static BOOL gNextGameStarted;   // it printed a new game's start after ###game_end###
+static BOOL gWatchingQuit;
+
+static uint64_t framesShown(void) {
+  static uint64_t (*shown)(void);
+  if (!shown) shown = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "AKGLFramesShown");
+  return shown ? shown() : 0;
+}
+
+static void gameSaidItQuit(void) {
+  pid_t pid = gGamePid;
+  if (!pid || gWatchingQuit) return;
+  gWatchingQuit = YES;
+  gNextGameStarted = NO;
+  gameLog(@"it printed ###game_end###: it is quitting");
+  dispatch_async(dispatch_get_main_queue(), ^{
+    __block uint64_t frames = framesShown();
+    __block CFAbsoluteTime framesAt = CFAbsoluteTimeGetCurrent();
+    CFAbsoluteTime started = framesAt;
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 4);
+    dispatch_source_set_event_handler(timer, ^{
+      CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+      if (gGamePid != pid || gNextGameStarted || now - started > 120) {
+        if (gGamePid == pid) gameLog(gNextGameStarted ? @"it started its next game (game_change)" : @"it is still drawing: left running");
+        gWatchingQuit = NO;
+        dispatch_source_cancel(timer);
+        return;
+      }
+      uint64_t f = framesShown();
+      if (f != frames) { frames = f; framesAt = now; }
+      if (now - gLastOutput < 4 || now - framesAt < 4) return;
+      gWatchingQuit = NO;
+      dispatch_source_cancel(timer);
+      gameLog(@"nothing printed or drawn for 4 s since: it has quit");
+      AKInProcessLogStack(pid, "it quit but is still running");
+      endGame(pid);
+    });
+    dispatch_resume(timer);
+  });
+}
+
+static void noteOutput(const char *text, size_t n) {
+  if (!text || !n) return;
+  gLastOutput = CFAbsoluteTimeGetCurrent();
+  if (n >= 14 && memmem(text, n, "###game_end###", 14)) gameSaidItQuit();
+  else if (n >= 23 && memmem(text, n, "Processing command line", 23)) gNextGameStarted = YES;
+}
+
+static void noteFormatted(const char *fmt, va_list ap) {
+  char line[512];
+  va_list copy;
+  va_copy(copy, ap);
+  int n = vsnprintf(line, sizeof line, fmt, copy);
+  va_end(copy);
+  if (n > 0) noteOutput(line, MIN((size_t)n, sizeof line - 1));
+}
+
+static int gamePrintf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  noteFormatted(fmt, ap);
+  int r = vprintf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int gameFprintf(FILE *f, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  noteFormatted(fmt, ap);
+  int r = vfprintf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int gameVprintf(const char *fmt, va_list ap) {
+  noteFormatted(fmt, ap);
+  return vprintf(fmt, ap);
+}
+
+static int gameVfprintf(FILE *f, const char *fmt, va_list ap) {
+  noteFormatted(fmt, ap);
+  return vfprintf(f, fmt, ap);
+}
+
+static int gamePuts(const char *s) {
+  if (s) noteOutput(s, strlen(s));
+  return puts(s);
+}
+
+static int gameFputs(const char *s, FILE *f) {
+  if (s) noteOutput(s, strlen(s));
+  return fputs(s, f);
+}
+
+static size_t gameFwrite(const void *p, size_t size, size_t count, FILE *f) {
+  if (f == stdout || f == stderr) noteOutput(p, size * count);
+  return fwrite(p, size, count, f);
+}
+
+static void bindOutput(const struct mach_header *header, intptr_t slide) {
+  AKRebindImports(header, slide, ^void *(const char *symbol) {
+    if (!strcmp(symbol, "_printf")) return (void *)gamePrintf;
+    if (!strcmp(symbol, "_fprintf")) return (void *)gameFprintf;
+    if (!strcmp(symbol, "_vprintf")) return (void *)gameVprintf;
+    if (!strcmp(symbol, "_vfprintf")) return (void *)gameVfprintf;
+    if (!strcmp(symbol, "_puts")) return (void *)gamePuts;
+    if (!strcmp(symbol, "_fputs")) return (void *)gameFputs;
+    if (!strcmp(symbol, "_fwrite")) return (void *)gameFwrite;
+    return NULL;
+  });
 }
 
 static void gameEnded(pid_t pid, int status) {
