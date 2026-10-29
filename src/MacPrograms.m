@@ -1143,7 +1143,7 @@ static void watchGameLoop(pid_t pid) {
 // GameMaker prints "###game_end###<code>" when game_end() runs, frees its scripts, stops
 // drawing and then calls nothing that ends the process here: its thread goes on in its event
 // loop with its last frame on screen. What the game's own code prints is watched for that
-// line. A game that then goes quiet - nothing printed and no frame shown for 4 s - has quit and
+// line. A game that then goes quiet - nothing printed and no frame shown for 2 s - has quit and
 // is ended (its thread's stack logged first). game_change() (DELTARUNE's chapters) ends the
 // game the same way but starts the next at once ("Processing command line" again): that one is
 // left running, as is one still drawing two minutes on.
@@ -1179,10 +1179,10 @@ static void gameSaidItQuit(void) {
       }
       uint64_t f = framesShown();
       if (f != frames) { frames = f; framesAt = now; }
-      if (now - gLastOutput < 4 || now - framesAt < 4) return;
+      if (now - gLastOutput < 2 || now - framesAt < 2) return;
       gWatchingQuit = NO;
       dispatch_source_cancel(timer);
-      gameLog(@"nothing printed or drawn for 4 s since: it has quit");
+      gameLog(@"nothing printed or drawn for 2 s since: it has quit");
       AKInProcessLogStack(pid, "it quit but is still running");
       endGame(pid);
     });

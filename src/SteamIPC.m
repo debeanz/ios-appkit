@@ -256,15 +256,27 @@ void AKSteamEventSet(AKSteamEvent *e) { binsemRelease(&e->lock); }
 // semaphores only sem_close), so from its second look on it finds its own and the game never
 // ends ("Stopping" for good). On a Mac the game's overlay renderer holds that name; no overlay
 // renderer runs here, so semaphores made under it lose their names at once, and every look
-// finds none. libSystem is routed through the shim umbrella, so the client's sem_open is this.
+// finds none. Named semaphores outlive the app (until the phone restarts), so ones an earlier
+// run left under the game's names are removed when it starts, and any found there later is
+// replaced. libSystem is routed through the shim umbrella, so the client's sem_open is this.
 static uint32_t gOverlayLock, gOverlayEvent;   // CRC32s: the event's binary semaphore, and the event
+static unsigned gOverlayLooks;                 // Steam's looks logged for this game
 
 void AKSteamNoteGameID(uint64_t gameID) {
-  char name[64], lock[80];
+  char name[64], lock[80], path[48];
   snprintf(name, sizeof name, "SteamOverlayRunning_%llu", (unsigned long long)gameID);
   snprintf(lock, sizeof lock, "%s.BinSemLock", name);
   gOverlayLock = AKSteamCRC32(lock);
   gOverlayEvent = AKSteamCRC32(name);
+  gOverlayLooks = 0;
+  int removed = 0;
+  snprintf(path, sizeof path, "/BSem/%x", gOverlayLock);
+  removed += sem_unlink(path) == 0;
+  snprintf(path, sizeof path, "/BSem/%x.2", gOverlayLock);
+  removed += sem_unlink(path) == 0;
+  snprintf(path, sizeof path, "/Evt/%x", gOverlayEvent);
+  removed += sem_unlink(path) == 0;
+  fprintf(stderr, "[AppKitShim] game: Steam's overlay check for it: %s (%d left from an earlier run removed)\n", name, removed);
 }
 
 // /BSem/<crc>, /BSem/<crc>.2 (the binary semaphore's pair) or /Evt/<crc> (the event's own).
@@ -288,7 +300,15 @@ sem_t *sem_open(const char *name, int oflag, ...) {
   unsigned value = va_arg(ap, unsigned);
   va_end(ap);
   sem_t *s = real(name, oflag, mode, value);
-  if (s != SEM_FAILED && isOverlayName(name)) sem_unlink(name);
+  if (!isOverlayName(name)) return s;
+  bool leftover = s == SEM_FAILED && errno == EEXIST;
+  if (leftover) {
+    sem_unlink(name);
+    s = real(name, oflag, mode, value);
+  }
+  if (s != SEM_FAILED) sem_unlink(name);
+  if (++gOverlayLooks <= 6)
+    fprintf(stderr, "[AppKitShim] game: Steam looks for its overlay (%s): none%s\n", name, leftover ? " (an old one replaced)" : "");
   return s;
 }
 
