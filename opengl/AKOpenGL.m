@@ -511,6 +511,8 @@ static void sizeSurfaces(AKGLContext *c) {
   glLog(@"context %p draws %dx%d", c, w, h);
 }
 
+static void applyRects(AKGLContext *c);   // below, with the GL calls it wraps
+
 static BOOL bind(AKGLContext *c) {
   sizeSurfaces(c);
   IOSurfaceRef s = c->surfaces[c->slot];
@@ -585,8 +587,6 @@ static void measureLater(AKGLContext *c) {
     measure(c);
   });
 }
-
-static void applyRects(AKGLContext *c);
 
 // Pixels per point for a drawable asked for below the screen's resolution (a game's 1x window,
 // NSWindow.m): the screen's own, unless AK_GL_RENDER_SCALE asks for fewer (each frame is read
