@@ -1280,12 +1280,15 @@ static int freshStart(NSString *bundle, NSString *bundleReal) {
 // running game's engine library whose allocator iOS's libc++ doesn't share (Unity's player: see
 // hideOperatorNewDelete). And any C++ library Steam loads after a game would be tied the same
 // way. On a Mac each game has its own process and none of this can happen. So each image loaded
-// once a game has started is bound as its own process would bind it: operator new and delete to
-// the running game's program's own if it defines them (GameMaker's runner, as on a Mac), else
-// the system's; and any other import left pointing into an ended game's code to the image's own
-// definition of it.
+// once a game has started is bound as its own process would bind it, except that operator new
+// and delete are always the system's: on a Mac dyld also points the system's libc++ at a game's
+// own allocator, but iOS's libc++ in the shared cache always allocates and frees with the
+// system's, and a game's allocator mixed with it frees one's memory with the other ("pointer
+// being freed was not allocated": Unity's IL2CPP start, whose program defines Unity's operator
+// new, as Tunic's Mac build found too). Only a game program's own references to its own operator
+// new and delete keep them (GameMaker's runner: its code calls them directly anyway). And any
+// other import left pointing into an ended game's code goes to the image's own definition.
 static const struct mach_header *gProgramHeader;   // the running game's program, once it loads
-static intptr_t gProgramSlide;
 static NSString *gProgramInBundle;                  // its path inside its bundle ("Contents/MacOS/X")
 static BOOL gGamesStarted;                          // a game has been launched in this run
 
@@ -1319,22 +1322,18 @@ static NSDictionary<NSString *, NSValue *> *definitionsOf(const struct mach_head
 
 static void bindAsItsOwnProcess(const struct mach_header *header, intptr_t slide, const char *name, BOOL game) {
   static void *libcxx;
-  static NSDictionary *programDefinitions;
-  static const struct mach_header *programDefinitionsOf;
   if (!libcxx) libcxx = dlopen("/usr/lib/libc++.1.dylib", RTLD_LAZY | RTLD_NOLOAD);
+  BOOL program = game && header == gProgramHeader;
   __block NSDictionary *own = nil;
   __block int allocators = 0, fromEnded = 0;
-  __block BOOL programs = NO;
+  __block BOOL itsOwn = NO;
   AKRebindImportsFrom(header, slide, ^void *(const char *symbol, void *current) {
     if (isAllocator(symbol)) {
       void *to = NULL;
-      if (game && gProgramHeader) {
-        if (programDefinitionsOf != gProgramHeader) {
-          programDefinitions = definitionsOf(gProgramHeader, gProgramSlide);
-          programDefinitionsOf = gProgramHeader;
-        }
-        to = [programDefinitions[@(symbol)] pointerValue];
-        programs |= to != NULL;
+      if (program) {
+        if (!own) own = definitionsOf(header, slide);
+        to = [own[@(symbol)] pointerValue];
+        itsOwn |= to != NULL;
       }
       if (!to && libcxx) to = dlsym(libcxx, symbol + 1);
       if (to && to != current) allocators++;
@@ -1349,7 +1348,7 @@ static void bindAsItsOwnProcess(const struct mach_header *header, intptr_t slide
   if (!allocators && !fromEnded) return;
   const char *base = name && strrchr(name, '/') ? strrchr(name, '/') + 1 : (name ?: "an image");
   gameLog(@"  %s, bound as in its own process: %d operator new/delete imports to %@, %d imports from an ended game to its own",
-          base, allocators, programs ? @"its program's" : @"the system's", fromEnded);
+          base, allocators, itsOwn ? @"its own" : @"the system's", fromEnded);
 }
 
 static BOOL imageAdded(const struct mach_header *header, intptr_t slide);
@@ -1372,7 +1371,6 @@ static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   NSString *path = @(info.dli_fname);
   if (gProgramInBundle && [path hasSuffix:[@"/" stringByAppendingString:gProgramInBundle]]) {
     gProgramHeader = header;
-    gProgramSlide = slide;
   }
   bindAsItsOwnProcess(header, slide, info.dli_fname, YES);
   // Its IOKit HID calls (gamepads) are answered from GameController, its sound goes to iOS's
@@ -1804,7 +1802,7 @@ static void preloadSharedLibraries(void) {
 // Whether the game defines operator new itself (then it shares it only with its own libraries).
 static void noteOwnAllocator(void *image) {
   void *mine = dlsym(image, "_Znwm");
-  if (mine && AKAddressIsInGame(mine)) gameLog(@"it has its own operator new/delete; the app's libraries keep the system's");
+  if (mine && AKAddressIsInGame(mine)) gameLog(@"it defines its own operator new/delete: only its program's code uses them, its libraries and iOS's the system's");
 }
 
 // Why it couldn't start goes to *failure, a strong reference the failure block can set safely

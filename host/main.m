@@ -532,7 +532,13 @@ static void startIPCServer(NSString *client) {
   char *argv[] = { strdup(path.fileSystemRepresentation), NULL };
   pid_t pid = gSpawnInProcess(path.fileSystemRepresentation, argv, NULL, client.fileSystemRepresentation);
   if (pid > 0) hostlog(@"Steam's IPC broker (ipcserver) running in-process as pid %d", pid);
-  else hostlog(@"  ipcserver didn't start (%d)", pid);
+  else { hostlog(@"  ipcserver didn't start (%d)", pid); return; }
+  // On a Mac steam_osx then tells ipcserver which Steam runs (its pid and executable); games'
+  // SteamAPI_Init asks ipcserver for it. This app stands in for steam_osx.
+  void (*registerSteam)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "AKSteamRegisterRunningSteam");
+  NSString *steamOSX = [client stringByAppendingPathComponent:@"steam_osx"];
+  if (registerSteam) registerSteam(steamOSX.fileSystemRepresentation);
+  else hostlog(@"  the shim can't tell ipcserver which Steam runs: games' Steamworks won't find Steam");
 }
 
 // Point every Steam image's CreateSimpleProcess at the host's, and register the helper's

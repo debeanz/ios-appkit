@@ -21,6 +21,9 @@ uint32_t AKSteamCRC32(const char *s);
 // The game Steam started (its 64-bit game id): Steam's probes for that game's overlay find
 // none, so it sees the game end (SteamIPC.m).
 void AKSteamNoteGameID(uint64_t gameID);
+// steam_osx's word to ipcserver of which Steam runs (its pid, and the executable whose folder
+// holds steamclient.dylib), so games' SteamAPI_Init finds it. Returns at once; sent in the background.
+void AKSteamRegisterRunningSteam(const char *executable);
 
 // An auto- or manual-reset event shared by name. timeoutMs < 0 waits forever.
 AKSteamEvent *AKSteamEventCreate(const char *name, bool manualReset, bool initialState, bool force);

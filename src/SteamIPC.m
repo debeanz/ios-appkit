@@ -19,6 +19,7 @@
 // without one blocks in sem_wait. The shared memory comes from the shim's in-process
 // shm_open (PosixShm.m): the client and this helper are one process here.
 #import "SteamIPC.h"
+#import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <errno.h>
 #import <fcntl.h>
@@ -185,7 +186,7 @@ typedef struct {
   char name[32], label[256];
 } AKIPCServerMessage;
 
-static void tellIPCServer(int32_t op, const char *name) {
+static mach_port_t ipcServerPort(void) {
   static mach_port_t server;
   static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
   pthread_mutex_lock(&lock);
@@ -193,6 +194,11 @@ static void tellIPCServer(int32_t op, const char *name) {
     server = MACH_PORT_NULL;   // not running yet: asked again next time
   mach_port_t port = server;
   pthread_mutex_unlock(&lock);
+  return port;
+}
+
+static void tellIPCServer(int32_t op, const char *name) {
+  mach_port_t port = ipcServerPort();
   if (!port) return;
   AKIPCServerMessage m = { 0 };
   m.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
@@ -203,6 +209,43 @@ static void tellIPCServer(int32_t op, const char *name) {
   m.pid = getpid();
   strncpy(m.name, name, sizeof m.name - 1);
   mach_msg(&m.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof m, 0, MACH_PORT_NULL, 2000, MACH_PORT_NULL);
+}
+
+// Which Steam is running, for ipcserver to tell games: on a Mac steam_osx sends it (op 13) once
+// ipcserver runs, with its pid and its executable's path, whose folder holds steamclient.dylib.
+// A game's SteamAPI_Init asks for it (op 14) and gives up without it ("[S_API FAIL]
+// SteamAPI_Init() failed; ipcserver GetSteamPath failed"). The host stands in for steam_osx, so
+// it says it here. steam_osx's message: {header, op, pid, char path[512]}, msgh_id 0x68, no
+// reply. ipcserver checks in its service on its own thread, so this waits up to 5 s for it.
+typedef struct {
+  mach_msg_header_t header;
+  int32_t op, pid;
+  char path[512];
+} AKIPCServerSteamMessage;
+
+void AKSteamRegisterRunningSteam(const char *executable) {
+  char *path = strdup(executable);
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    mach_port_t port = MACH_PORT_NULL;
+    for (int i = 0; i < 250 && !(port = ipcServerPort()); i++) usleep(20000);
+    if (!port) {
+      fprintf(stderr, "[AppKitShim] Steamworks: ipcserver never answered; games can't find Steam\n");
+      free(path);
+      return;
+    }
+    AKIPCServerSteamMessage m = { 0 };
+    m.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+    m.header.msgh_size = sizeof m;
+    m.header.msgh_remote_port = port;
+    m.header.msgh_id = 0x68;
+    m.op = 13;
+    m.pid = getpid();
+    strncpy(m.path, path, sizeof m.path - 1);
+    kern_return_t sent = mach_msg(&m.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof m, 0, MACH_PORT_NULL, 5000, MACH_PORT_NULL);
+    fprintf(stderr, "[AppKitShim] Steamworks: ipcserver told Steam is pid %d at %s%s\n", m.pid, path,
+            sent == KERN_SUCCESS ? "" : " (the message didn't go)");
+    free(path);
+  });
 }
 
 #pragma mark IPC::BinarySemaphore and IPC::PosixEvent
