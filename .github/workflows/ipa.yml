@@ -83,6 +83,20 @@ jobs:
           nm -gU build/device/AppKitShimCore.framework/AppKitShimCore > build/shim-exports.txt
           node tools/lib-routes.js --verify build/routes.json build/shim-exports.txt
 
+      - name: Cache the game engines' Mac builds (tools/engines.txt)
+        uses: actions/cache@v4
+        with:
+          path: .enginecache
+          key: engines-${{ hashFiles('tools/engines.txt') }}
+
+      - name: Check game engines against the shim (report only)
+        continue-on-error: true
+        run: |
+          bash tools/fetch-engines.sh tools/engines.txt .enginecache build/engines
+          nm -gU build/device/AKOpenGL.framework/AKOpenGL build/device/libOSMesa.dylib > build/opengl-exports.txt
+          node tools/engine-gaps.js build/engines "$(xcrun --sdk iphoneos --show-sdk-path)" build/routes.json \
+            build/shim-exports.txt build/opengl-exports.txt data/runtime-gap.json build/engine-gaps.json
+
       - name: Build the iOS host executable and the launcher interface it loads
         run: |
           SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -121,4 +135,6 @@ jobs:
           path: |
             build/routes.json
             build/shim-exports.txt
+            build/opengl-exports.txt
+            build/engine-gaps.json
           if-no-files-found: ignore

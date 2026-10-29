@@ -130,12 +130,15 @@ function parseSlice(b) {
     off += size;
   }
 
-  const seen = new Set();
-  const add = (ord, name) => {
+  // An import is weak (binds to NULL when missing) only if every reference to it is weak.
+  const seen = new Map();
+  const add = (ord, name, weak) => {
     const key = ord + '\0' + name;
-    if (seen.has(key)) return;
-    seen.add(key);
-    r.imports.push({ ord, name });
+    const had = seen.get(key);
+    if (had) { if (!weak) had.weak = false; return; }
+    const imp = { ord, name, weak: !!weak };
+    seen.set(key, imp);
+    r.imports.push(imp);
   };
   if (symtab) {
     for (let i = 0; i < symtab.nsyms; i++) {
@@ -144,7 +147,7 @@ function parseSlice(b) {
       if ((type & 0xe0) !== 0) continue; // stab
       if ((type & 0x0e) !== 0 || !(type & 0x01)) continue; // not undefined external
       const desc = b.readUInt16LE(e + 6);
-      add((desc >> 8) & 0xff, readCString(b, symtab.stroff + b.readUInt32LE(e)));
+      add((desc >> 8) & 0xff, readCString(b, symtab.stroff + b.readUInt32LE(e)), desc & 0x40);
     }
   }
   if (chained) {
@@ -152,16 +155,16 @@ function parseSlice(b) {
     const importsOff = h + b.readUInt32LE(h + 8), symsOff = h + b.readUInt32LE(h + 12);
     const count = b.readUInt32LE(h + 16), fmt = b.readUInt32LE(h + 20);
     for (let i = 0; i < count; i++) {
-      let ord, nameOff;
+      let ord, nameOff, weak;
       if (fmt === 1 || fmt === 2) {
         const v = b.readUInt32LE(importsOff + i * (fmt === 1 ? 4 : 8));
-        ord = v & 0xff; nameOff = v >>> 9;
+        ord = v & 0xff; weak = (v >>> 8) & 1; nameOff = v >>> 9;
       } else if (fmt === 3) {
         const v = b.readBigUInt64LE(importsOff + i * 16);
-        ord = Number(v & 0xffffn); nameOff = Number(v >> 32n);
+        ord = Number(v & 0xffffn); weak = Number((v >> 16n) & 1n); nameOff = Number(v >> 32n);
         if (ord === 0xffff || ord === 0xfffe || ord === 0xfffd) ord = ord & 0xff;
       } else break;
-      add(ord, readCString(b, symsOff + nameOff));
+      add(ord, readCString(b, symsOff + nameOff), weak);
     }
   }
   return r;

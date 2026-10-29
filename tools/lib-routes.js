@@ -281,4 +281,7 @@ function verify() {
   // Informational: a missing weak import is harmless, and a strong one names the next fix.
 }
 
-if (process.argv[2] === '--verify') verify(); else route();
+if (require.main === module) {
+  if (process.argv[2] === '--verify') verify(); else route();
+}
+module.exports = { SHIM, iosPath, loadSdk, resolveIos };
