@@ -419,6 +419,39 @@ CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint index, CGLPixelForm
 @end
 
 static AKGLContext *context(CGLContextObj ctx) { return (__bridge AKGLContext *)(void *)ctx; }
+
+// Every context made (only games draw with OpenGL here). A game's process takes its contexts with
+// it on a Mac; here they are freed when it ends (GameTeardown.m): the Mesa context and its GPU
+// memory, the surfaces it drew into and its layer. The objects themselves stay for whoever still
+// holds them, with nothing left behind them.
+static NSHashTable<AKGLContext *> *gContexts;
+
+int AKGLContextCount(void) {
+  int n = 0;
+  @synchronized (AKGLContext.class) {
+    for (AKGLContext *c in gContexts) n += c->mesa != NULL;
+  }
+  return n;
+}
+
+void AKGLDestroyAllContexts(void) {
+  NSArray<AKGLContext *> *all;
+  @synchronized (AKGLContext.class) {
+    all = gContexts.allObjects;
+    [gContexts removeAllObjects];
+  }
+  for (AKGLContext *c in all) {
+    pthread_mutex_lock(&c->lock);
+    if (c->mesa) OSMesaDestroyContext(c->mesa);
+    c->mesa = NULL;
+    c->bound = NO;
+    for (int i = 0; i < 3; i++) if (c->surfaces[i]) { CFRelease(c->surfaces[i]); c->surfaces[i] = NULL; }
+    CALayer *l = c->layer;
+    c->layer = nil;
+    pthread_mutex_unlock(&c->lock);
+    if (l) dispatch_async(dispatch_get_main_queue(), ^{ [l removeFromSuperlayer]; });
+  }
+}
 static __thread void *tCurrent;   // this thread's current context (unretained)
 
 static void onMain(dispatch_block_t block) {
@@ -455,6 +488,10 @@ CGLError CGLCreateContext(CGLPixelFormatObj pix, CGLContextObj share, CGLContext
   c->opacity = 1;
   c->scale = 1;
   pthread_mutex_init(&c->lock, NULL);
+  @synchronized (AKGLContext.class) {
+    if (!gContexts) gContexts = [NSHashTable weakObjectsHashTable];
+    [gContexts addObject:c];
+  }
   *ctx = (CGLContextObj)CFBridgingRetain(c);
   glLog(@"context %p (%@ profile, depth %d, stencil %d)", *ctx, core ? @"core" : @"legacy", f->depth, f->stencil);
   return kCGLNoError;

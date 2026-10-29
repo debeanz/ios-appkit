@@ -925,6 +925,25 @@ static BOOL hasPrefix(const char *path, NSString *prefix) {
   return prefix && !strncmp(path, prefix.fileSystemRepresentation, strlen(prefix.fileSystemRepresentation));
 }
 
+// Every game image ever loaded (they stay loaded once their game ends), for telling an ended
+// game's code from the running one's.
+static ak_range gAllGameImages[256];
+static _Atomic int gAllGameImageCount;
+
+BOOL AKAddressIsDeadGameCode(const void *address) {
+  uintptr_t a = (uintptr_t)address & 0x0000000fffffffffULL;
+  int n = gAllGameImageCount;
+  for (int i = 0; i < n; i++)
+    if (a >= gAllGameImages[i].start && a < gAllGameImages[i].end) return !AKAddressIsInGame((const void *)a);
+  return NO;
+}
+
+BOOL AKHeaderIsGameImage(const struct mach_header *header) {
+  NSString *bundlePath = gGameBundlePath, *real = gGameBundleReal;
+  Dl_info info;
+  return bundlePath && dladdr(header, &info) && info.dli_fname && (hasPrefix(info.dli_fname, bundlePath) || hasPrefix(info.dli_fname, real));
+}
+
 static void bindOutput(const struct mach_header *header, intptr_t slide);   // its printing (below)
 
 #pragma mark Starting a game again
@@ -993,6 +1012,7 @@ static int freshStart(NSString *bundle, NSString *bundleReal) {
     for (int k = 0; k < s->spans; k++) memcpy(s->span[k].at, s->span[k].copy, s->span[k].size);
     images++;
   }
+  AKGameRestoreClasses();   // their methods, silenced when it ended (GameTeardown.m)
   // Then their initializers, in the order the images loaded.
   const char *argv[] = { gGameProgram.fileSystemRepresentation, NULL };
   char exec[PATH_MAX + 32];
@@ -1021,15 +1041,20 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindAudio(header, slide);
   AKGameBindClock(header, slide);
   bindOutput(header, slide);
+  AKGameBindProcess(header, slide);   // its heap, exit handlers and dispatch sources (GameTeardown.m)
   snapshotImage(header, slide);
   const struct mach_header_64 *mh = (const void *)header;
   const uint8_t *lc = (const uint8_t *)(mh + 1);
   for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
     const struct segment_command_64 *seg = (const void *)lc;
     if (seg->cmd != LC_SEGMENT_64 || strncmp(seg->segname, "__TEXT", 16)) continue;
+    ak_range range = { (uintptr_t)header, (uintptr_t)header + seg->vmsize };
+    int all = gAllGameImageCount, known = 0;
+    for (int k = 0; k < all; k++) known |= gAllGameImages[k].start == range.start;
+    if (!known && all < 256) { gAllGameImages[all] = range; gAllGameImageCount = all + 1; }
     int n = gGameImageCount;
     if (n >= 128) return;
-    gGameImages[n] = (ak_range){ (uintptr_t)header, (uintptr_t)header + seg->vmsize };
+    gGameImages[n] = range;
     gGameImageCount = n + 1;
     return;
   }
@@ -1354,7 +1379,11 @@ static void gameEnded(pid_t pid, int status) {
   pthread_mutex_unlock(&gGameLock);
   if (!ours) return;
   gameLog(@"%@ ended (%d)", gGameBundle.bundlePath.lastPathComponent, status);
-  AKGameAudioStop();
+  NSMutableArray<NSString *> *images = [NSMutableArray array];
+  for (int i = 0; i < gGameImageCount; i++) {
+    Dl_info info;
+    if (dladdr((const void *)gGameImages[i].start, &info) && info.dli_fname) [images addObject:@(info.dli_fname)];
+  }
   AKGameDidEnd(pid);
   AKGameAppEnded();
   pthread_mutex_lock(&gGameLock);
@@ -1370,6 +1399,7 @@ static void gameEnded(pid_t pid, int status) {
   dispatch_async(dispatch_get_main_queue(), ^{
     AKGameWindowsClose();
     AKWHGameChanged();
+    AKGameTeardown(images);   // what its process would have taken with it (GameTeardown.m)
   });
 }
 
@@ -1510,6 +1540,9 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   };
   preloadSharedLibraries();
   AKGameInstallTimers();
+  AKGameWatchProcess();
+  AKGameHeapBegin(appURL.lastPathComponent.stringByDeletingPathExtension);
+  AKGameAudioBegin();
   // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.
   void *image = dlopen(program.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
   if (!image) {

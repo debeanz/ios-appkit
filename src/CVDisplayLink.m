@@ -137,11 +137,31 @@ void CVDisplayLinkRelease(CVDisplayLinkRef link) {
   CFRelease(link);
 }
 
+// Links calling a game's code: they stop when it ends (GameTeardown.m).
+static NSHashTable<AKDisplayLink *> *gGameLinks;
+
 CVReturn CVDisplayLinkSetOutputCallback(CVDisplayLinkRef link, CVDisplayLinkOutputCallback callback, void *userInfo) {
   if (!link) return kCVReturnInvalidArgument;
   AKLink(link).callback = callback;
   AKLink(link).userInfo = userInfo;
+  if (callback && AKAddressIsInGame((const void *)callback)) @synchronized (AKDisplayLink.class) {
+    if (!gGameLinks) gGameLinks = [NSHashTable weakObjectsHashTable];
+    [gGameLinks addObject:AKLink(link)];
+  }
   return kCVReturnSuccess;
+}
+
+void AKGameDisplayLinksStop(void) {
+  NSArray<AKDisplayLink *> *links;
+  @synchronized (AKDisplayLink.class) {
+    links = gGameLinks.allObjects;
+    [gGameLinks removeAllObjects];
+  }
+  for (AKDisplayLink *l in links) {
+    [l stop];
+    l.callback = NULL;
+    l.userInfo = NULL;
+  }
 }
 
 CVReturn CVDisplayLinkStart(CVDisplayLinkRef link) {

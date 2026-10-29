@@ -62,6 +62,7 @@ static void send(AKWHPad *pad, int code, BOOL pressed) {
 BOOL AKGameIsRunning(void);
 UIView *AKWHStageView(void);
 void AKGameControllersHoldBack(void);   // GameHID.m
+BOOL AKBlockIsDeadGameCode(id block);   // GameTeardown.m
 
 static void releaseHeld(AKWHPad *pad) {
   for (int code = 0; pad.down; code++)
@@ -261,15 +262,16 @@ static void update(AKWHPad *pad, GCExtendedGamepad *g) {
   pad.down = now & ~pad.swallowed;
 }
 
-// Our handler goes in front of whatever the controller had (SDL, for Steam's own input), and
-// back in if something replaces it.
+// Our handler goes in front of whatever the controller had (SDL, for Steam's own input, or a
+// game reading GameController itself), and back in if something replaces it. A game's handler
+// is passed nothing once the game has ended (its code is gone with it).
 static void watch(AKWHPad *pad) {
   GCExtendedGamepad *g = pad.controller.extendedGamepad;
   if (!g || (pad.handler && g.valueChangedHandler == pad.handler)) return;
   GCExtendedGamepadValueChangedHandler previous = g.valueChangedHandler;
   __weak AKWHPad *weakPad = pad;
   pad.handler = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
-    if (previous) previous(gamepad, element);
+    if (previous && !AKBlockIsDeadGameCode(previous)) previous(gamepad, element);
     AKWHPad *p = weakPad;
     if (p) update(p, gamepad);
   };

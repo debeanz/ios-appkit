@@ -12,15 +12,21 @@
 // The Mac's output unit subtypes (not in the iOS SDK): 'def ', 'sys ', 'ahal'.
 enum { kMacDefaultOutput = 0x64656620, kMacSystemOutput = 0x73797320, kMacHALOutput = 0x6168616c };
 
+// Once per launch: a game's end turns the session off (AKGameAudioStop).
+static BOOL gSessionStarted;
+
 static void startPlaybackSession(void) {
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
+  @synchronized (AVAudioSession.class) {
+    if (gSessionStarted) return;
+    gSessionStarted = YES;
     NSError *error;
     AVAudioSession *session = AVAudioSession.sharedInstance;
     if (![session setCategory:AVAudioSessionCategoryPlayback error:&error] || ![session setActive:YES error:&error])
       fprintf(stderr, "[AppKitShim] game audio: the audio session didn't start: %s\n", error.localizedDescription.UTF8String);
-  });
+  }
 }
+
+void AKGameAudioBegin(void) { startPlaybackSession(); }
 
 static AudioComponent gameFindNext(AudioComponent after, const AudioComponentDescription *desc) {
   if (!desc || desc->componentType != kAudioUnitType_Output ||
@@ -40,10 +46,48 @@ static AudioComponent gameFindNext(AudioComponent after, const AudioComponentDes
   return found;
 }
 
-// The output units the game made: a game Steam ends without its asking stops sounding with it
-// (its units would otherwise go on pulling sound from its code).
-static NSMutableSet<NSValue *> *gUnits;
+// The output units and audio queues the game made: when it ends they stop and go (they would
+// otherwise go on pulling sound from its code). Sound it plays any other way (AVAudioEngine,
+// OpenAL) stops with the audio session.
+static NSMutableSet<NSValue *> *gUnits, *gQueues;
 static pthread_mutex_t gUnitsLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void noteQueue(AudioQueueRef q) {
+  pthread_mutex_lock(&gUnitsLock);
+  if (!gQueues) gQueues = [NSMutableSet set];
+  [gQueues addObject:[NSValue valueWithPointer:q]];
+  pthread_mutex_unlock(&gUnitsLock);
+}
+
+static OSStatus gameQueueNewOutput(const AudioStreamBasicDescription *format, AudioQueueOutputCallback cb, void *data,
+                                   CFRunLoopRef loop, CFStringRef mode, UInt32 flags, AudioQueueRef *out) {
+  startPlaybackSession();
+  OSStatus status = AudioQueueNewOutput(format, cb, data, loop, mode, flags, out);
+  if (status == noErr && out && *out) noteQueue(*out);
+  return status;
+}
+
+static OSStatus gameQueueNewInput(const AudioStreamBasicDescription *format, AudioQueueInputCallback cb, void *data,
+                                  CFRunLoopRef loop, CFStringRef mode, UInt32 flags, AudioQueueRef *out) {
+  OSStatus status = AudioQueueNewInput(format, cb, data, loop, mode, flags, out);
+  if (status == noErr && out && *out) noteQueue(*out);
+  return status;
+}
+
+static OSStatus gameQueueNewOutputBlock(AudioQueueRef *out, const AudioStreamBasicDescription *format, UInt32 flags,
+                                        dispatch_queue_t queue, AudioQueueOutputCallbackBlock block) {
+  startPlaybackSession();
+  OSStatus status = AudioQueueNewOutputWithDispatchQueue(out, format, flags, queue, block);
+  if (status == noErr && out && *out) noteQueue(*out);
+  return status;
+}
+
+static OSStatus gameQueueDispose(AudioQueueRef q, Boolean immediate) {
+  pthread_mutex_lock(&gUnitsLock);
+  [gQueues removeObject:[NSValue valueWithPointer:q]];
+  pthread_mutex_unlock(&gUnitsLock);
+  return AudioQueueDispose(q, immediate);
+}
 
 static OSStatus gameInstanceNew(AudioComponent component, AudioComponentInstance *out) {
   OSStatus status = AudioComponentInstanceNew(component, out);
@@ -63,14 +107,33 @@ static OSStatus gameInstanceDispose(AudioComponentInstance unit) {
   return AudioComponentInstanceDispose(unit);
 }
 
+// Stopped first (its threads may still be running), released once they aren't (AKGameAudioRelease).
 void AKGameAudioStop(void) {
-  NSArray<NSValue *> *units;
+  NSArray<NSValue *> *units, *queues;
   pthread_mutex_lock(&gUnitsLock);
   units = gUnits.allObjects;
-  [gUnits removeAllObjects];
+  queues = gQueues.allObjects;
   pthread_mutex_unlock(&gUnitsLock);
   for (NSValue *v in units) AudioOutputUnitStop((AudioUnit)v.pointerValue);
-  if (units.count) fprintf(stderr, "[AppKitShim] game audio: %lu output units stopped\n", (unsigned long)units.count);
+  for (NSValue *v in queues) AudioQueueStop((AudioQueueRef)v.pointerValue, true);
+  @synchronized (AVAudioSession.class) {
+    gSessionStarted = NO;
+    [AVAudioSession.sharedInstance setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+  }
+  fprintf(stderr, "[AppKitShim] game audio: stopped (%lu output units, %lu queues, and the session)\n", (unsigned long)units.count,
+          (unsigned long)queues.count);
+}
+
+void AKGameAudioRelease(void) {
+  NSArray<NSValue *> *units, *queues;
+  pthread_mutex_lock(&gUnitsLock);
+  units = gUnits.allObjects;
+  queues = gQueues.allObjects;
+  [gUnits removeAllObjects];
+  [gQueues removeAllObjects];
+  pthread_mutex_unlock(&gUnitsLock);
+  for (NSValue *v in units) AudioComponentInstanceDispose((AudioUnit)v.pointerValue);
+  for (NSValue *v in queues) AudioQueueDispose((AudioQueueRef)v.pointerValue, true);
 }
 
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide) {
@@ -78,6 +141,10 @@ void AKGameBindAudio(const struct mach_header *header, intptr_t slide) {
     if (strcmp(symbol, "_AudioComponentFindNext") == 0) return (void *)gameFindNext;
     if (strcmp(symbol, "_AudioComponentInstanceNew") == 0) return (void *)gameInstanceNew;
     if (strcmp(symbol, "_AudioComponentInstanceDispose") == 0) return (void *)gameInstanceDispose;
+    if (strcmp(symbol, "_AudioQueueNewOutput") == 0) return (void *)gameQueueNewOutput;
+    if (strcmp(symbol, "_AudioQueueNewInput") == 0) return (void *)gameQueueNewInput;
+    if (strcmp(symbol, "_AudioQueueNewOutputWithDispatchQueue") == 0) return (void *)gameQueueNewOutputBlock;
+    if (strcmp(symbol, "_AudioQueueDispose") == 0) return (void *)gameQueueDispose;
     return NULL;
   });
 }

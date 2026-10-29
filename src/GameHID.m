@@ -307,9 +307,15 @@ static void stopTimer(CFRunLoopTimerRef *t) {
 
 static CFTypeID hidTypeID(void) { static CFTypeID t; if (!t) t = CFGetTypeID((__bridge CFTypeRef)[AKHIDValue new]); return t; }
 
+static NSHashTable<AKHIDManager *> *gManagers;   // the game's, until it ends
+
 static void *hManagerCreate(CFAllocatorRef a, uint32_t options) {
   AKHIDManager *m = [AKHIDManager new];
   m->known = [NSMutableArray array];
+  @synchronized (AKHIDManager.class) {
+    if (!gManagers) gManagers = [NSHashTable weakObjectsHashTable];
+    [gManagers addObject:m];
+  }
   hidLog(@"the game opened a HID manager; %lu controller(s) connected", (unsigned long)connectedDevices().count);
   return (void *)CFBridgingRetain(m);
 }
@@ -521,4 +527,23 @@ void AKGameBindControllers(const struct mach_header *header, intptr_t slide, con
            changed, (unsigned long)bridged.count,
            other.count ? [NSString stringWithFormat:@"; not answered: %@", [other.allObjects componentsJoinedByString:@", "]] : @"");
   if (gc.count) hidLog(@"%s uses GameController directly (%@)", base, [gc.allObjects componentsJoinedByString:@", "]);
+}
+
+// The game ended: its managers and devices stop polling and calling it back.
+void AKGameControllersShutdown(void) {
+  NSArray<AKHIDManager *> *managers;
+  @synchronized (AKHIDManager.class) {
+    managers = gManagers.allObjects;
+    [gManagers removeAllObjects];
+  }
+  for (AKHIDManager *m in managers) {
+    hManagerClose((__bridge void *)m, 0);
+    m->matched = m->removed = NULL;
+    m->input = (AKValueCallback){ NULL, NULL };
+  }
+  for (AKHIDDevice *d in connectedDevices()) {
+    stopTimer(&d->timer);
+    d->input = (AKValueCallback){ NULL, NULL };
+    d->removed = NULL;
+  }
 }

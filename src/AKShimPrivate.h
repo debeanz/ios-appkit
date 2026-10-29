@@ -190,7 +190,24 @@ void AKGameBindControllers(const struct mach_header *header, intptr_t slide, con
 void AKGameControllersHoldBack(void);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
-void AKGameAudioStop(void);   // the game ended: its output units go quiet
+void AKGameAudioBegin(void);    // a game starts: the app's audio session plays (each launch)
+void AKGameAudioStop(void);     // the game ended: all its sound stops (its units and queues, the session)
+void AKGameAudioRelease(void);  // and, its threads stopped, its units and queues go
+// GameHID.m: the game ended: its HID managers and devices stop calling it.
+void AKGameControllersShutdown(void);
+// CVDisplayLink.m: the game ended: display links calling its code stop.
+void AKGameDisplayLinksStop(void);
+// GameTeardown.m: what ends with a game, as with its process on a Mac (see there).
+void AKGameHeapBegin(NSString *name);                                  // before its program loads
+void AKGameBindProcess(const struct mach_header *header, intptr_t slide);   // each of its images
+void AKGameWatchProcess(void);                                         // once
+void AKGameTeardown(NSArray<NSString *> *images);                      // main thread, once it ended
+void AKGameRestoreClasses(void);                                       // launched again
+BOOL AKBlockIsDeadGameCode(id block);                                  // a block whose code is an ended game's
+// MacPrograms.m: code of a game that has ended (its images stay loaded); one of the running
+// game's images (by path, as it loads).
+BOOL AKAddressIsDeadGameCode(const void *address);
+BOOL AKHeaderIsGameImage(const struct mach_header *header);
 uint32_t AKGameAppID(void);   // MacPrograms.m: the running game's Steam app id, or 0
 // GameTimers.m: repeating NSTimers made on a game's main thread fire late rather than skip a tick.
 void AKGameInstallTimers(void);   // at each launch, before the game loads
