@@ -79,6 +79,9 @@ void AKWHGameOverlayComposed(int mode);
 // WebHelperWeb.m: the game's overlay window up over the game, or not (only it, or only the
 // rest, showing on the stage). Returns whether the running game has one. Main thread.
 BOOL AKWHShowGameOverlay(BOOL shown);
+// WebHelperWeb.m: Big Picture's window in front takes the keyboard focus (its controller
+// navigation follows the focused window). Main thread.
+void AKWHFocusSteamWindow(void);
 // WebHelperWeb.m: a game started or ended (MacPrograms.m): Steam's interface makes or drops its
 // overlay window. Main thread.
 void AKWHGameChanged(void);

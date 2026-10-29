@@ -115,6 +115,8 @@ void AKInProcessForceExit(pid_t pid, int status);   // one that didn't end when 
 // On a stand-in's main thread that AKInProcessForceExit ended for everyone: the thread stops
 // here (its program's own hot paths in the shim call this). Otherwise returns.
 void AKInProcessExitIfEnded(void);
+// The call stack of a stand-in's main thread right now, to the log (why: what prompted it).
+void AKInProcessLogStack(pid_t pid, const char *why);
 void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
 void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig));
 
@@ -189,7 +191,10 @@ void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioStop(void);   // the game ended: its output units go quiet
 uint32_t AKGameAppID(void);   // MacPrograms.m: the running game's Steam app id, or 0
 // GameTimers.m: repeating NSTimers made on a game's main thread fire late rather than skip a tick.
-void AKGameInstallTimers(void);
+void AKGameInstallTimers(void);   // at each launch, before the game loads
+// GameTimers.m: the game's frame timers (repeating, 0.1 s or less) still scheduled, and when one
+// last began and ended a tick (0: never).
+void AKGameFrameTimerState(int *count, CFAbsoluteTime *began, CFAbsoluteTime *ended);
 // GameTimers.m: a game library's clock reads rest the core while its code spins on them.
 void AKGameBindClock(const struct mach_header *header, intptr_t slide);
 

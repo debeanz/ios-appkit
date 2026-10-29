@@ -1081,6 +1081,63 @@ static void gameSignalled(pid_t pid, int sig) {
   });
 }
 
+#pragma mark A game that left its main loop
+
+// Ends the game as its own exit(0) would, on its thread when its event loop turns; one whose
+// loop doesn't turn ends for Steam and the screen 5 s on.
+static void endGame(pid_t pid) {
+  pthread_mutex_lock(&gGameLock);
+  CFRunLoopRef loop = gGameRunLoop ? (CFRunLoopRef)CFRetain(gGameRunLoop) : NULL;
+  pthread_mutex_unlock(&gGameLock);
+  if (loop) {
+    CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, ^{ exit(0); });
+    CFRunLoopWakeUp(loop);
+    CFRelease(loop);
+  }
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (loop ? 5 : 0) * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    if (gGamePid != pid) return;
+    gameLog(@"it didn't end within 5 s: ended for Steam");
+    AKInProcessForceExit(pid, 0);
+  });
+}
+
+// A game that steps from a frame timer (GameTimers.m) and invalidates its last one, making no
+// other, has left its main loop. GameMaker does exactly that after game_end() ("###game_end###",
+// then its scripts freed) and calls nothing that ends the process here, so it sat in its event
+// loop with its last frame on screen. Three seconds with no frame timer (the app in front)
+// end it. A frame timer that stops firing for 10 s while still scheduled only has the game
+// thread's stack logged, once per stall.
+static void watchGameLoop(pid_t pid) {
+  __block int quietFor = 0;
+  __block BOOL hadFrameTimer = NO, reportedStall = NO;
+  dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+  dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 4);
+  dispatch_source_set_event_handler(timer, ^{
+    if (gGamePid != pid) { dispatch_source_cancel(timer); return; }
+    int timers;
+    CFAbsoluteTime began, ended, now = CFAbsoluteTimeGetCurrent();
+    AKGameFrameTimerState(&timers, &began, &ended);
+    if (timers > 0) {
+      hadFrameTimer = YES;
+      quietFor = 0;
+      CFAbsoluteTime last = MAX(began, ended);
+      if (now - last < 1) reportedStall = NO;
+      if (!reportedStall && last > 0 && now - last > 10) {
+        reportedStall = YES;
+        AKInProcessLogStack(pid, began > ended ? "one step of its frame timer has taken over 10 s" : "its frame timer hasn't fired for 10 s");
+      }
+      return;
+    }
+    if (!hadFrameTimer || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+    if (++quietFor < 3) return;
+    dispatch_source_cancel(timer);
+    gameLog(@"it stopped its frame timer and made no other: it has quit");
+    AKInProcessLogStack(pid, "it left its main loop");
+    endGame(pid);
+  });
+  dispatch_resume(timer);
+}
+
 static void gameEnded(pid_t pid, int status) {
   pthread_mutex_lock(&gGameLock);   // held by the launcher until gGamePid is set
   BOOL ours = pid == gGamePid;
@@ -1268,6 +1325,9 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   pthread_mutex_unlock(&gGameLock);
   gameLog(@"%@ running as pid %d%@", appURL.lastPathComponent, pid,
           gGameAppID ? [NSString stringWithFormat:@" (app %u)", gGameAppID] : @" (Steam gave no app id: no overlay)");
-  dispatch_async(dispatch_get_main_queue(), ^{ AKWHGameChanged(); });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    AKWHGameChanged();
+    watchGameLoop(pid);
+  });
   return pid;
 }

@@ -631,6 +631,50 @@ void AKInProcessExitIfEnded(void) {
   pthread_exit(NULL);
 }
 
+// Where a stand-in's main thread is: stopped only while its frame pointers are copied (nothing
+// that takes a lock happens meanwhile), then each return address named from dladdr.
+void AKInProcessLogStack(pid_t pid, const char *why) {
+#if defined(__arm64__)
+  pthread_mutex_lock(&gProcLock);
+  ak_vproc *p = findProc(pid);
+  pthread_t pt = p && p->running ? p->thread : NULL;
+  char name[256];
+  strlcpy(name, pt ? baseName(p->path) : "", sizeof name);
+  pthread_mutex_unlock(&gProcLock);
+  if (!pt) return;
+  thread_act_t thread = pthread_mach_thread_np(pt);
+  uintptr_t top = (uintptr_t)pthread_get_stackaddr_np(pt), bottom = top - pthread_get_stacksize_np(pt);
+  uintptr_t frames[48];
+  int n = 0;
+  if (thread_suspend(thread) != KERN_SUCCESS) return;
+  arm_thread_state64_t state;
+  mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+  if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
+    frames[n++] = (uintptr_t)arm_thread_state64_get_pc(state);
+    frames[n++] = (uintptr_t)arm_thread_state64_get_lr(state);
+    uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(state);
+    while (n < 48 && fp >= bottom && fp + 16 <= top && !(fp & 7)) {
+      uintptr_t next = ((uintptr_t *)fp)[0], ret = ((uintptr_t *)fp)[1];
+      if (!ret) break;
+      frames[n++] = ret;
+      if (next <= fp) break;
+      fp = next;
+    }
+  }
+  thread_resume(thread);
+  shimLog("in-process pid %d (%s): %s; its thread is at:", pid, name, why);
+  for (int i = 0; i < n; i++) {
+    uintptr_t a = frames[i] & 0x0000000fffffffffULL;   // without its pointer signature
+    Dl_info info;
+    if (dladdr((void *)a, &info) && info.dli_fname)
+      shimLog("  %2d %s+0x%lx%s%s", i, baseName(info.dli_fname), (unsigned long)(a - (uintptr_t)info.dli_fbase),
+              info.dli_sname ? " " : "", info.dli_sname ? info.dli_sname : "");
+    else
+      shimLog("  %2d %p", i, (void *)a);
+  }
+#endif
+}
+
 // exit() on a stand-in's main thread ends that "process", not the app.
 void exit(int status) {
   ak_vproc *p = tCurrentProc;

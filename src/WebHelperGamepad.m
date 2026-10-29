@@ -88,6 +88,15 @@ static void setOverlay(BOOL shown, uint32_t controller, uint32_t key) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((own ? 0.15 : 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
       if (gOverlay) AKWHSendSystemKey(key, controller);
     });
+    // The overlay window says it is up (its composition) when its menu opens. One that stays
+    // hidden gives way to Big Picture's own window, with the key sent again there.
+    if (own) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      if (!gOverlay || gOverlayComposed) return;
+      AKWHLog(YES, @"the game's overlay window didn't open its menu: Big Picture's window instead");
+      AKWHShowGameOverlay(NO);
+      AKWHFocusSteamWindow();
+      AKWHSendSystemKey(key, controller);
+    });
   } else {
     AKWHShowGameOverlay(NO);
     stage.hidden = YES;   // the game's window is under it

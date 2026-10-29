@@ -18,17 +18,39 @@
   void (^block)(NSTimer *);
   NSTimeInterval interval;
   CFAbsoluteTime due;
+  BOOL frameTimer;   // one that steps the game (every 0.1 s or more often)
+  int launch;        // the game launch it was made in
 }
 @end
 
+// The game's frame timers still scheduled, and when one last began and ended a tick. A keeper
+// goes when its timer is invalidated (the timer held it), so a game that left its main loop
+// has none (MacPrograms.m watches this). Counted per launch: a game ended for Steam can leave
+// its timers behind.
+static int gFrameTimers, gLaunch;
+static CFAbsoluteTime gTickBegan, gTickEnded;
+
+void AKGameFrameTimerState(int *count, CFAbsoluteTime *began, CFAbsoluteTime *ended) {
+  *count = __atomic_load_n(&gFrameTimers, __ATOMIC_RELAXED);
+  *began = gTickBegan;
+  *ended = gTickEnded;
+}
+
 @implementation AKGameTimer
+- (void)dealloc {
+  if (frameTimer && launch == gLaunch) __atomic_sub_fetch(&gFrameTimers, 1, __ATOMIC_RELAXED);
+}
+
 - (void)tick:(NSTimer *)timer {
   CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  BOOL frame = frameTimer;   // a timer the game invalidates in its own tick takes this keeper with it
+  if (frame) gTickBegan = now;
   // The next tick one interval on — or from now, when a whole interval behind (the game was
   // stopped in a debugger or a dialog), rather than firing many to catch up.
   due = now - due > interval ? now + interval : due + interval;
   if (block) block(timer);
   else ((void (*)(id, SEL, id))objc_msgSend)(target, selector, timer);
+  if (frame) gTickEnded = CFAbsoluteTimeGetCurrent();
   if (timer.isValid) timer.fireDate = [NSDate dateWithTimeIntervalSinceReferenceDate:MAX(due, CFAbsoluteTimeGetCurrent())];
 }
 @end
@@ -42,6 +64,9 @@ static NSTimer *gameTimer(NSTimeInterval interval, id target, SEL selector, id u
   keeper->block = block;
   keeper->interval = MAX(interval, 0.0001);
   keeper->due = CFAbsoluteTimeGetCurrent() + keeper->interval;
+  keeper->frameTimer = interval <= 0.1;
+  keeper->launch = gLaunch;
+  if (keeper->frameTimer) __atomic_add_fetch(&gFrameTimers, 1, __ATOMIC_RELAXED);
   NSTimer *timer = ((NSTimer * (*)(id, SEL, NSTimeInterval, id, SEL, id, BOOL))gTimerWithTarget)(
       NSTimer.class, @selector(timerWithTimeInterval:target:selector:userInfo:repeats:), interval, keeper,
       @selector(tick:), userInfo, YES);
@@ -73,6 +98,9 @@ static NSTimer *scheduledWithBlock(id self, SEL _cmd, NSTimeInterval i, BOOL rep
 }
 
 void AKGameInstallTimers(void) {
+  gLaunch++;
+  __atomic_store_n(&gFrameTimers, 0, __ATOMIC_RELAXED);
+  gTickBegan = gTickEnded = 0;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
     Class meta = object_getClass(NSTimer.class);

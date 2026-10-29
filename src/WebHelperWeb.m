@@ -70,6 +70,7 @@ static WKWebViewConfiguration *gSteamConfig;         // Steam's pages and their 
 static BOOL gBridgeInstalled;
 static AKWHWebDelegate *gDelegate;
 static NSDictionary *gPendingOpen;                   // the latest window.open, from the bridge
+static BOOL gOverlayUp;                              // a game's overlay window is up over it (see there)
 static uint64_t gBuildID;
 static unsigned gConsoleLines;
 
@@ -732,14 +733,18 @@ void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed
     if (b.webView && !b.viewId) enqueue(b, @{ @"t": @"controller", @"c": @(controller), @"b": @(button), @"p": @(pressed) });
 }
 
+// With the game's overlay window up, the key carries the game's app id, as Steam's own do for a
+// game in front: Steam's interface gives a system key with an app id to that app's overlay window
+// when no window of its own has the focus (FocusNavController GetEventTarget).
 void AKWHSendSystemKey(uint32_t key, uint32_t controller) {
   if (!gSystemKeyHandle || gSteamSendsSystemKeys) return;
+  uint32_t appID = gOverlayUp ? AKGameAppID() : 0;
   NSDictionary *(^field)(NSString *, uint32_t) = ^(NSString *name, uint32_t v) {
     return @{ @"name": name, @"value": @{ @"int_value": @(v) } };
   };
   callbackToPage(gSystemKeyHandle, @{ @"arguments": @[ @{
     @"is_object": @YES,
-    @"object_properties": @[ field(@"eKey", key), field(@"nControllerIndex", controller), field(@"nAppID", 0) ],
+    @"object_properties": @[ field(@"eKey", key), field(@"nControllerIndex", controller), field(@"nAppID", appID) ],
   } ] });
 }
 
@@ -840,7 +845,6 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
 // running game only through that game's overlay windows.
 static uint64_t gOverlayInfoChanged;   // the page's Overlay.RegisterOverlayBrowserInfoChanged callback
 static uint64_t gOverlayGameFocus;     // its System.UI.RegisterForOverlayGameWindowFocusChanged one
-static BOOL gOverlayUp;                // the game's overlay window is up over it
 static const int32_t kOverlayBrowserID = 1;   // the game's overlay browser, as the list names it
 
 enum { kCompositionHidden = 0, kCompositionNotification = 1, kCompositionOverlay = 2, kCompositionOpaque = 3 };
@@ -928,7 +932,7 @@ static void tellGameFocus(void) {
 
 // Big Picture's window in front takes the keyboard focus back from the overlay's: its
 // controller navigation follows the focused window.
-static void focusSteamWindow(void) {
+void AKWHFocusSteamWindow(void) {
   for (UIView *v in gStage.subviews.reverseObjectEnumerator) {
     AKWHBrowser *b = [v isKindOfClass:WKWebView.class] ? browserForWebView((WKWebView *)v) : nil;
     if (!b || !b.knownToSteam || b.viewId || b.type == kSharedJSContextType || inGameOverlay(b) || v.hidden) continue;
@@ -949,7 +953,7 @@ void AKWHGameChanged(void) {
   tellGameFocus();
   if (!AKGamePid()) {
     AKWHShowGameOverlay(NO);
-    focusSteamWindow();
+    AKWHFocusSteamWindow();
   }
 }
 
