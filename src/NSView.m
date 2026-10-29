@@ -338,9 +338,6 @@ static char kBestResolutionKey;
   return self;
 }
 
-// AppKit's "is this point in this rect" (point and rect in this view's coordinates).
-- (BOOL)mouse:(NSPoint)point inRect:(NSRect)rect { return CGRectContainsPoint(rect, point); }
-
 - (BOOL)isHiddenOrHasHiddenAncestor {
   for (NSView *v = self; v; v = v.superview) if (v.hidden) return YES;
   return NO;
