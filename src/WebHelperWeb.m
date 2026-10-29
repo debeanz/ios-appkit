@@ -1198,7 +1198,8 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   if (q[@"akwh_id"] && b.index != (uint32_t)[q[@"akwh_id"] intValue])
     AKWHLog(YES, @"window number %@ was already taken; this window is %u", q[@"akwh_id"], b.index);
   b.userAgentFamily = q[@"useragent"] ?: opener.userAgentFamily;
-  if (!isView && q[@"pid"].intValue && q[@"pid"].intValue == AKGamePid()) b.gameOverlayPid = q[@"pid"].intValue;
+  pid_t overlayFor = [q[@"pid"] intValue];   // a window Steam's interface opened for a game's overlay
+  if (!isView && overlayFor && overlayFor == AKGamePid()) b.gameOverlayPid = overlayFor;
   if (isView) {
     b.viewId = (uint32_t)[q[@"requestid"] intValue];
     b.viewOwner = opener;
