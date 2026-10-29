@@ -713,6 +713,8 @@ void _exit(int status) {
 
 // Every import of one loaded image (its symbol name, with the leading underscore), pointed at
 // what `replacement` answers for it; NULL leaves it alone. Returns how many slots changed.
+int AKRebindImportsFrom(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol, void *current));
+
 int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol)) {
   return AKRebindImportsFrom(header, slide, ^void *(const char *symbol, void *current) { return replacement(symbol); });
 }
