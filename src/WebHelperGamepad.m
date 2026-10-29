@@ -8,9 +8,10 @@
 // sends those too - the face buttons, bumpers, triggers, View/Menu and the stick clicks.
 // The Xbox/Home button opens Steam's menu and Home + A the Quick Access menu, through Steam's
 // system-key event (only while Steam sends none of its own). View + Menu pressed together is the
-// Steam button too (iOS may keep Home for itself): in Steam it opens the menu, in a game it shows
-// Big Picture over the game with the menu open, as Steam Deck's overlay - closing the menu with
-// B, choosing the game, or View + Menu again goes back to the game.
+// Steam button too (iOS may keep Home for itself): in Steam it opens the menu, in a game Steam's
+// overlay over the game with the menu open, as on Steam Deck (the game's overlay window, or Big
+// Picture's when there is none) - Resume, closing the menu with B, or View + Menu again goes back
+// to the game.
 #import <GameController/GameController.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
@@ -46,6 +47,7 @@ static unsigned gLogged;
 
 static const CFTimeInterval kChordWindow = 0.12;
 static BOOL gOverlay;                       // Big Picture shown over a running game
+static BOOL gOverlayComposed;               // its overlay window has said it is up since
 static int gLastButton = -1;                // the last button pressed in Steam's interface
 static CFTimeInterval gLastButtonTime;
 
@@ -69,16 +71,25 @@ static void releaseHeld(AKWHPad *pad) {
 
 BOOL AKGameOverlayShown(void) { return gOverlay; }
 
+// Over the game: the game's overlay window when Steam's interface made one (Steam Deck's menu
+// over the game), else Big Picture's own window; the Steam key then opens the menu in it.
 static void setOverlay(BOOL shown, uint32_t controller, uint32_t key) {
   UIView *stage = AKWHStageView();
   if (!stage || shown == gOverlay || (shown && !AKGameIsRunning())) return;
   gOverlay = shown;
   if (shown) {
+    gOverlayComposed = NO;
     stage.hidden = NO;
     [stage.superview bringSubviewToFront:stage];
-    AKWHLog(YES, @"Steam overlay over the game");
-    AKWHSendSystemKey(key, controller);
+    BOOL own = AKWHShowGameOverlay(YES);
+    AKWHLog(YES, own ? @"Steam overlay over the game" : @"Steam overlay over the game (Big Picture's window: the game has no overlay window)");
+    // The overlay window's document takes the focus a moment after its view does; the key goes
+    // to the focused window.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((own ? 0.15 : 0) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      if (gOverlay) AKWHSendSystemKey(key, controller);
+    });
   } else {
+    AKWHShowGameOverlay(NO);
     stage.hidden = YES;   // the game's window is under it
     for (AKWHPad *pad in gPads) releaseHeld(pad);
     AKWHLog(YES, @"Steam overlay closed: back to the game");
@@ -86,7 +97,17 @@ static void setOverlay(BOOL shown, uint32_t controller, uint32_t key) {
 }
 
 void AKGameOverlayHide(void) { setOverlay(NO, 0, 0); }
-void AKGameOverlayReset(void) { gOverlay = NO; }
+void AKGameOverlayReset(void) {
+  gOverlay = NO;
+  AKWHShowGameOverlay(NO);
+}
+
+// The game's overlay window is done (hidden, or a notification only) after having been up:
+// Resume, B out of its menu, or anything else that closes it. Back to the game.
+void AKWHGameOverlayComposed(int mode) {
+  if (mode >= 2) gOverlayComposed = YES;
+  else if (gOverlay && gOverlayComposed) setOverlay(NO, 0, 0);
+}
 
 // One of Big Picture's menus hidden while it is over a game: closed with B, nothing was chosen
 // from it, so back to the game (a choice - the library, a setting - keeps Steam up).

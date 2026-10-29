@@ -112,6 +112,9 @@ int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^re
 const char *AKInProcessCurrentPath(void);   // the program this thread is the main thread of, or NULL
 void AKInProcessDetach(pid_t pid);
 void AKInProcessForceExit(pid_t pid, int status);   // one that didn't end when asked
+// On a stand-in's main thread that AKInProcessForceExit ended for everyone: the thread stops
+// here (its program's own hot paths in the shim call this). Otherwise returns.
+void AKInProcessExitIfEnded(void);
 void AKInProcessSetExitObserver(void (*observer)(pid_t pid, int status));
 void AKInProcessSetSignalObserver(void (*observer)(pid_t pid, int sig));
 
@@ -183,6 +186,8 @@ void AKPrepareGameOpenGLViews(void);
 void AKGameBindControllers(const struct mach_header *header, intptr_t slide, const char *name);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
+void AKGameAudioStop(void);   // the game ended: its output units go quiet
+uint32_t AKGameAppID(void);   // MacPrograms.m: the running game's Steam app id, or 0
 // GameTimers.m: repeating NSTimers made on a game's main thread fire late rather than skip a tick.
 void AKGameInstallTimers(void);
 // GameTimers.m: a game library's clock reads rest the core while its code spins on them.
@@ -195,6 +200,7 @@ void AKGameBindClock(const struct mach_header *header, intptr_t slide);
 BOOL AKGameOverlayShown(void);
 void AKGameOverlayHide(void);    // back to the game
 void AKGameOverlayReset(void);   // the game ended
+void AKWHGameChanged(void);      // WebHelperWeb.m: a game started or ended (its overlay window comes or goes)
 BOOL AKControllerMenuViewPressed(GCController *controller, BOOL menu);
 
 // CVDisplayLink.m: the refresh rate every display query reports (the screen's, at most 60 Hz).

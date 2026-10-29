@@ -112,12 +112,15 @@ static void restIfSpinning(void) {
   last = now;
 }
 
+// A game Steam already ended for good (it didn't quit when asked) stops at its next clock read.
 static uint64_t gameMachAbsoluteTime(void) {
+  AKInProcessExitIfEnded();
   restIfSpinning();
   return mach_absolute_time();
 }
 
 static int gameGettimeofday(struct timeval *tv, void *tz) {
+  AKInProcessExitIfEnded();
   restIfSpinning();
   return gettimeofday(tv, tz);
 }

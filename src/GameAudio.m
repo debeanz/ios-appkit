@@ -7,6 +7,7 @@
 #import "AKShimPrivate.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <pthread.h>
 
 // The Mac's output unit subtypes (not in the iOS SDK): 'def ', 'sys ', 'ahal'.
 enum { kMacDefaultOutput = 0x64656620, kMacSystemOutput = 0x73797320, kMacHALOutput = 0x6168616c };
@@ -39,8 +40,44 @@ static AudioComponent gameFindNext(AudioComponent after, const AudioComponentDes
   return found;
 }
 
+// The output units the game made: a game Steam ends without its asking stops sounding with it
+// (its units would otherwise go on pulling sound from its code).
+static NSMutableSet<NSValue *> *gUnits;
+static pthread_mutex_t gUnitsLock = PTHREAD_MUTEX_INITIALIZER;
+
+static OSStatus gameInstanceNew(AudioComponent component, AudioComponentInstance *out) {
+  OSStatus status = AudioComponentInstanceNew(component, out);
+  if (status == noErr && out && *out) {
+    pthread_mutex_lock(&gUnitsLock);
+    if (!gUnits) gUnits = [NSMutableSet set];
+    [gUnits addObject:[NSValue valueWithPointer:*out]];
+    pthread_mutex_unlock(&gUnitsLock);
+  }
+  return status;
+}
+
+static OSStatus gameInstanceDispose(AudioComponentInstance unit) {
+  pthread_mutex_lock(&gUnitsLock);
+  [gUnits removeObject:[NSValue valueWithPointer:unit]];
+  pthread_mutex_unlock(&gUnitsLock);
+  return AudioComponentInstanceDispose(unit);
+}
+
+void AKGameAudioStop(void) {
+  NSArray<NSValue *> *units;
+  pthread_mutex_lock(&gUnitsLock);
+  units = gUnits.allObjects;
+  [gUnits removeAllObjects];
+  pthread_mutex_unlock(&gUnitsLock);
+  for (NSValue *v in units) AudioOutputUnitStop((AudioUnit)v.pointerValue);
+  if (units.count) fprintf(stderr, "[AppKitShim] game audio: %lu output units stopped\n", (unsigned long)units.count);
+}
+
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide) {
   AKRebindImports(header, slide, ^void *(const char *symbol) {
-    return strcmp(symbol, "_AudioComponentFindNext") == 0 ? (void *)gameFindNext : NULL;
+    if (strcmp(symbol, "_AudioComponentFindNext") == 0) return (void *)gameFindNext;
+    if (strcmp(symbol, "_AudioComponentInstanceNew") == 0) return (void *)gameInstanceNew;
+    if (strcmp(symbol, "_AudioComponentInstanceDispose") == 0) return (void *)gameInstanceDispose;
+    return NULL;
   });
 }

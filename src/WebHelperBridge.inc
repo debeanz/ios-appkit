@@ -235,7 +235,7 @@ static const char kAKWHBridgeJS[] =
   "    'Window.ProcessShuttingDown': noop,\n"
   "    'Window.ResizeTo': noop,\n"
   "    'Window.RestoreWindowSizeAndPosition': noop,\n"
-  "    'Window.SetComposition': noop,\n"
+  "    'Window.SetComposition': windowOp('SetComposition'),   // the game overlay's: when it is up\n"
   "    'Window.SetHideOnClose': noop,\n"
   "    'Window.SetKeyFocus': windowOp('SetKeyFocus'),\n"
   "    'Window.SetMaxSize': noop,\n"

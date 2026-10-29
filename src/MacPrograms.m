@@ -40,6 +40,8 @@
 #import <pthread.h>
 #import "AKShimPrivate.h"
 #import "AppKitShim/LibSystemMac.h"
+#import "SteamIPC.h"
+#import <signal.h>
 
 #ifndef PLATFORM_IOS
 #define PLATFORM_IOS 2
@@ -897,10 +899,12 @@ static NSString *gGameProgram;
 static NSString *gGameBundlePath;   // with a trailing slash
 static NSString *gGameBundleReal;   // the same through realpath (/var is /private/var), as dyld may name it
 static pid_t gGamePid;
+static uint32_t gGameAppID;   // from Steam's launch environment (SteamAppId), 0 if it gave none
 static CFRunLoopRef gGameRunLoop;
 
 BOOL AKGameIsRunning(void) { return gGameProgram != nil; }
 pid_t AKGamePid(void) { return gGamePid; }
+uint32_t AKGameAppID(void) { return gGamePid ? gGameAppID : 0; }
 NSBundle *AKGameBundleForPid(pid_t pid) { return pid && pid == gGamePid ? gGameSourceBundle : nil; }
 
 // The game's main thread: the stand-in process thread running its program.
@@ -1052,6 +1056,11 @@ void AKGameNoteRunLoop(void) {
 // AppKit asks an app, -[NSApp terminate:] on its main thread, which ends it.
 static void gameSignalled(pid_t pid, int sig) {
   if (pid != gGamePid || sig == 0) return;
+  if (sig == SIGKILL) {
+    gameLog(@"killed (signal 9): it ends now");
+    AKInProcessForceExit(pid, 0);
+    return;
+  }
   pthread_mutex_lock(&gGameLock);
   CFRunLoopRef loop = gGameRunLoop ? (CFRunLoopRef)CFRetain(gGameRunLoop) : NULL;
   pthread_mutex_unlock(&gGameLock);
@@ -1078,6 +1087,7 @@ static void gameEnded(pid_t pid, int status) {
   pthread_mutex_unlock(&gGameLock);
   if (!ours) return;
   gameLog(@"%@ ended (%d)", gGameBundle.bundlePath.lastPathComponent, status);
+  AKGameAudioStop();
   AKGameDidEnd(pid);
   AKGameAppEnded();
   pthread_mutex_lock(&gGameLock);
@@ -1088,8 +1098,12 @@ static void gameEnded(pid_t pid, int status) {
   gGameImageCount = 0;
   if (gGameRunLoop) CFRelease(gGameRunLoop);
   gGameRunLoop = NULL;
+  gGameAppID = 0;
   pthread_mutex_unlock(&gGameLock);
-  dispatch_async(dispatch_get_main_queue(), ^{ AKGameWindowsClose(); });
+  dispatch_async(dispatch_get_main_queue(), ^{
+    AKGameWindowsClose();
+    AKWHGameChanged();
+  });
 }
 
 // The program inside a Mac .app: Contents/MacOS/<CFBundleExecutable>, read directly if
@@ -1206,6 +1220,10 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class] && ![key hasPrefix:@"DYLD_"])
       setenv(key.UTF8String, value.UTF8String, 1);
   }];
+  NSString *appID = [environment[@"SteamAppId"] isKindOfClass:NSString.class] ? environment[@"SteamAppId"] : nil;
+  NSString *gameID = [environment[@"SteamGameId"] isKindOfClass:NSString.class] ? environment[@"SteamGameId"] : appID;
+  gGameAppID = (uint32_t)appID.longLongValue;
+  if (gameID.length) AKSteamNoteGameID(strtoull(gameID.UTF8String, NULL, 10));
 
   // Loaded here first, so its main-bundle calls are redirected before its main() runs.
   void (^undo)(void) = ^{
@@ -1248,6 +1266,8 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   gGamePid = pid;
   AKInProcessDetach(pid);
   pthread_mutex_unlock(&gGameLock);
-  gameLog(@"%@ running as pid %d", appURL.lastPathComponent, pid);
+  gameLog(@"%@ running as pid %d%@", appURL.lastPathComponent, pid,
+          gGameAppID ? [NSString stringWithFormat:@" (app %u)", gGameAppID] : @" (Steam gave no app id: no overlay)");
+  dispatch_async(dispatch_get_main_queue(), ^{ AKWHGameChanged(); });
   return pid;
 }

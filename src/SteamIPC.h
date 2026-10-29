@@ -18,6 +18,10 @@ enum {
 // Steam names its semaphores and shared memory after the CRC32 of the object's name.
 uint32_t AKSteamCRC32(const char *s);
 
+// The game Steam started (its 64-bit game id): Steam's probes for that game's overlay find
+// none, so it sees the game end (SteamIPC.m).
+void AKSteamNoteGameID(uint64_t gameID);
+
 // An auto- or manual-reset event shared by name. timeoutMs < 0 waits forever.
 AKSteamEvent *AKSteamEventCreate(const char *name, bool manualReset, bool initialState, bool force);
 bool AKSteamEventWait(AKSteamEvent *e, int timeoutMs);

@@ -44,6 +44,7 @@ static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window
 @property(nonatomic, weak) AKWHBrowser *viewOwner;   // whose script holds the BrowserView object
 @property(nonatomic) uint32_t viewId;                // that object's id (0: not a BrowserView)
 @property(nonatomic) BOOL isPopupView;               // a BrowserView filled by its owner's script
+@property(nonatomic) pid_t gameOverlayPid;           // the game this window is the overlay of (Steam's in-game menu)
 @property(nonatomic) CGRect cssBounds;
 @property(nonatomic) BOOL viewVisible;
 @property(nonatomic) double zoom;
@@ -81,6 +82,10 @@ static void watchTouchesAndKeyboard(UIWindow *window);
 static void logWindows(NSString *when);
 static void viewEvent(AKWHBrowser *v, NSString *event, NSArray *args);
 static WKWebView *focusedWebView(void);
+static void applyOverlayVisibility(AKWHBrowser *b);
+static void gameOverlayClosed(AKWHBrowser *b);
+pid_t AKGamePid(void);          // MacPrograms.m: the game Steam started, or 0
+uint32_t AKGameAppID(void);     // its app id, or 0
 
 #pragma mark Browsers
 
@@ -380,6 +385,7 @@ static void layoutBrowser(AKWHBrowser *b) {
     b.zoom = scale;   // what its BrowserViews are placed with
     placeView(b, CGRectMake(0, 0, s.width, ceil(s.height / scale - 0.01) * scale), scale);
   }
+  applyOverlayVisibility(b);
 }
 
 // A BrowserView sits just above its parent window, and moves with it.
@@ -396,6 +402,7 @@ static void removeBrowser(AKWHBrowser *b) {
   for (AKWHBrowser *v in [gBrowsers copy])
     if (v.parent == b) removeBrowser(v);
   AKWHLog(YES, @"browser %u \"%@\" closed", b.index, b.name);
+  gameOverlayClosed(b);
   // A window Steam was told about and that closed on its own (window.close()).
   if (b.knownToSteam && !b.createdBySteam) AKWHSend(kAKWHClose, b.handle, @{ @"browser_handle": @(b.handle) });
   b.knownToSteam = NO;
@@ -820,6 +827,158 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
   }
 }
 
+#pragma mark Steam's overlay over a game
+
+// Steam's in-game overlay (what Steam Deck shows over a game: the menu with Resume, Exit and
+// the rest) is a window of Steam's interface, "SP Overlay: <pid>/<browser>/<type>", made for
+// each game whose overlay browser SteamClient.Overlay.GetOverlayBrowserInfo lists and opened
+// with pid= and browser= in its URL. On a Mac the game's overlay renderer makes that browser
+// in the game and draws the window over it. No overlay renderer runs here, so the list names
+// the running game itself, its window sits see-through on the stage over the game's, and while
+// it is up (the Steam button in the game) only it and its menus show. Its composition
+// (Window.SetComposition) says when it is done. Big Picture's Resume needs it too: it raises a
+// running game only through that game's overlay windows.
+static uint64_t gOverlayInfoChanged;   // the page's Overlay.RegisterOverlayBrowserInfoChanged callback
+static uint64_t gOverlayGameFocus;     // its System.UI.RegisterForOverlayGameWindowFocusChanged one
+static BOOL gOverlayUp;                // the game's overlay window is up over it
+static const int32_t kOverlayBrowserID = 1;   // the game's overlay browser, as the list names it
+
+enum { kCompositionHidden = 0, kCompositionNotification = 1, kCompositionOverlay = 2, kCompositionOpaque = 3 };
+
+static NSDictionary *jsNumber(long long v) {
+  return v >= INT32_MIN && v <= INT32_MAX ? @{ @"int_value": @(v) } : @{ @"uint_value": @(v) };
+}
+
+static NSDictionary *jsProperty(NSString *name, NSDictionary *value) { return @{ @"name": name, @"value": value }; }
+
+static AKWHBrowser *gameOverlayWindow(void) {
+  pid_t pid = AKGamePid();
+  for (AKWHBrowser *b in gBrowsers)
+    if (pid && b.gameOverlayPid == pid && b.webView && !b.viewId) return b;
+  return nil;
+}
+
+static BOOL inGameOverlay(AKWHBrowser *b) {
+  for (AKWHBrowser *p = b; p; p = p.parent)
+    if (p.gameOverlayPid) return YES;
+  return NO;
+}
+
+// While the overlay is up only its windows show; otherwise only the others do.
+static void applyOverlayVisibility(AKWHBrowser *b) {
+  if (!b.webView || b.type == kSharedJSContextType) return;
+  b.webView.alpha = inGameOverlay(b) == gOverlayUp ? 1 : 0;
+}
+
+// The running game's entry in the overlay list, or nil (no game, or Steam didn't say which app).
+static NSDictionary *gameOverlayInfo(void) {
+  pid_t pid = AKGamePid();
+  uint32_t appID = AKGameAppID();
+  if (!pid || !appID) return nil;
+  const char *gameID = getenv("SteamGameId");
+  double zoom = zoomFor(kMinWidth, kMinHeight);
+  CGSize s = screenPoints();
+  return @{ @"is_object": @YES, @"object_properties": @[
+    jsProperty(@"unPID", jsNumber(pid)),
+    jsProperty(@"nBrowserID", jsNumber(kOverlayBrowserID)),
+    jsProperty(@"eBrowserType", jsNumber(0)),
+    jsProperty(@"appID", jsNumber(appID)),
+    jsProperty(@"gameID", @{ @"string_value": gameID && *gameID ? @(gameID) : [NSString stringWithFormat:@"%u", appID] }),
+    jsProperty(@"eUIMode", jsNumber(4)),   // EUIMode GamePad
+    jsProperty(@"nScreenWidth", jsNumber((long long)floor(s.width / zoom))),
+    jsProperty(@"nScreenHeight", jsNumber((long long)floor(s.height / zoom))),
+    jsProperty(@"flDisplayScale", @{ @"double_value": @1.0 }),
+  ] };
+}
+
+// A call's last argument: a callback's function handle, or a promise's resolve handle.
+static uint64_t lastHandle(NSArray *args, NSString *promiseField) {
+  NSDictionary *last = [args.lastObject isKindOfClass:NSDictionary.class] ? args.lastObject : nil;
+  if (!promiseField) return [last[@"function_handle"] unsignedLongLongValue];
+  for (NSDictionary *p in last[@"object_properties"])
+    if ([p isKindOfClass:NSDictionary.class] && [p[@"name"] isEqual:promiseField] && [p[@"value"] isKindOfClass:NSDictionary.class])
+      return [p[@"value"][@"function_handle"] unsignedLongLongValue];
+  return 0;
+}
+
+// A page's call about overlays: the list is answered here while a game runs; the two
+// callbacks are noted (and still registered with Steam). YES when answered here.
+static BOOL gameOverlayCall(NSString *name, NSArray *args) {
+  if ([name isEqualToString:@"Overlay.RegisterOverlayBrowserInfoChanged"]) {
+    gOverlayInfoChanged = lastHandle(args, nil);
+  } else if ([name isEqualToString:@"System.UI.RegisterForOverlayGameWindowFocusChanged"]) {
+    gOverlayGameFocus = lastHandle(args, nil);
+  } else if ([name isEqualToString:@"Overlay.GetOverlayBrowserInfo"]) {
+    NSDictionary *info = gameOverlayInfo();
+    uint64_t resolve = lastHandle(args, @"resolve");
+    if (!info || !resolve) return NO;
+    callbackToPage(resolve, @{ @"arguments": @[ @{ @"is_array": @YES, @"array_values": @[ info ] } ] });
+    AKWHLog(NO, @"overlay list: the running game (pid %d, app %u)", AKGamePid(), AKGameAppID());
+    return YES;
+  }
+  return NO;
+}
+
+// The game in front (pid) or none (0), for Steam's interface to find its overlay window by.
+static void tellGameFocus(void) {
+  if (!gOverlayGameFocus) return;
+  pid_t pid = AKGamePid();
+  callbackToPage(gOverlayGameFocus, @{ @"arguments": @[ jsNumber(pid ? AKGameAppID() : 0), jsNumber(pid) ] });
+}
+
+// Big Picture's window in front takes the keyboard focus back from the overlay's: its
+// controller navigation follows the focused window.
+static void focusSteamWindow(void) {
+  for (UIView *v in gStage.subviews.reverseObjectEnumerator) {
+    AKWHBrowser *b = [v isKindOfClass:WKWebView.class] ? browserForWebView((WKWebView *)v) : nil;
+    if (!b || !b.knownToSteam || b.viewId || b.type == kSharedJSContextType || inGameOverlay(b) || v.hidden) continue;
+    [b.webView becomeFirstResponder];
+    return;
+  }
+}
+
+static void gameOverlayClosed(AKWHBrowser *b) {
+  if (!b.gameOverlayPid || !gOverlayUp) return;
+  gOverlayUp = NO;
+  for (AKWHBrowser *other in [gBrowsers copy])
+    if (other != b) applyOverlayVisibility(other);
+}
+
+void AKWHGameChanged(void) {
+  if (gOverlayInfoChanged) callbackToPage(gOverlayInfoChanged, @{ @"arguments": @[] });
+  tellGameFocus();
+  if (!AKGamePid()) {
+    AKWHShowGameOverlay(NO);
+    focusSteamWindow();
+  }
+}
+
+BOOL AKWHShowGameOverlay(BOOL shown) {
+  AKWHBrowser *overlay = gameOverlayWindow();
+  BOOL up = shown && overlay;
+  if (up != gOverlayUp) {
+    gOverlayUp = up;
+    for (AKWHBrowser *b in [gBrowsers copy]) applyOverlayVisibility(b);
+    gStage.backgroundColor = UIColor.clearColor;
+    if (up) {
+      raiseBrowser(overlay);
+      [overlay.webView becomeFirstResponder];   // its document has the focus: the Steam key goes to it
+    } else {
+      tellGameFocus();
+    }
+  }
+  return overlay != nil;
+}
+
+// The overlay window's composition: up over the game (Overlay, Opaque - which hides the game -
+// or with the keyboard), a notification only, or hidden.
+static void gameOverlayComposition(AKWHBrowser *b, int mode) {
+  static const char *names[] = { "hidden", "notification", "overlay", "opaque", "overlay with keyboard" };
+  AKWHLog(NO, @"game overlay window %u: composition %s", b.index, mode >= 0 && mode <= 4 ? names[mode] : "?");
+  if (gOverlayUp) gStage.backgroundColor = mode == kCompositionOpaque ? UIColor.blackColor : UIColor.clearColor;
+  AKWHGameOverlayComposed(mode);
+}
+
 #pragma mark Calls from pages
 
 // Function handles in a call's arguments become global ones (any depth: the promise's
@@ -861,6 +1020,9 @@ static void windowCall(AKWHBrowser *b, NSString *name, NSDictionary *m) {
     else removeBrowser(b);
   } else if ([name isEqualToString:@"SetKeyFocus"]) {
     [b.webView becomeFirstResponder];
+  } else if ([name isEqualToString:@"SetComposition"]) {
+    NSArray *args = [m[@"args"] isKindOfClass:NSArray.class] ? m[@"args"] : @[];
+    if (b.gameOverlayPid && args.count) gameOverlayComposition(b, [args[0] intValue]);
   }
   reply(b, m, nil);
 }
@@ -930,6 +1092,7 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
       id handle = [args.firstObject isKindOfClass:NSDictionary.class] ? args.firstObject[@"function_handle"] : nil;
       if (handle) gSystemKeyHandle = [handle unsignedLongLongValue];
     }
+    if (gameOverlayCall(m[@"name"], args)) return;   // answered here
     AKWHSend(kAKWHJSMethodCall, b.handle, @{
       @"browser_handle": @(b.handle),
       @"owning_browser_handle": @(gMethodOwner ?: b.handle),
@@ -1035,6 +1198,7 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
   if (q[@"akwh_id"] && b.index != (uint32_t)[q[@"akwh_id"] intValue])
     AKWHLog(YES, @"window number %@ was already taken; this window is %u", q[@"akwh_id"], b.index);
   b.userAgentFamily = q[@"useragent"] ?: opener.userAgentFamily;
+  if (!isView && q[@"pid"].intValue && q[@"pid"].intValue == AKGamePid()) b.gameOverlayPid = q[@"pid"].intValue;
   if (isView) {
     b.viewId = (uint32_t)[q[@"requestid"] intValue];
     b.viewOwner = opener;
@@ -1045,18 +1209,18 @@ static NSDictionary<NSString *, NSString *> *queryOf(NSURL *url) {
     b.zoom = zoomFor([q[@"minwidth"] doubleValue] ?: kMinWidth, [q[@"minheight"] doubleValue] ?: kMinHeight);
   }
   WKWebView *wv = makeWebView(b, configuration, YES);
-  if (isView) {
+  if (isView || b.gameOverlayPid) {   // the overlay is see-through: the game shows under it
     wv.opaque = NO;
     wv.backgroundColor = UIColor.clearColor;
     wv.scrollView.backgroundColor = UIColor.clearColor;
-    wv.hidden = YES;
+    wv.hidden = isView;
   } else {
     wv.backgroundColor = UIColor.blackColor;
   }
   [hostView() addSubview:wv];
   layoutBrowser(b);
   if (b.parent) raiseBrowser(b.parent);
-  AKWHLog(YES, @"%@ %u \"%@\" opened by %u (zoom %.2f): %@", isView ? @"BrowserView popup" : @"window", b.index, name,
+  AKWHLog(YES, @"%@ %u \"%@\" opened by %u (zoom %.2f): %@", isView ? @"BrowserView popup" : b.gameOverlayPid ? @"game overlay window" : @"window", b.index, name,
           opener.index, b.zoom, url.absoluteString);
   if (!isView) {
     uint32_t index = b.index;
@@ -1296,6 +1460,8 @@ static void restartForSteam(void) {
   gNextIndex = 0x4000;
   gSystemKeyHandle = 0;
   gSteamSendsSystemKeys = NO;
+  gOverlayInfoChanged = gOverlayGameFocus = 0;
+  gOverlayUp = NO;
   AKWHExitForRestart();
 }
 
@@ -1430,7 +1596,7 @@ static WKWebView *focusedWebView(void) {
   for (UIView *v = [gFoundResponder isKindOfClass:UIView.class] ? (UIView *)gFoundResponder : nil; v; v = v.superview)
     if ([v isKindOfClass:WKWebView.class] && browserForWebView((WKWebView *)v)) return (WKWebView *)v;
   for (UIView *v in gStage.subviews.reverseObjectEnumerator) {
-    if (![v isKindOfClass:WKWebView.class] || v.hidden || v.bounds.size.width < 2) continue;
+    if (![v isKindOfClass:WKWebView.class] || v.hidden || v.alpha < 0.01 || v.bounds.size.width < 2) continue;
     AKWHBrowser *b = browserForWebView((WKWebView *)v);
     if (b && b.type != kSharedJSContextType) return (WKWebView *)v;
   }

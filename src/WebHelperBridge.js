@@ -233,7 +233,7 @@ function akwhInstall(win, config) {
     'Window.ProcessShuttingDown': noop,
     'Window.ResizeTo': noop,
     'Window.RestoreWindowSizeAndPosition': noop,
-    'Window.SetComposition': noop,
+    'Window.SetComposition': windowOp('SetComposition'),   // the game overlay's: when it is up
     'Window.SetHideOnClose': noop,
     'Window.SetKeyFocus': windowOp('SetKeyFocus'),
     'Window.SetMaxSize': noop,

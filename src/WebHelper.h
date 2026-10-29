@@ -74,3 +74,11 @@ void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed
 void AKWHSendSystemKey(uint32_t key, uint32_t controller);
 // WebHelperGamepad.m: one of Big Picture's popups shown or hidden (its menus over a game).
 void AKWHGameOverlayMenu(NSString *name, BOOL visible);
+// WebHelperGamepad.m: the game's overlay window's composition (Window.SetComposition's mode).
+void AKWHGameOverlayComposed(int mode);
+// WebHelperWeb.m: the game's overlay window up over the game, or not (only it, or only the
+// rest, showing on the stage). Returns whether the running game has one. Main thread.
+BOOL AKWHShowGameOverlay(BOOL shown);
+// WebHelperWeb.m: a game started or ended (MacPrograms.m): Steam's interface makes or drops its
+// overlay window. Main thread.
+void AKWHGameChanged(void);

@@ -61,6 +61,7 @@ static pid_t gNextPid = AK_VPID_BASE;
 static pthread_mutex_t gProcLock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gProcExited = PTHREAD_COND_INITIALIZER;
 static __thread ak_vproc *tCurrentProc;     // set on a stand-in process's main thread
+static __thread pid_t tCurrentPid;          // its pid (the slot is reused once it is reaped)
 
 // Extra arguments appended for an executable, by file name (AKInProcessSetExtraArgs).
 static struct { char name[256]; char *args[AK_MAX_EXTRA]; int count; } gExtra[8];
@@ -205,6 +206,7 @@ static void finishProc(ak_vproc *p, int status) {
 // A stand-in process that didn't end when asked: it ends now as far as everyone else can tell
 // (waitpid, kqueue, the exit observer), while its thread, stuck in its own code, is left as it is.
 static ak_vproc *findProc(pid_t pid);   // with gProcLock held
+static int endedUnderThread(void);
 
 void AKInProcessForceExit(pid_t pid, int status) {
   pthread_mutex_lock(&gProcLock);
@@ -229,6 +231,7 @@ void AKInProcessDetach(pid_t pid) {
 static void *procMain(void *arg) {
   ak_vproc *p = arg;
   tCurrentProc = p;
+  tCurrentPid = p->pid;
   pthread_setname_np(baseName(p->path));
   // The working directory the launcher asked for, for this thread only (a process-wide
   // chdir would move the client too).
@@ -246,7 +249,7 @@ static void *procMain(void *arg) {
   @autoreleasepool {
     status = p->function ? p->function(p->argc, p->argv) : p->entry(p->argc, p->argv, p->envp, apple);
   }
-  finishProc(p, status);
+  if (!endedUnderThread()) finishProc(p, status);   // else it was ended for everyone already
   return NULL;
 }
 
@@ -613,9 +616,25 @@ int waitid(idtype_t idtype, id_t id, siginfo_t *info, int options) {
   return 0;
 }
 
+// A stand-in ended for everyone while its thread went on (AKInProcessForceExit): true on that
+// thread, which has nothing left to do. Read without the lock: the game's clock reads ask.
+static int endedUnderThread(void) {
+  ak_vproc *p = tCurrentProc;
+  return p && (!__atomic_load_n(&p->inUse, __ATOMIC_RELAXED) || __atomic_load_n(&p->pid, __ATOMIC_RELAXED) != tCurrentPid ||
+               !__atomic_load_n(&p->running, __ATOMIC_RELAXED));
+}
+
+void AKInProcessExitIfEnded(void) {
+  if (!tCurrentProc || !endedUnderThread()) return;
+  shimLog("in-process pid %d: its thread stops (it was ended for Steam already)", tCurrentPid);
+  tCurrentProc = NULL;
+  pthread_exit(NULL);
+}
+
 // exit() on a stand-in's main thread ends that "process", not the app.
 void exit(int status) {
   ak_vproc *p = tCurrentProc;
+  if (p && endedUnderThread()) { tCurrentProc = NULL; pthread_exit(NULL); }
   if (p) { finishProc(p, status); pthread_exit(NULL); }
   REAL(void (*)(int), exit)(status);
   abort();
@@ -623,6 +642,7 @@ void exit(int status) {
 
 void _exit(int status) {
   ak_vproc *p = tCurrentProc;
+  if (p && endedUnderThread()) { tCurrentProc = NULL; pthread_exit(NULL); }
   if (p) { finishProc(p, status); pthread_exit(NULL); }
   REAL(void (*)(int), _exit)(status);
   abort();

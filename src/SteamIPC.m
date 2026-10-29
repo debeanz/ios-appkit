@@ -19,6 +19,7 @@
 // without one blocks in sem_wait. The shared memory comes from the shim's in-process
 // shm_open (PosixShm.m): the client and this helper are one process here.
 #import "SteamIPC.h"
+#import <dlfcn.h>
 #import <errno.h>
 #import <fcntl.h>
 #import <pthread.h>
@@ -245,6 +246,51 @@ bool AKSteamEventWait(AKSteamEvent *e, int timeoutMs) {
 }
 
 void AKSteamEventSet(AKSteamEvent *e) { binsemRelease(&e->lock); }
+
+#pragma mark A game's overlay event
+
+// When kill(pid, 0) says a game Steam started is gone, Steam asks whether its overlay still
+// runs before it lets the game go (steamclient's game list, every 250 ms): it opens the event
+// "SteamOverlayRunning_<game id>", making it if it isn't there, and a game it didn't have to
+// make it for is still running. It never removes what it made (its events and binary
+// semaphores only sem_close), so from its second look on it finds its own and the game never
+// ends ("Stopping" for good). On a Mac the game's overlay renderer holds that name; no overlay
+// renderer runs here, so semaphores made under it lose their names at once, and every look
+// finds none. libSystem is routed through the shim umbrella, so the client's sem_open is this.
+static uint32_t gOverlayLock, gOverlayEvent;   // CRC32s: the event's binary semaphore, and the event
+
+void AKSteamNoteGameID(uint64_t gameID) {
+  char name[64], lock[80];
+  snprintf(name, sizeof name, "SteamOverlayRunning_%llu", (unsigned long long)gameID);
+  snprintf(lock, sizeof lock, "%s.BinSemLock", name);
+  gOverlayLock = AKSteamCRC32(lock);
+  gOverlayEvent = AKSteamCRC32(name);
+}
+
+// /BSem/<crc>, /BSem/<crc>.2 (the binary semaphore's pair) or /Evt/<crc> (the event's own).
+static bool isOverlayName(const char *name) {
+  if (!gOverlayEvent || !name) return false;
+  char probe[48];
+  snprintf(probe, sizeof probe, "/BSem/%x", gOverlayLock);
+  size_t n = strlen(probe);
+  if (strncmp(name, probe, n) == 0 && (!name[n] || strcmp(name + n, ".2") == 0)) return true;
+  snprintf(probe, sizeof probe, "/Evt/%x", gOverlayEvent);
+  return strcmp(name, probe) == 0;
+}
+
+sem_t *sem_open(const char *name, int oflag, ...) {
+  static sem_t *(*real)(const char *, int, ...);
+  if (!real) real = (sem_t *(*)(const char *, int, ...))dlsym(dlopen("/usr/lib/libSystem.B.dylib", RTLD_LAZY | RTLD_NOLOAD), "sem_open");
+  if (!(oflag & O_CREAT)) return real(name, oflag);
+  va_list ap;
+  va_start(ap, oflag);
+  int mode = va_arg(ap, int);
+  unsigned value = va_arg(ap, unsigned);
+  va_end(ap);
+  sem_t *s = real(name, oflag, mode, value);
+  if (s != SEM_FAILED && isOverlayName(name)) sem_unlink(name);
+  return s;
+}
 
 #pragma mark CSharedMemStream
 

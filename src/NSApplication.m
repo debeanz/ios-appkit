@@ -265,6 +265,7 @@ void AKOnMainSync(dispatch_block_t block) {
     return e;
   }
 
+  AKInProcessExitIfEnded();   // a game Steam ended for good stops pumping here
   CFRunLoopRef loop = CFRunLoopGetCurrent();
   AKGameNoteRunLoop();   // a game pumping its events here can be asked to quit through this loop
   // A source of its own keeps the mode from being empty (an empty mode returns at once).
@@ -284,6 +285,9 @@ void AKOnMainSync(dispatch_block_t block) {
   }
   CFRunLoopAddSource(loop, src, cfMode);
 
+  // A poll (a past or nil date) still turns the loop once, as AppKit's does: a game that polls
+  // every frame only sees its timers, performed blocks and quit requests through this.
+  CFRunLoopRunInMode(cfMode, 0, true);
   NSTimeInterval left = date ? date.timeIntervalSinceNow : 0;
   while (!(e = [self _ak_dequeueMatching:mask dequeue:dequeue]) && left > 0) {
     CFRunLoopRunInMode(cfMode, MIN(left, 1.0), true);
