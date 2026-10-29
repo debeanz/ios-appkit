@@ -200,6 +200,8 @@ void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioBegin(void);    // a game starts: the app's audio session plays (each launch)
 // MetalCompat.m: Metal answers a Mac game's code as a Mac GPU would (once, before the first game).
 void AKGameMetalPrepare(void);
+// GameCrash.m: from the first launch on, a game that crashes ends alone; the app keeps running.
+void AKGameCrashGuardInstall(void);
 void AKGameAudioStop(void);     // the game ended: all its sound stops (its units and queues, the session)
 void AKGameAudioRelease(void);  // and, its threads stopped, its units and queues go
 // GameHID.m: the game ended: its HID managers and devices stop calling it.

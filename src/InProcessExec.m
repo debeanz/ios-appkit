@@ -228,11 +228,28 @@ void AKInProcessDetach(pid_t pid) {
   pthread_mutex_unlock(&gProcLock);
 }
 
+enum { kAltStackSize = 64 * 1024 };
+static pthread_key_t gAltStackKey;
+
+static void freeAltStack(void *stack) {
+  stack_t off = { .ss_flags = SS_DISABLE };
+  sigaltstack(&off, NULL);
+  free(stack);
+}
+
 static void *procMain(void *arg) {
   ak_vproc *p = arg;
   tCurrentProc = p;
   tCurrentPid = p->pid;
   pthread_setname_np(baseName(p->path));
+  // A signal stack of its own, so a crash handler still runs when this thread's stack has
+  // overflowed (GameCrash.m ends a crashed game alone). Freed as the thread exits, however it
+  // does; one parked after a crash keeps it.
+  static dispatch_once_t altKeyOnce;
+  dispatch_once(&altKeyOnce, ^{ pthread_key_create(&gAltStackKey, freeAltStack); });
+  stack_t alt = { .ss_sp = malloc(kAltStackSize), .ss_size = kAltStackSize, .ss_flags = 0 };
+  if (alt.ss_sp && sigaltstack(&alt, NULL) == 0) pthread_setspecific(gAltStackKey, alt.ss_sp);
+  else free(alt.ss_sp);
   // The working directory the launcher asked for, for this thread only (a process-wide
   // chdir would move the client too).
   if (p->cwd[0]) {
