@@ -31,3 +31,17 @@ CV_EXPORT CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLi
 
 CV_EXPORT CVReturn CVDisplayLinkGetCurrentTime(CVDisplayLinkRef displayLink, CVTimeStamp *outTime);
 CV_EXPORT CVTime CVDisplayLinkGetNominalOutputVideoRefreshPeriod(CVDisplayLinkRef displayLink);
+
+// OpenGL texture caches (video frames as OpenGL textures): there's no path from CoreVideo into
+// the OpenGL here, so creating one fails with kCVReturnUnsupported (Unity's player, which links
+// them, plays video through Metal).
+typedef struct __CVOpenGLTextureCache *CVOpenGLTextureCacheRef;
+typedef CVImageBufferRef CVOpenGLTextureRef;
+CV_EXPORT CVReturn CVOpenGLTextureCacheCreate(CFAllocatorRef allocator, CFDictionaryRef cacheAttributes, void *cglContext,
+                                              void *cglPixelFormat, CFDictionaryRef textureAttributes, CVOpenGLTextureCacheRef *cacheOut);
+CV_EXPORT CVReturn CVOpenGLTextureCacheCreateTextureFromImage(CFAllocatorRef allocator, CVOpenGLTextureCacheRef cache, CVImageBufferRef image,
+                                                              CFDictionaryRef attributes, CVOpenGLTextureRef *textureOut);
+CV_EXPORT void CVOpenGLTextureCacheFlush(CVOpenGLTextureCacheRef cache, CVOptionFlags options);
+CV_EXPORT void CVOpenGLTextureCacheRelease(CVOpenGLTextureCacheRef cache);
+CV_EXPORT uint32_t CVOpenGLTextureGetName(CVOpenGLTextureRef texture);
+CV_EXPORT uint32_t CVOpenGLTextureGetTarget(CVOpenGLTextureRef texture);

@@ -83,6 +83,7 @@ extern UInt32 GetEventClass(EventRef event);
 extern UInt32 GetEventKind(EventRef event);
 extern EventTime GetEventTime(EventRef event);
 extern OSStatus SetEventTime(EventRef event, EventTime when);
+extern EventTime GetCurrentEventTime(void);
 extern OSStatus SetEventParameter(EventRef event, EventParamName name, EventParamType type, ByteCount size, const void *data);
 extern OSStatus GetEventParameter(EventRef event, EventParamName name, EventParamType desiredType,
                                   EventParamType *outActualType, ByteCount bufferSize, ByteCount *outActualSize, void *outData);
@@ -131,6 +132,9 @@ extern OSStatus TSMRemoveDocumentProperty(TSMDocumentID doc, TSMDocumentProperty
 // Text Input Sources: one US keyboard layout.
 extern const CFStringRef kTISPropertyInputSourceID;
 extern const CFStringRef kTISPropertyUnicodeKeyLayoutData;
+extern const CFStringRef kTISPropertyInputSourceType;
+extern const CFStringRef kTISTypeKeyboardLayout;
+extern const CFStringRef kTISNotifySelectedKeyboardInputSourceChanged;   // never posted: the layout never changes
 extern TISInputSourceRef TISCopyCurrentKeyboardInputSource(void) CF_RETURNS_RETAINED;
 extern TISInputSourceRef TISCopyCurrentKeyboardLayoutInputSource(void) CF_RETURNS_RETAINED;
 extern TISInputSourceRef TISCopyCurrentASCIICapableKeyboardLayoutInputSource(void) CF_RETURNS_RETAINED;

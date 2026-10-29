@@ -28,6 +28,9 @@ enum { typeNull = 'null', kAutoGenerateReturnID = -1, kAnyTransactionID = 0,
        kAEDefaultTimeout = -1, kAENormalPriority = 0x00000000, errAEEventNotHandled = -1708,
        errAEDescNotFound = -1701 };
 
+// Power: a game's "the user is active" nudge against idle sleep, accepted and ignored.
+extern OSErr UpdateSystemActivity(UInt8 activity);
+
 extern OSErr AECreateDesc(DescType typeCode, const void *dataPtr, Size dataSize, AEDesc *result);
 extern OSErr AEDisposeDesc(AEDesc *theAEDesc);
 extern OSErr AECreateAppleEvent(AEEventClass eventClass, AEEventID eventID, const AEAddressDesc *target,

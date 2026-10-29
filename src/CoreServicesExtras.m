@@ -213,6 +213,10 @@ const CFStringRef kMDItemWhereFroms = CFSTR("kMDItemWhereFroms");
 MDItemRef MDItemCreate(CFAllocatorRef allocator, CFStringRef path) { return NULL; } // no Spotlight index
 void MDItemSetAttribute(MDItemRef item, CFStringRef name, CFTypeRef value) {}
 
+#pragma mark Power
+
+OSErr UpdateSystemActivity(UInt8 activity) { return noErr; }
+
 #pragma mark Private
 
 Boolean _CSCheckFixDisable(void) { return false; }

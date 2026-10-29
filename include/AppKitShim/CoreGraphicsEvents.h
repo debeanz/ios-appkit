@@ -78,6 +78,7 @@ CG_EXTERN void CGEventTapEnable(CFMachPortRef tap, bool enable);
 // Input state of this app, as its event source sees it.
 CG_EXTERN bool CGEventSourceKeyState(CGEventSourceStateID stateID, CGKeyCode key);
 CG_EXTERN bool CGEventSourceButtonState(CGEventSourceStateID stateID, CGMouseButton button);
+CG_EXTERN CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID);
 CG_EXTERN double CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID stateID, CGEventType eventType);
 CG_EXTERN uint32_t CGEventSourceCounterForEventType(CGEventSourceStateID stateID, CGEventType eventType);
 CG_EXTERN void CGGetLastMouseDelta(int32_t *deltaX, int32_t *deltaY);

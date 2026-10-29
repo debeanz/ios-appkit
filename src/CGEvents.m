@@ -139,6 +139,7 @@ CGEventType CGEventGetType(CGEventRef e) { return e ? AKEv(e).type : kCGEventNul
 CGPoint CGEventGetLocation(CGEventRef e) { return e ? AKEv(e).location : CGPointZero; }
 CGEventFlags CGEventGetFlags(CGEventRef e) { return e ? AKEv(e).flags : 0; }
 void CGEventSetFlags(CGEventRef e, CGEventFlags flags) { if (e) AKEv(e).flags = flags; }
+CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID) { return (CGEventFlags)[NSEvent modifierFlags] & AKFlagMask; }
 int64_t CGEventGetIntegerValueField(CGEventRef e, CGEventField field) { return e ? AKEv(e).fields[@(field)].longLongValue : 0; }
 
 // The text a key event types: the explicit string, else the key translated through the US

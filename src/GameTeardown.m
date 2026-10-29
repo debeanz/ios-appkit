@@ -375,21 +375,25 @@ static NSUInteger clearControllerHandlers(void) {
 // Those libraries' code ranges are found before any thread is paused (dladdr and friends take
 // locks a paused thread may hold); while one is, only its registers and stack are read.
 // Two kinds: code that holds a lock shared with the app for as long as it is anywhere on the
-// stack (the allocator, the Objective-C runtime, dyld, libc's streams, the app's OpenGL stack),
-// and code that only does while it runs (a thread asleep under CoreFoundation's run loop, GCD,
-// the threads library's waits or the shim's event pump holds none of their locks).
-static ak_text gLockAny[64], gLockRunning[64];
+// stack (the allocator, the Objective-C runtime, dyld, the app's OpenGL stack), and code that
+// only does while it runs (a thread asleep under CoreFoundation's run loop, GCD, the threads
+// library's waits or the shim's event pump holds none of their locks). libc is the first kind
+// (its streams' locks) except for its sleeps, which hold nothing: a game thread that polls with
+// usleep is stopped there.
+static ak_text gLockAny[64], gLockRunning[64], gLibc;
 static int gLockAnyCount, gLockRunningCount;
 
 static void findLockingCode(void) {
-  static const char *any[] = { "libsystem_malloc", "libobjc", "/dyld", "libsystem_c.dylib", "AKOpenGL", "OSMesa", "MoltenVK" };
+  static const char *any[] = { "libsystem_malloc", "libobjc", "/dyld", "AKOpenGL", "OSMesa", "MoltenVK" };
   static const char *running[] = { "CoreFoundation", "Foundation", "libdispatch", "libsystem_pthread", "AppKitShimCore",
                                    "AudioToolbox", "CoreAudio", "AVFAudio" };
   gLockAnyCount = gLockRunningCount = 0;
+  gLibc = (ak_text){ 0, 0 };
   for (uint32_t i = 0; i < _dyld_image_count(); i++) {
     const char *name = _dyld_get_image_name(i);
     if (!name) continue;
-    BOOL inAny = NO, inRunning = NO;
+    BOOL libc = strstr(name, "/libsystem_c.dylib") != NULL;
+    BOOL inAny = libc, inRunning = NO;
     for (size_t k = 0; k < sizeof any / sizeof any[0] && !inAny; k++) inAny = strstr(name, any[k]) != NULL;
     for (size_t k = 0; k < sizeof running / sizeof running[0] && !inRunning; k++) inRunning = strstr(name, running[k]) != NULL;
     const struct mach_header_64 *mh = (const void *)_dyld_get_image_header(i);
@@ -399,7 +403,8 @@ static void findLockingCode(void) {
       const struct segment_command_64 *seg = (const void *)lc;
       if (seg->cmd != LC_SEGMENT_64 || strncmp(seg->segname, "__TEXT", 16)) continue;
       ak_text t = { (uintptr_t)mh, (uintptr_t)mh + seg->vmsize };
-      if (inAny && gLockAnyCount < 64) gLockAny[gLockAnyCount++] = t;
+      if (libc) gLibc = t;
+      else if (inAny && gLockAnyCount < 64) gLockAny[gLockAnyCount++] = t;
       else if (inRunning && gLockRunningCount < 64) gLockRunning[gLockRunningCount++] = t;
       break;
     }
@@ -440,6 +445,24 @@ static BOOL holdsLocks(const uintptr_t *frames, int n) {
   return NO;
 }
 
+// libc on the stack only in calls that wait and hold none of its locks (nanosleep$NOCANCEL and
+// the like count). Looked up with dladdr while the thread is paused, which is safe because it has
+// already been found clear of dyld (whose lock dladdr takes).
+static BOOL libcOnlyWaits(const uintptr_t *frames, int n) {
+  static const char *waits[] = { "nanosleep", "usleep", "sleep", "pause" };
+  for (int i = 0; i < n; i++) {
+    if (frames[i] < gLibc.start || frames[i] >= gLibc.end) continue;
+    Dl_info info;
+    if (!dladdr((void *)frames[i], &info) || !info.dli_sname) return NO;
+    size_t len = strcspn(info.dli_sname, "$");
+    BOOL wait = NO;
+    for (size_t k = 0; k < sizeof waits / sizeof waits[0] && !wait; k++)
+      wait = strlen(waits[k]) == len && !strncmp(info.dli_sname, waits[k], len);
+    if (!wait) return NO;
+  }
+  return YES;
+}
+
 // A thread that never could be stopped, where it was (looked up once it runs again).
 static void logStuckThread(const uintptr_t *frames, int n) {
   NSMutableArray *where = [NSMutableArray array];
@@ -472,7 +495,7 @@ static int stopThreads(int *stuck) {
         if (thread_suspend(t) != KERN_SUCCESS) break;   // ended
         int n = captureFrames(t, top, bottom, frames, 64);
         if (!runsGameCode(frames, n)) { thread_resume(t); break; }   // not the game's
-        if (!holdsLocks(frames, n)) { stopped++; break; }            // stays stopped
+        if (!holdsLocks(frames, n) && libcOnlyWaits(frames, n)) { stopped++; break; }   // stays stopped
         thread_resume(t);
         if (tries == 99) { (*stuck)++; logStuckThread(frames, n); }
         usleep(10000);

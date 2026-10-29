@@ -30,6 +30,9 @@ const SHIM = '@rpath/AppKitShim.framework/AppKitShim';
 // kept a thread a quarter busy for nothing (src/CoreAudioHAL.m).
 const THROUGH_SHIM = new Set(['/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio']);
 
+// iOS libraries the umbrella forwards for games' sake, not the client's (see route()).
+const FOR_GAMES = ['/System/Library/Frameworks/AVFoundation.framework/AVFoundation'];
+
 // /System/Library/{,Private}Frameworks/N.framework/Versions/V/B -> .../N.framework/B
 function iosPath(p) {
   const m = p.match(/^(\/System\/Library\/(?:Private)?Frameworks\/[^/]+\.framework)\/Versions\/[^/]+\/([^/]+)$/);
@@ -230,6 +233,11 @@ function route() {
     }
     if (none.length) needFromShim[p] = none;
   }
+
+  // Libraries iOS has that games use with a few macOS-only names in them (AVFoundation's Mac
+  // capture presets): forwarded whole, so a game binary using one of those names can reach
+  // that library through the shim, which adds them (MacPrograms.m).
+  for (const l of FOR_GAMES) if (reach.has(l)) { reexports.add(l); cover(l); }
 
   // Drop a re-export another re-export already carries: the linker drops it anyway, and
   // the umbrella check below compares names exactly.

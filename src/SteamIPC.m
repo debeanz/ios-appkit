@@ -22,6 +22,7 @@
 #import <dlfcn.h>
 #import <errno.h>
 #import <fcntl.h>
+#import <mach/mach.h>
 #import <pthread.h>
 #import <semaphore.h>
 #import <stdarg.h>
@@ -34,6 +35,7 @@
 
 int shm_open(const char *name, int oflag, ...);   // the shim's (PosixShm.m)
 int shm_unlink(const char *name);
+kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name, mach_port_t *sp);   // the shim's (MachBootstrap.m)
 
 static void ipcLog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void ipcLog(const char *fmt, ...) {
@@ -167,9 +169,48 @@ static void mutexUnlock(AKSteamMutex *m) {
   sem_post(m->floor);
 }
 
+#pragma mark ipcserver
+
+// Steam's ipcserver (the Mach service com.valvesoftware.steam.ipctool; an in-process program
+// here) notes who holds each binary semaphore, to free it if that process dies, and Steam's
+// side tells it of every take (op 10) and every release (op 11). An event's binary semaphore
+// is taken by its waiter and released by whoever sets it, so with this end setting events
+// Steam waits on and saying nothing, ipcserver saw Steam take a lock it still held - "Error:
+// ClaimLock by [pid] on already claimed lock" about once a second. This end reports its
+// releases as Steam's own helper does. The message is Steam's: {header, op, pid, the
+// semaphore's /BSem name, a label}, msgh_id 0x68, sent with a 2 s timeout and no reply.
+typedef struct {
+  mach_msg_header_t header;
+  int32_t op, pid;
+  char name[32], label[256];
+} AKIPCServerMessage;
+
+static void tellIPCServer(int32_t op, const char *name) {
+  static mach_port_t server;
+  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&lock);
+  if (!server && bootstrap_look_up(bootstrap_port, "com.valvesoftware.steam.ipctool", &server) != KERN_SUCCESS)
+    server = MACH_PORT_NULL;   // not running yet: asked again next time
+  mach_port_t port = server;
+  pthread_mutex_unlock(&lock);
+  if (!port) return;
+  AKIPCServerMessage m = { 0 };
+  m.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+  m.header.msgh_size = sizeof m;
+  m.header.msgh_remote_port = port;
+  m.header.msgh_id = 0x68;
+  m.op = op;
+  m.pid = getpid();
+  strncpy(m.name, name, sizeof m.name - 1);
+  mach_msg(&m.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof m, 0, MACH_PORT_NULL, 2000, MACH_PORT_NULL);
+}
+
 #pragma mark IPC::BinarySemaphore and IPC::PosixEvent
 
-typedef struct { sem_t *floor, *ceiling; } AKSteamBinSem;
+typedef struct {
+  sem_t *floor, *ceiling;
+  char name[32];   // the floor's, /BSem/<crc>: how ipcserver knows it
+} AKSteamBinSem;
 
 static bool binsemTake(AKSteamBinSem *s, int timeoutMs) {
   if (!semTake(s->floor, timeoutMs)) return false;
@@ -180,6 +221,7 @@ static bool binsemTake(AKSteamBinSem *s, int timeoutMs) {
 static void binsemRelease(AKSteamBinSem *s) {
   if (!semTry(s->ceiling)) return;   // not taken: already signaled
   sem_post(s->floor);
+  tellIPCServer(11, s->name);
 }
 
 struct AKSteamEvent {
@@ -203,6 +245,7 @@ AKSteamEvent *AKSteamEventCreate(const char *name, bool manualReset, bool initia
   snprintf(pendingName, sizeof pendingName, "/Evt/%x", AKSteamCRC32(name));
   AKSteamEvent *e = calloc(1, sizeof *e);
   e->manualReset = manualReset;
+  snprintf(e->lock.name, sizeof e->lock.name, "%s", a);
   e->pending = SEM_FAILED;
   if (force) sem_unlink(pendingName);
   bool created;

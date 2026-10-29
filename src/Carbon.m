@@ -49,6 +49,7 @@ UInt32 GetEventClass(EventRef event) { return AKEvent(event).eventClass; }
 UInt32 GetEventKind(EventRef event) { return AKEvent(event).eventKind; }
 EventTime GetEventTime(EventRef event) { return AKEvent(event).time; }
 OSStatus SetEventTime(EventRef event, EventTime when) { AKEvent(event).time = when; return noErr; }
+EventTime GetCurrentEventTime(void) { return NSProcessInfo.processInfo.systemUptime; }
 
 OSStatus SetEventParameter(EventRef event, EventParamName name, EventParamType type, ByteCount size, const void *data) {
   if (!event || (!data && size)) return AKParamErr;
@@ -371,6 +372,9 @@ OSStatus TSMRemoveDocumentProperty(TSMDocumentID doc, TSMDocumentPropertyTag tag
 
 const CFStringRef kTISPropertyInputSourceID = CFSTR("TISPropertyInputSourceID");
 const CFStringRef kTISPropertyUnicodeKeyLayoutData = CFSTR("TISPropertyUnicodeKeyLayoutData");
+const CFStringRef kTISPropertyInputSourceType = CFSTR("TISPropertyInputSourceType");
+const CFStringRef kTISTypeKeyboardLayout = CFSTR("TISTypeKeyboardLayout");
+const CFStringRef kTISNotifySelectedKeyboardInputSourceChanged = CFSTR("AppleSelectedInputSourcesChangedNotification");
 
 @interface AKInputSource : NSObject
 @property (nonatomic, copy) NSDictionary *properties;
@@ -385,6 +389,7 @@ static AKInputSource *AKUSInputSource(void) {
     source = [AKInputSource new];
     source.properties = @{
       (__bridge NSString *)kTISPropertyInputSourceID: @"com.apple.keylayout.US",
+      (__bridge NSString *)kTISPropertyInputSourceType: (__bridge NSString *)kTISTypeKeyboardLayout,
       (__bridge NSString *)kTISPropertyUnicodeKeyLayoutData: AKUSKeyboardLayoutData(),
     };
   });

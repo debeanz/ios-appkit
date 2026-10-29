@@ -209,3 +209,22 @@ CVTime CVDisplayLinkGetNominalOutputVideoRefreshPeriod(CVDisplayLinkRef link) {
   NSInteger fps = link ? [AKLink(link) framesPerSecond] : 60;
   return (CVTime){ .timeValue = 1, .timeScale = (int32_t)fps, .flags = 0 };
 }
+
+#pragma mark OpenGL texture caches (CoreVideoMac.h)
+
+CVReturn CVOpenGLTextureCacheCreate(CFAllocatorRef allocator, CFDictionaryRef cacheAttributes, void *cglContext,
+                                    void *cglPixelFormat, CFDictionaryRef textureAttributes, CVOpenGLTextureCacheRef *cacheOut) {
+  if (cacheOut) *cacheOut = NULL;
+  return kCVReturnUnsupported;
+}
+
+CVReturn CVOpenGLTextureCacheCreateTextureFromImage(CFAllocatorRef allocator, CVOpenGLTextureCacheRef cache, CVImageBufferRef image,
+                                                    CFDictionaryRef attributes, CVOpenGLTextureRef *textureOut) {
+  if (textureOut) *textureOut = NULL;
+  return kCVReturnUnsupported;
+}
+
+void CVOpenGLTextureCacheFlush(CVOpenGLTextureCacheRef cache, CVOptionFlags options) {}
+void CVOpenGLTextureCacheRelease(CVOpenGLTextureCacheRef cache) {}
+uint32_t CVOpenGLTextureGetName(CVOpenGLTextureRef texture) { return 0; }
+uint32_t CVOpenGLTextureGetTarget(CVOpenGLTextureRef texture) { return 0; }

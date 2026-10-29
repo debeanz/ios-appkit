@@ -97,7 +97,10 @@ static NSString *fromExecutablePath(NSString *name, NSString *programDir, NSStri
   return [@"@loader_path/" stringByAppendingString:relativePath(fileDir, target)];
 }
 
-// The build's routes for the client's system libraries: {macOS path: {action, to}}.
+// The build's routes for the client's system libraries: {macOS path: {action, to}}; and the
+// iOS libraries the shim's umbrella re-exports whole.
+static NSSet<NSString *> *gShimForwards;
+
 static NSDictionary<NSString *, NSDictionary *> *clientRoutes(void) {
   static NSDictionary *routes;
   static dispatch_once_t once;
@@ -106,9 +109,15 @@ static NSDictionary<NSString *, NSDictionary *> *clientRoutes(void) {
     NSData *json = [NSData dataWithContentsOfFile:[app stringByAppendingPathComponent:@"client/routes.json"]];
     NSDictionary *all = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:nil] : nil;
     routes = [all[@"routes"] isKindOfClass:NSDictionary.class] ? all[@"routes"] : @{};
+    gShimForwards = [all[@"reexports"] isKindOfClass:NSArray.class] ? [NSSet setWithArray:all[@"reexports"]] : [NSSet set];
     if (!routes.count) gameLog(@"no client/routes.json in the app; system libraries are routed by rule only");
   });
   return routes;
+}
+
+static NSSet<NSString *> *shimForwards(void) {
+  clientRoutes();
+  return gShimForwards;
 }
 
 // Where a game binary's library reference should point here. A name already routed comes
@@ -195,6 +204,67 @@ static NSData *arm64Code(NSData *file, NSString **why) {
   return nil;
 }
 
+// The names (without their leading underscore) a binary imports from each library it links,
+// in load-command order as two-level ordinals count them; nil when its symbol table can't tell.
+// Weak imports are left out: one that's missing binds to NULL and the binary still loads.
+static NSArray<NSArray<NSString *> *> *importsByLibrary(NSData *code) {
+  const struct mach_header_64 *mh = code.bytes;
+  if (!(mh->flags & MH_TWOLEVEL)) return nil;
+  const uint8_t *cmds = (const uint8_t *)(mh + 1);
+  const struct symtab_command *symtab = NULL;
+  NSUInteger libs = 0;
+  uint32_t off = 0;
+  for (uint32_t i = 0; i < mh->ncmds && off + sizeof(struct load_command) <= mh->sizeofcmds; i++) {
+    const struct load_command *lc = (const void *)(cmds + off);
+    if (!lc->cmdsize || off + lc->cmdsize > mh->sizeofcmds) return nil;
+    switch (lc->cmd) {
+      case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LAZY_LOAD_DYLIB: case LC_LOAD_UPWARD_DYLIB:
+        libs++;
+        break;
+      case LC_SYMTAB:
+        symtab = (const void *)lc;
+        break;
+    }
+    off += lc->cmdsize;
+  }
+  if (!symtab || symtab->symoff + (uint64_t)symtab->nsyms * sizeof(struct nlist_64) > code.length ||
+      (uint64_t)symtab->stroff + symtab->strsize > code.length) return nil;
+  const struct nlist_64 *syms = (const void *)((const uint8_t *)code.bytes + symtab->symoff);
+  const char *strs = (const char *)code.bytes + symtab->stroff;
+  NSMutableArray<NSMutableArray<NSString *> *> *byLibrary = [NSMutableArray array];
+  for (NSUInteger i = 0; i < libs; i++) [byLibrary addObject:[NSMutableArray array]];
+  for (uint32_t i = 0; i < symtab->nsyms; i++) {
+    const struct nlist_64 *s = &syms[i];
+    if ((s->n_type & N_TYPE) != N_UNDF || !(s->n_type & N_EXT) || s->n_value || (s->n_desc & N_WEAK_REF)) continue;
+    uint32_t ordinal = GET_LIBRARY_ORDINAL(s->n_desc);
+    if (ordinal < 1 || ordinal > libs || s->n_un.n_strx >= symtab->strsize) continue;
+    const char *name = strs + s->n_un.n_strx;
+    if (*name != '_') continue;
+    NSString *shown = [NSString stringWithUTF8String:name + 1];
+    if (shown) [byLibrary[ordinal - 1] addObject:shown];
+  }
+  return byLibrary;
+}
+
+// An iOS library a binary imports macOS-only names from goes through the shim instead, which
+// adds them, when the shim's umbrella re-exports the rest of that library whole (AVFoundation's
+// Mac capture presets in Unity's player). `file`, when given, is logged as the one that needed it.
+static NSString *throughShimIfLacking(NSString *lib, NSArray<NSString *> *names, NSString *file) {
+  if (!names.count || ![shimForwards() containsObject:lib]) return lib;
+  void *ios = dlopen(lib.fileSystemRepresentation, RTLD_LAZY | RTLD_LOCAL);
+  if (!ios) return lib;
+  for (NSString *name in names) {
+    if (dlsym(ios, name.UTF8String)) continue;
+    if (file) gameLog(@"  %@: its %@ goes through the shim, for %@ (macOS only)", file.lastPathComponent, lib.lastPathComponent, name);
+    return kShimName;
+  }
+  return lib;
+}
+
+// Beside a game's converted copy: a link to the app's Frameworks folder, for binaries whose
+// header has no room for that folder's full path (see convertFile).
+static NSString *const kShimLink = @".shim";
+
 // Converts one file in place: done again on every launch, which changes nothing once a file is
 // converted except the rpath to the app's Frameworks folder, kept current in case the app
 // moved. Returns nil when it is ready (*changed says whether it was written), else why it
@@ -242,96 +312,122 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
   }
   if (!macOS && !iOS) return @"no platform label";
 
-  NSMutableData *out = [NSMutableData data];
-  uint32_t ncmds = 0;
+  NSArray<NSArray<NSString *> *> *imports = importsByLibrary(code);
+  NSString *home = bundlePath.stringByDeletingLastPathComponent;
   struct rpath_command rpathHeader = { LC_RPATH, 0, { sizeof(struct rpath_command) } };
   NSData *rpathHeaderData = [NSData dataWithBytes:&rpathHeader length:sizeof rpathHeader];
-  off = 0;
-  for (uint32_t i = 0; i < mh->ncmds; i++) {
-    const struct load_command *lc = (const void *)(cmds + off);
-    NSData *original = [NSData dataWithBytes:lc length:lc->cmdsize];
-    off += lc->cmdsize;
-    switch (lc->cmd) {
-      // LC_CODE_SIGNATURE stays: the edits void the signature, and the signer replaces it.
-      case LC_BUILD_VERSION: {
-        NSMutableData *c = [original mutableCopy];
-        struct build_version_command *bv = c.mutableBytes;
-        if (bv->platform != PLATFORM_IOS) {
-          bv->platform = PLATFORM_IOS;
-          bv->minos = kMinOS;
-          bv->sdk = kSDK;
-        }
-        [out appendData:c];
-        break;
-      }
-      case LC_VERSION_MIN_MACOSX: {
-        NSMutableData *c = [original mutableCopy];
-        struct version_min_command *v = c.mutableBytes;
-        v->cmd = LC_VERSION_MIN_IPHONEOS;
-        v->version = kMinOS;
-        v->sdk = kSDK;
-        [out appendData:c];
-        break;
-      }
-      case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LAZY_LOAD_DYLIB: case LC_LOAD_UPWARD_DYLIB: {
-        const struct dylib_command *d = (const void *)lc;
-        if (d->dylib.name.offset >= lc->cmdsize) return @"bad library command";
-        NSString *name = @((const char *)lc + d->dylib.name.offset);
-        NSString *to = routeLibrary(name, programDir, fileDir);
-        if ([to isEqualToString:name]) { [out appendData:original]; break; }
-        struct dylib_command header = *d;
-        header.dylib.name.offset = sizeof header;
-        [out appendData:stringCommand(lc->cmd, sizeof header, [NSData dataWithBytes:&header length:sizeof header], to)];
-        break;
-      }
-      case LC_RPATH: {
-        const struct rpath_command *r = (const void *)lc;
-        if (r->path.offset >= lc->cmdsize) return @"bad rpath command";
-        NSString *rpath = @((const char *)lc + r->path.offset);
-        // The rpath to the app's Frameworks folder from an earlier conversion: added afresh below.
-        if ([rpath hasPrefix:@"/"] && [rpath hasSuffix:@"/Frameworks"] && ![rpath hasPrefix:bundlePath]) continue;
-        if ([rpath hasPrefix:@"@executable_path"]) {
-          [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, fromExecutablePath(rpath, programDir, fileDir))];
+  // A header too full for what's added makes room by levels. 1: the load commands only tools
+  // read go (source version, data-in-code and function-start tables, signing requirements,
+  // linker hints), and the Frameworks folder is reached through the short link beside the copy
+  // (kShimLink) instead of its full path. 2, for a library rather than the program: no rpath
+  // of its own at all; dyld also searches the rpaths of the images that load it.
+  NSMutableData *out;
+  uint32_t ncmds;
+  int squeeze = 0;
+  for (;; squeeze++) {
+    out = [NSMutableData data];
+    ncmds = 0;
+    NSUInteger dylibs = 0;
+    off = 0;
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+      const struct load_command *lc = (const void *)(cmds + off);
+      NSData *original = [NSData dataWithBytes:lc length:lc->cmdsize];
+      off += lc->cmdsize;
+      switch (lc->cmd) {
+        // LC_CODE_SIGNATURE stays: the edits void the signature, and the signer replaces it.
+        case LC_SOURCE_VERSION: case LC_DATA_IN_CODE: case LC_FUNCTION_STARTS: case LC_DYLIB_CODE_SIGN_DRS:
+        case LC_LINKER_OPTIMIZATION_HINT:
+          if (squeeze) continue;
+          [out appendData:original];
           break;
-        }
-        [out appendData:original];
-        break;
-      }
-      case LC_LOAD_DYLINKER: {
-        if (!exec) { [out appendData:original]; break; }
-        [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, @"@loader_path")];
-        break;
-      }
-      case LC_SEGMENT_64: {
-        const struct segment_command_64 *seg = (const void *)lc;
-        if (exec && !strncmp(seg->segname, "__PAGEZERO", 16)) {
-          // A library can't reserve the 4 GB at address 0: one page just below __TEXT, in its slot.
+        case LC_BUILD_VERSION: {
           NSMutableData *c = [original mutableCopy];
-          struct segment_command_64 *z = c.mutableBytes;
-          z->vmaddr = textVM >= 0x4000 ? textVM - 0x4000 : 0;
-          z->vmsize = 0x4000;
+          struct build_version_command *bv = c.mutableBytes;
+          if (bv->platform != PLATFORM_IOS) {
+            bv->platform = PLATFORM_IOS;
+            bv->minos = kMinOS;
+            bv->sdk = kSDK;
+          }
           [out appendData:c];
           break;
         }
-        [out appendData:original];
-        break;
+        case LC_VERSION_MIN_MACOSX: {
+          NSMutableData *c = [original mutableCopy];
+          struct version_min_command *v = c.mutableBytes;
+          v->cmd = LC_VERSION_MIN_IPHONEOS;
+          v->version = kMinOS;
+          v->sdk = kSDK;
+          [out appendData:c];
+          break;
+        }
+        case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LAZY_LOAD_DYLIB: case LC_LOAD_UPWARD_DYLIB: {
+          const struct dylib_command *d = (const void *)lc;
+          if (d->dylib.name.offset >= lc->cmdsize) return @"bad library command";
+          NSString *name = @((const char *)lc + d->dylib.name.offset);
+          NSString *to = routeLibrary(name, programDir, fileDir);
+          if (dylibs < imports.count) to = throughShimIfLacking(to, imports[dylibs], squeeze ? nil : path);
+          dylibs++;
+          if ([to isEqualToString:name]) { [out appendData:original]; break; }
+          struct dylib_command header = *d;
+          header.dylib.name.offset = sizeof header;
+          [out appendData:stringCommand(lc->cmd, sizeof header, [NSData dataWithBytes:&header length:sizeof header], to)];
+          break;
+        }
+        case LC_RPATH: {
+          const struct rpath_command *r = (const void *)lc;
+          if (r->path.offset >= lc->cmdsize) return @"bad rpath command";
+          NSString *rpath = @((const char *)lc + r->path.offset);
+          // The rpath to the app's Frameworks folder from an earlier conversion: added afresh below.
+          if ([rpath hasPrefix:@"/"] && [rpath hasSuffix:@"/Frameworks"] && ![rpath hasPrefix:bundlePath]) continue;
+          if ([rpath hasPrefix:@"@loader_path/"] && [rpath.lastPathComponent isEqualToString:kShimLink]) continue;
+          if ([rpath hasPrefix:@"@executable_path"]) {
+            [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, fromExecutablePath(rpath, programDir, fileDir))];
+            break;
+          }
+          [out appendData:original];
+          break;
+        }
+        case LC_LOAD_DYLINKER: {
+          if (!exec) { [out appendData:original]; break; }
+          [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, @"@loader_path")];
+          break;
+        }
+        case LC_SEGMENT_64: {
+          const struct segment_command_64 *seg = (const void *)lc;
+          if (exec && !strncmp(seg->segname, "__PAGEZERO", 16)) {
+            // A library can't reserve the 4 GB at address 0: one page just below __TEXT, in its slot.
+            NSMutableData *c = [original mutableCopy];
+            struct segment_command_64 *z = c.mutableBytes;
+            z->vmaddr = textVM >= 0x4000 ? textVM - 0x4000 : 0;
+            z->vmsize = 0x4000;
+            [out appendData:c];
+            break;
+          }
+          [out appendData:original];
+          break;
+        }
+        default:
+          [out appendData:original];
       }
-      default:
-        [out appendData:original];
+      ncmds++;
     }
-    ncmds++;
+    // How the shim (and what it re-exports) is found: by the app's Frameworks folder.
+    if (squeeze < 2) {
+      NSString *rpath = squeeze ? [@"@loader_path/" stringByAppendingString:relativePath(fileDir, [home stringByAppendingPathComponent:kShimLink])]
+                                : frameworks;
+      [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, rpath)];
+      ncmds++;
+    }
+    if (exec && !hasId) {
+      struct dylib_command header = { LC_ID_DYLIB, 0, { { sizeof(struct dylib_command) }, 0, 0x10000, 0x10000 } };
+      [out appendData:stringCommand(LC_ID_DYLIB, sizeof header, [NSData dataWithBytes:&header length:sizeof header], path)];
+      ncmds++;
+    }
+    if (sizeof *mh + out.length <= firstSection) break;
+    if (squeeze == (exec ? 1 : 2))
+      return [NSString stringWithFormat:@"no room in its header (%llu bytes free, %lu needed)",
+              firstSection - sizeof *mh, (unsigned long)out.length];
   }
-  // How the shim (and what it re-exports) is found: by the app's Frameworks folder.
-  [out appendData:stringCommand(LC_RPATH, sizeof rpathHeader, rpathHeaderData, frameworks)];
-  ncmds++;
-  if (exec && !hasId) {
-    struct dylib_command header = { LC_ID_DYLIB, 0, { { sizeof(struct dylib_command) }, 0, 0x10000, 0x10000 } };
-    [out appendData:stringCommand(LC_ID_DYLIB, sizeof header, [NSData dataWithBytes:&header length:sizeof header], path)];
-    ncmds++;
-  }
-  if (sizeof *mh + out.length > firstSection)
-    return [NSString stringWithFormat:@"no room in its header (%llu bytes free, %lu needed)",
-            firstSection - sizeof *mh, (unsigned long)out.length];
   // Already as it should be: left alone.
   if (thin && !exec && mh->ncmds == ncmds && mh->sizeofcmds == out.length && !memcmp(cmds, out.bytes, out.length)) return nil;
 
@@ -348,6 +444,10 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
   NSError *error;
   if (![m writeToFile:path options:NSDataWritingAtomic error:&error]) return error.localizedDescription;
   *changed = YES;
+  if (squeeze)
+    gameLog(@"  %@: its header was nearly full; it made room by %@", path.lastPathComponent,
+            squeeze == 1 ? @"leaving out what only tools read and reaching the app's Frameworks through a short link"
+                         : @"also finding the app's Frameworks through what loads it");
   return nil;
 }
 
@@ -773,6 +873,7 @@ static void probeSigning(NSString *home) {
 // Every Mach-O in the app converted and signed; nil when the program can run, else why not.
 static NSString *convertApp(NSBundle *app, NSString *program) {
   NSString *programDir = program.stringByDeletingLastPathComponent;
+  linkTo([app.bundlePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:kShimLink], frameworksDir());
   NSMutableArray<NSString *> *ready = [NSMutableArray array], *changedFiles = [NSMutableArray array];
   unsigned skipped = 0;
   BOOL changed;

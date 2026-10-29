@@ -221,3 +221,15 @@ AK_SEC(OSStatus, AKSecCertificateGetData, SecCertificateGetData, (SecCertificate
   data->Data = (uint8_t *)der.bytes;
   return 0;
 }
+// Certificate fields by OID (the old CSSM names, as dotted strings): iOS has no field
+// dictionary, so asking for one fails and the caller does without (Unity's player only reads
+// a certificate's subject and issuer names this way).
+extern const CFStringRef AKSecOIDX509V1IssuerName __asm__("_kSecOIDX509V1IssuerName");
+const CFStringRef AKSecOIDX509V1IssuerName = CFSTR("2.16.840.1.113741.2.1.1.1.5");
+extern const CFStringRef AKSecOIDX509V1SubjectName __asm__("_kSecOIDX509V1SubjectName");
+const CFStringRef AKSecOIDX509V1SubjectName = CFSTR("2.16.840.1.113741.2.1.1.1.8");
+AK_SEC(CFDictionaryRef, AKSecCertificateCopyValues, SecCertificateCopyValues,
+       (SecCertificateRef certificate, CFArrayRef keys, CFErrorRef *error)) {
+  if (error) *error = CFErrorCreate(NULL, kCFErrorDomainOSStatus, AKErrSecUnimplemented, NULL);
+  return NULL;
+}
