@@ -126,8 +126,8 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 
 - (NSScreen *)screen { return NSScreen.mainScreen; }
 // A game's window is a 1x (non-Retina) one: Mac games of its time size their picture in points
-// (GameMaker drew in a third of a 3x surface), and drawing 9x the pixels cost frames. Core
-// Animation scales what it draws up to the screen.
+// (GameMaker drew in a third of a 3x surface). Its OpenGL frames are still drawn at the screen's
+// resolution: AKOpenGL scales what it draws to the window, as macOS does for a non-Retina app.
 - (CGFloat)backingScaleFactor { return _gameWindow ? 1 : self.screen.backingScaleFactor; }
 
 - (void)setStyleMask:(NSWindowStyleMask)styleMask { _styleMask = styleMask | NSWindowStyleMaskFullScreen; }

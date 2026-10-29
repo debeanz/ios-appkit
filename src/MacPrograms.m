@@ -1204,6 +1204,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     pthread_mutex_unlock(&gGameLock);
   };
   preloadSharedLibraries();
+  AKGameInstallTimers();
   // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.
   void *image = dlopen(program.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
   if (!image) {

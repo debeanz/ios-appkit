@@ -182,3 +182,5 @@ void AKPrepareGameOpenGLViews(void);
 void AKGameBindControllers(const struct mach_header *header, intptr_t slide, const char *name);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
+// GameTimers.m: repeating NSTimers made on a game's main thread fire late rather than skip a tick.
+void AKGameInstallTimers(void);

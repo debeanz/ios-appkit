@@ -393,6 +393,10 @@ CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint index, CGLPixelForm
   double scale;
   volatile int wantedWidth, wantedHeight;   // set on the main thread, read when drawing
   volatile BOOL measuring;                  // a measure queued on the main thread
+  double requestedScale;                    // pixels per point the view asked for
+  double virtualScale;                      // drawn pixels per pixel the game thinks it draws
+  GLint viewport[4], scissor[4];            // as the game set them, in its pixels
+  BOOL haveViewport, haveScissor, resized;
   // The IOSurfaces frames are drawn into, and the one bound now.
   IOSurfaceRef surfaces[3];
   int slot, width, height, rowPixels;
@@ -503,6 +507,7 @@ static void sizeSurfaces(AKGLContext *c) {
   c->height = h;
   c->rowPixels = (int)(IOSurfaceGetBytesPerRow(c->surfaces[0]) / 4);
   c->slot = 0;
+  c->resized = YES;
   glLog(@"context %p draws %dx%d", c, w, h);
 }
 
@@ -517,6 +522,11 @@ static BOOL bind(AKGLContext *c) {
   if (!OSMesaMakeCurrent(c->mesa, IOSurfaceGetBaseAddress(s), GL_UNSIGNED_BYTE, c->width, c->height)) return NO;
   OSMesaPixelStore(OSMESA_ROW_LENGTH, c->rowPixels);
   OSMesaPixelStore(OSMESA_Y_UP, 0);   // row 0 at the top, as the layer shows it
+  // A new size or scale: the game's window drawing, scaled to it.
+  if (c->resized) {
+    c->resized = NO;
+    applyRects(c);
+  }
   return YES;
 }
 
@@ -576,13 +586,34 @@ static void measureLater(AKGLContext *c) {
   });
 }
 
+static void applyRects(AKGLContext *c);
+
+// Pixels per point for a drawable asked for below the screen's resolution (a game's 1x window,
+// NSWindow.m): the screen's own, unless AK_GL_RENDER_SCALE asks for fewer (each frame is read
+// back from the GPU, so fewer pixels cost less). 0: the screen's.
+static double renderScale(void) {
+  static double scale;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    const char *env = getenv("AK_GL_RENDER_SCALE");
+    scale = env && atof(env) >= 1 ? atof(env) : 0;
+  });
+  return scale;
+}
+
 void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
   if (!ctx) return;
   AKGLContext *c = context(ctx);
   UIView *view = (__bridge UIView *)uiView;
-  double s = scale > 0 ? scale : 1;
+  double requested = scale > 0 ? scale : 1, screenScale = UIScreen.mainScreen.scale;
+  // Asked for less than the screen has: drawn at the render scale anyway, and what the game
+  // draws to its window is scaled up to it (glViewport and friends, below).
+  double s = requested < screenScale ? MIN(screenScale, MAX(requested, renderScale() ?: screenScale)) : requested;
   if (view && view == c->view && s == c->scale && c->layer) { measureLater(c); return; }
   c->scale = s;
+  c->requestedScale = requested;
+  c->virtualScale = s / requested;
+  c->resized = YES;
   onMain(^{
     if (c->view != view) {
       [c->layer removeFromSuperlayer];
@@ -597,14 +628,15 @@ void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
         c->layer = layer;
       }
     }
-    // Frames drawn below the screen's resolution (a game's 1x window) are scaled up by whole
-    // pixels, kept sharp rather than blurred.
-    CGFloat screenScale = view.window.screen.scale ?: UIScreen.mainScreen.scale;
+    // Frames below the screen's resolution are scaled up to it: by whole pixels kept sharp,
+    // else smoothly (2x on a 3x screen).
+    double up = screenScale / c->scale;
     c->layer.contentsScale = c->scale;
-    c->layer.magnificationFilter = c->scale < screenScale ? kCAFilterNearest : kCAFilterLinear;
+    c->layer.magnificationFilter = up > 1 && fabs(up - round(up)) < 0.01 ? kCAFilterNearest : kCAFilterLinear;
     measure(c);
   });
-  glLog(@"context %p shows in a %dx%d view (%.0fx)", ctx, c->wantedWidth, c->wantedHeight, c->scale);
+  glLog(@"context %p shows in a %dx%d view (%.0fx%@)", ctx, c->wantedWidth, c->wantedHeight, c->scale,
+        c->virtualScale > 1 ? [NSString stringWithFormat:@"; the game draws at %.0fx, scaled up", requested] : @"");
 }
 
 CGLError CGLUpdateContext(CGLContextObj ctx) {
@@ -776,6 +808,116 @@ void glReadBuffer(GLenum buffer) {
   GLint fbo = 0;
   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &fbo);
   MESA(void (*)(GLenum), glReadBuffer)(fbo ? buffer : toFront(buffer));
+}
+
+#pragma mark The window's pixels, for a game drawing in points
+
+// A game draws in points (its window is a 1x one, NSWindow.m) while its frames are drawn at the
+// render scale (AKGLSetDrawable). So what it draws to its window — viewport, scissor box, blit
+// destination — is scaled by virtualScale while the window's framebuffer (0) is bound, as macOS
+// scales a non-Retina app's window; its own framebuffers are left as they are, and it reads back
+// the values it set.
+enum { GL_VIEWPORT = 0x0BA2, GL_SCISSOR_BOX = 0x0C10, GL_READ_FRAMEBUFFER = 0x8CA8 };
+typedef void (*AKRectFn)(GLint, GLint, GLsizei, GLsizei);
+typedef void (*AKBindFn)(GLenum, GLuint);
+typedef void (*AKGetIntFn)(GLenum, GLint *);
+typedef void (*AKBlitFn)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLuint, GLenum);
+static struct { AKRectFn viewport, scissor; AKBindFn bind, bindEXT; AKGetIntFn getInteger; AKBlitFn blit, blitEXT; } real;
+
+static void loadReal(void) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    real.viewport = MESA(AKRectFn, glViewport);
+    real.scissor = MESA(AKRectFn, glScissor);
+    real.bind = MESA(AKBindFn, glBindFramebuffer);
+    real.bindEXT = MESA(AKBindFn, glBindFramebufferEXT);
+    real.getInteger = MESA(AKGetIntFn, glGetIntegerv);
+    real.blit = MESA(AKBlitFn, glBlitFramebuffer);
+    real.blitEXT = MESA(AKBlitFn, glBlitFramebufferEXT);
+  });
+}
+
+static AKGLContext *currentGL(void) { return tCurrent ? context(tCurrent) : nil; }
+
+// The scale for drawing now: virtualScale while the window is the draw framebuffer, else 1.
+static double windowScale(AKGLContext *c) {
+  if (!c || c->virtualScale <= 1) return 1;
+  GLint fbo = 0;
+  real.getInteger(GL_DRAW_FRAMEBUFFER_BINDING, &fbo);
+  return fbo == 0 ? c->virtualScale : 1;
+}
+
+static void scaledRect(AKRectFn fn, const GLint r[4], double k) {
+  fn((GLint)lround(r[0] * k), (GLint)lround(r[1] * k), (GLsizei)lround(r[2] * k), (GLsizei)lround(r[3] * k));
+}
+
+// The game's viewport and scissor box, at the scale for the framebuffer bound now. A game that
+// never set a viewport has the whole surface, as GL starts it out.
+static void applyRects(AKGLContext *c) {
+  loadReal();
+  double k = windowScale(c);
+  if (c->haveViewport) scaledRect(real.viewport, c->viewport, k);
+  else real.viewport(0, 0, c->width, c->height);
+  if (c->haveScissor) scaledRect(real.scissor, c->scissor, k);
+}
+
+void glViewport(GLint x, GLint y, GLsizei w, GLsizei h) {
+  loadReal();
+  AKGLContext *c = currentGL();
+  if (!c) { real.viewport(x, y, w, h); return; }
+  c->viewport[0] = x; c->viewport[1] = y; c->viewport[2] = w; c->viewport[3] = h;
+  c->haveViewport = YES;
+  scaledRect(real.viewport, c->viewport, windowScale(c));
+}
+
+void glScissor(GLint x, GLint y, GLsizei w, GLsizei h) {
+  loadReal();
+  AKGLContext *c = currentGL();
+  if (!c) { real.scissor(x, y, w, h); return; }
+  c->scissor[0] = x; c->scissor[1] = y; c->scissor[2] = w; c->scissor[3] = h;
+  c->haveScissor = YES;
+  scaledRect(real.scissor, c->scissor, windowScale(c));
+}
+
+static void bound(GLenum target) {
+  AKGLContext *c = currentGL();
+  if (target != GL_READ_FRAMEBUFFER && c && c->virtualScale > 1) applyRects(c);
+}
+void glBindFramebuffer(GLenum target, GLuint framebuffer) { loadReal(); real.bind(target, framebuffer); bound(target); }
+void glBindFramebufferEXT(GLenum target, GLuint framebuffer) { loadReal(); real.bindEXT(target, framebuffer); bound(target); }
+
+void glGetIntegerv(GLenum pname, GLint *data) {
+  loadReal();
+  AKGLContext *c = currentGL();
+  if (data && c && c->virtualScale > 1 && (pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX)) {
+    BOOL viewport = pname == GL_VIEWPORT;
+    if (viewport ? c->haveViewport : c->haveScissor) {
+      memcpy(data, viewport ? c->viewport : c->scissor, 4 * sizeof(GLint));
+      return;
+    }
+    real.getInteger(pname, data);   // never set: GL's own, in the game's pixels
+    double k = windowScale(c);
+    for (int i = 0; i < 4; i++) data[i] = (GLint)lround(data[i] / k);
+    return;
+  }
+  real.getInteger(pname, data);
+}
+
+static void blit(AKBlitFn fn, GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+                 GLuint mask, GLenum filter) {
+  double k = windowScale(currentGL());
+  fn(sx0, sy0, sx1, sy1, (GLint)lround(dx0 * k), (GLint)lround(dy0 * k), (GLint)lround(dx1 * k), (GLint)lround(dy1 * k),
+     mask, filter);
+}
+void glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLuint mask,
+                       GLenum filter) {
+  loadReal();
+  blit(real.blit, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+}
+void glBlitFramebufferEXT(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+                          GLuint mask, GLenum filter) {
+  loadReal();
+  blit(real.blitEXT, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
 }
 
 #pragma mark Apple's extensions

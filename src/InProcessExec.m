@@ -348,6 +348,11 @@ pid_t AKSpawnInProcess(const char *path, char *const argv[], char *const envp[],
   // 64 MB). Only the pages used are ever backed.
   pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  // A program's main thread is an app's main thread, which runs user-interactive: its timers
+  // and sleeps wake on time. At the launching thread's lower class, a game that sleeps until
+  // its next frame woke late, overran the frame, and its frame timer skipped a whole tick
+  // (DELTARUNE at 15 frames/s instead of 30).
+  pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INTERACTIVE, 0);
   int rc = pthread_create(&p->thread, &attr, procMain, p);
   pthread_attr_destroy(&attr);
   if (rc != 0) {
