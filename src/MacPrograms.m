@@ -1557,6 +1557,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     rebound += AKRebindSymbol(prefix.fileSystemRepresentation, "_NSGetExecutablePath", (void *)gameExecutablePath);
   }
   gameLog(@"loaded (%d images of its own); %d main-bundle and program-path calls redirected", (int)gGameImageCount, rebound);
+  AKGameTrackClasses();
   if (again) gameLog(@"%d of its images back as they were loaded, their initializers run again", freshStart(gGameBundlePath, gGameBundleReal));
   if (!loadedCopies) loadedCopies = [NSMutableDictionary dictionary];
   loadedCopies[appURL.path] = @[ copy, program ];

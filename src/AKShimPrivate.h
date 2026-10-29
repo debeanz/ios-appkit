@@ -201,6 +201,7 @@ void AKGameDisplayLinksStop(void);
 void AKGameHeapBegin(NSString *name);                                  // before its program loads
 void AKGameBindProcess(const struct mach_header *header, intptr_t slide);   // each of its images
 void AKGameWatchProcess(void);                                         // once
+void AKGameTrackClasses(void);                                         // its program loaded
 void AKGameTeardown(NSArray<NSString *> *images);                      // main thread, once it ended
 void AKGameRestoreClasses(void);                                       // launched again
 BOOL AKBlockIsDeadGameCode(id block);                                  // a block whose code is an ended game's

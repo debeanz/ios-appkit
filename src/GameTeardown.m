@@ -162,7 +162,13 @@ static void trackClass(Class cls) {
 }
 
 static void imageLoaded(const struct mach_header *header) {
-  if (!AKHeaderIsGameImage(header)) return;
+  static NSMutableSet<NSValue *> *tracked;
+  @synchronized (NSHashTable.class) {
+    if (!tracked) tracked = [NSMutableSet set];
+    NSValue *key = [NSValue valueWithPointer:header];
+    if ([tracked containsObject:key] || !AKHeaderIsGameImage(header)) return;
+    [tracked addObject:key];
+  }
   Dl_info info;
   if (!dladdr(header, &info) || !info.dli_fname) return;
   unsigned count = 0;
@@ -303,9 +309,18 @@ void AKGameWatchProcess(void) {
     gAddObserver = method_setImplementation(class_getInstanceMethod(c, @selector(addObserver:selector:name:object:)), (IMP)addObserver);
     gAddObserverBlock = method_setImplementation(class_getInstanceMethod(c, @selector(addObserverForName:object:queue:usingBlock:)),
                                                  (IMP)addObserverBlock);
-    objc_addLoadImageCallback(imageLoaded);
+    // The runtime calls this as each image's classes are ready (not in the SDK's headers; the
+    // launch also calls AKGameTrackClasses once its program is loaded).
+    void (*addLoadImageCallback)(void (*)(const struct mach_header *)) =
+        (void (*)(void (*)(const struct mach_header *)))dlsym(RTLD_DEFAULT, "objc_addLoadImageCallback");
+    if (addLoadImageCallback) addLoadImageCallback(imageLoaded);
     hookMetal();
   });
+}
+
+// The game's images loaded so far, their classes noted (again harmless: each image once).
+void AKGameTrackClasses(void) {
+  for (uint32_t i = 0; i < _dyld_image_count(); i++) imageLoaded(_dyld_get_image_header(i));
 }
 
 BOOL AKBlockIsDeadGameCode(id block) {
