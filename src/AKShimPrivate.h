@@ -116,6 +116,7 @@ int AKRebindSymbol(const char *pathPrefix, const char *symbol, void *replacement
 // One loaded image's imports (names with their leading underscore), each pointed at what the
 // block answers for it (NULL: left alone). Returns how many were changed.
 int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol));
+int AKRebindImportsFrom(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol, void *current));
 const char *AKInProcessCurrentPath(void);   // the program this thread is the main thread of, or NULL
 void AKInProcessDetach(pid_t pid);
 void AKInProcessForceExit(pid_t pid, int status);   // one that didn't end when asked

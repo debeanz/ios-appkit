@@ -714,6 +714,11 @@ void _exit(int status) {
 // Every import of one loaded image (its symbol name, with the leading underscore), pointed at
 // what `replacement` answers for it; NULL leaves it alone. Returns how many slots changed.
 int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol)) {
+  return AKRebindImportsFrom(header, slide, ^void *(const char *symbol, void *current) { return replacement(symbol); });
+}
+
+// The same, with where each slot points now.
+int AKRebindImportsFrom(const struct mach_header *header, intptr_t slide, void *(^replacement)(const char *symbol, void *current)) {
   const struct mach_header_64 *mh = (const struct mach_header_64 *)header;
   if (!mh || mh->magic != MH_MAGIC_64) return 0;
   const struct segment_command_64 *linkedit = NULL;
@@ -747,7 +752,7 @@ int AKRebindImports(const struct mach_header *header, intptr_t slide, void *(^re
       for (uint32_t k = 0; k < count; k++) {
         uint32_t idx = indirect[sect->reserved1 + k];
         if (idx & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS) || idx >= symtab->nsyms) continue;
-        void *to = replacement(strs + syms[idx].n_un.n_strx);
+        void *to = replacement(strs + syms[idx].n_un.n_strx, slots[k]);
         if (!to || slots[k] == to) continue;
         uintptr_t page = (uintptr_t)&slots[k] & ~(uintptr_t)(PAGE_SIZE - 1);
         int ro = seg->initprot == VM_PROT_READ || strcmp(seg->segname, "__DATA_CONST") == 0 ||

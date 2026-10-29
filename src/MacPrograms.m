@@ -1271,11 +1271,110 @@ static int freshStart(NSString *bundle, NSString *bundleReal) {
   return images;
 }
 
-static void imageAdded(const struct mach_header *header, intptr_t slide) {
+#pragma mark Bound as in its own process
+
+// Every game runs in this one process, and dyld ties a newly loaded image's operator new and
+// delete (and its other weak C++ definitions) to the first loaded image that exports one. That
+// can be a game that has ended, its heap gone: Cat Mail Co.'s IL2CPP code allocated through
+// DELTARUNE's GameMaker memory manager after DELTARUNE had ended, and crashed in it. It can be a
+// running game's engine library whose allocator iOS's libc++ doesn't share (Unity's player: see
+// hideOperatorNewDelete). And any C++ library Steam loads after a game would be tied the same
+// way. On a Mac each game has its own process and none of this can happen. So each image loaded
+// once a game has started is bound as its own process would bind it: operator new and delete to
+// the running game's program's own if it defines them (GameMaker's runner, as on a Mac), else
+// the system's; and any other import left pointing into an ended game's code to the image's own
+// definition of it.
+static const struct mach_header *gProgramHeader;   // the running game's program, once it loads
+static intptr_t gProgramSlide;
+static NSString *gProgramInBundle;                  // its path inside its bundle ("Contents/MacOS/X")
+static BOOL gGamesStarted;                          // a game has been launched in this run
+
+static BOOL isAllocator(const char *symbol) {
+  return !strncmp(symbol, "__Znw", 5) || !strncmp(symbol, "__Zna", 5) || !strncmp(symbol, "__Zdl", 5) || !strncmp(symbol, "__Zda", 5);
+}
+
+// The externals an image defines, by name (with the leading underscore), from its symbol table.
+static NSDictionary<NSString *, NSValue *> *definitionsOf(const struct mach_header *header, intptr_t slide) {
+  const struct mach_header_64 *mh = (const void *)header;
+  const struct segment_command_64 *linkedit = NULL;
+  const struct symtab_command *symtab = NULL;
+  const uint8_t *lc = (const uint8_t *)(mh + 1);
+  for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
+    const struct load_command *l = (const void *)lc;
+    if (l->cmd == LC_SEGMENT_64 && !strcmp(((const struct segment_command_64 *)l)->segname, SEG_LINKEDIT)) linkedit = (const void *)l;
+    else if (l->cmd == LC_SYMTAB) symtab = (const void *)l;
+  }
+  NSMutableDictionary *defs = [NSMutableDictionary dictionary];
+  if (!linkedit || !symtab) return defs;
+  uintptr_t base = (uintptr_t)slide + linkedit->vmaddr - linkedit->fileoff;
+  const struct nlist_64 *syms = (const void *)(base + symtab->symoff);
+  const char *strs = (const char *)(base + symtab->stroff);
+  for (uint32_t i = 0; i < symtab->nsyms; i++) {
+    if ((syms[i].n_type & (N_STAB | N_TYPE | N_EXT)) != (N_SECT | N_EXT)) continue;
+    NSString *name = [NSString stringWithUTF8String:strs + syms[i].n_un.n_strx];
+    if (name) defs[name] = [NSValue valueWithPointer:(void *)(syms[i].n_value + (uint64_t)slide)];
+  }
+  return defs;
+}
+
+static void bindAsItsOwnProcess(const struct mach_header *header, intptr_t slide, const char *name, BOOL game) {
+  static void *libcxx;
+  static NSDictionary *programDefinitions;
+  static const struct mach_header *programDefinitionsOf;
+  if (!libcxx) libcxx = dlopen("/usr/lib/libc++.1.dylib", RTLD_LAZY | RTLD_NOLOAD);
+  __block NSDictionary *own = nil;
+  __block int allocators = 0, fromEnded = 0;
+  __block BOOL programs = NO;
+  AKRebindImportsFrom(header, slide, ^void *(const char *symbol, void *current) {
+    if (isAllocator(symbol)) {
+      void *to = NULL;
+      if (game && gProgramHeader) {
+        if (programDefinitionsOf != gProgramHeader) {
+          programDefinitions = definitionsOf(gProgramHeader, gProgramSlide);
+          programDefinitionsOf = gProgramHeader;
+        }
+        to = [programDefinitions[@(symbol)] pointerValue];
+        programs |= to != NULL;
+      }
+      if (!to && libcxx) to = dlsym(libcxx, symbol + 1);
+      if (to && to != current) allocators++;
+      return to;
+    }
+    if (!AKAddressIsDeadGameCode(current)) return NULL;
+    if (!own) own = definitionsOf(header, slide);
+    void *mine = [own[@(symbol)] pointerValue];
+    if (mine) fromEnded++;
+    return mine;
+  });
+  if (!allocators && !fromEnded) return;
+  const char *base = name && strrchr(name, '/') ? strrchr(name, '/') + 1 : (name ?: "an image");
+  gameLog(@"  %s, bound as in its own process: %d operator new/delete imports to %@, %d imports from an ended game to its own",
+          base, allocators, programs ? @"its program's" : @"the system's", fromEnded);
+}
+
+static BOOL imageAdded(const struct mach_header *header, intptr_t slide);
+
+// dyld's hook: a game's images as imageAdded says; any other image loaded once games have
+// started (not iOS's own, in the shared cache) bound away from games.
+static void imageLoaded(const struct mach_header *header, intptr_t slide) {
+  if (imageAdded(header, slide) || !gGamesStarted || (header->flags & MH_DYLIB_IN_CACHE)) return;
+  Dl_info info;
+  bindAsItsOwnProcess(header, slide, dladdr(header, &info) ? info.dli_fname : NULL, NO);
+}
+
+// One of the running game's images (YES), set up as it loads.
+static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   NSString *bundlePath = gGameBundlePath, *real = gGameBundleReal;
   Dl_info info;
   if (!bundlePath || !dladdr(header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundlePath) || hasPrefix(info.dli_fname, real)))
-    return;
+    return NO;
+  // Its program loads first; then every image of its own is bound as in its own process.
+  NSString *path = @(info.dli_fname);
+  if (gProgramInBundle && [path hasSuffix:[@"/" stringByAppendingString:gProgramInBundle]]) {
+    gProgramHeader = header;
+    gProgramSlide = slide;
+  }
+  bindAsItsOwnProcess(header, slide, info.dli_fname, YES);
   // Its IOKit HID calls (gamepads) are answered from GameController, its sound goes to iOS's
   // output unit, its busy waits on the clock rest the core, and what it prints is watched for
   // its quitting.
@@ -1298,11 +1397,12 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
     for (int k = 0; k < all; k++) known |= gAllGameImages[k].start == range.start;
     if (!known && all < 256) { gAllGameImages[all] = range; gAllGameImageCount = all + 1; }
     int n = gGameImageCount;
-    if (n >= 128) return;
+    if (n >= 128) return YES;
     gGameImages[n] = range;
     gGameImageCount = n + 1;
-    return;
+    return YES;
   }
+  return YES;
 }
 
 BOOL AKAddressIsInGame(const void *address) {
@@ -1787,8 +1887,12 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
   gGameBundleReal = realpath(app.bundlePath.fileSystemRepresentation, real) ? [@(real) stringByAppendingString:@"/"] : nil;
   gGameProgram = program;
   gGameImageCount = 0;
+  gProgramHeader = NULL;
+  gProgramInBundle = [program hasPrefix:[app.bundlePath stringByAppendingString:@"/"]] ? [program substringFromIndex:app.bundlePath.length + 1]
+                                                                                       : program.lastPathComponent;
   static dispatch_once_t watchImages;
-  dispatch_once(&watchImages, ^{ _dyld_register_func_for_add_image(imageAdded); });
+  dispatch_once(&watchImages, ^{ _dyld_register_func_for_add_image(imageLoaded); });
+  gGamesStarted = YES;   // after the hook's first pass over what was already loaded
   for (uint32_t i = 0; i < _dyld_image_count(); i++) imageAdded(_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i));
   [environment enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
     if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class] && ![key hasPrefix:@"DYLD_"])
