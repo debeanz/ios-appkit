@@ -74,10 +74,6 @@ static NSString *frameworksDir(void) {
   return shimCorePath().stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
 }
 
-static NSString *shimPath(void) {
-  return [frameworksDir() stringByAppendingPathComponent:@"AppKitShim.framework/AppKitShim"];
-}
-
 // `to` from folder `fromDir`, as a relative path (for @loader_path), so a game folder that
 // moves keeps working.
 static NSString *relativePath(NSString *fromDir, NSString *to) {
@@ -1312,7 +1308,8 @@ int AKGameApplicationMain(int argc, const char *argv[]) {
   if (!app.delegate) {
     Class c = appDelegateClass();
     if (c) {
-      app.delegate = [c new];
+      id delegate = [c new];   // NSApplication keeps a game thread's delegate (a strong reference of its own)
+      app.delegate = delegate;
       gameLog(@"its app delegate: %s, made directly (its nib didn't make one)", class_getName(c));
     } else {
       gameLog(@"no app delegate found in it");
@@ -1607,14 +1604,16 @@ static void noteOwnAllocator(void *image) {
   if (mine && AKAddressIsInGame(mine)) gameLog(@"it has its own operator new/delete; the app's libraries keep the system's");
 }
 
-pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
-                             NSError **error) {
+// Why it couldn't start goes to *failure, a strong reference the failure block can set safely
+// (AKLaunchMacApplication hands it on).
+static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
+                                  NSError *__strong *failure) {
   appURL = appURL.URLByStandardizingPath;
   NSBundle *source = [NSBundle bundleWithURL:appURL];
   NSString *sourceProgram = programOf(source, appURL);
   void (^fail)(NSString *) = ^(NSString *why) {
     gameLog(@"can't start %@: %@", appURL.lastPathComponent, why);
-    if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOEXEC userInfo:@{ NSLocalizedDescriptionKey: why }];
+    *failure = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOEXEC userInfo:@{ NSLocalizedDescriptionKey: why }];
   };
   if (!source || !sourceProgram) { fail(@"no program in it"); return -1; }
   if (gGameProgram) { fail(@"a game is already running"); return -1; }
@@ -1752,5 +1751,13 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     AKWHGameChanged();
     watchGameLoop(pid);
   });
+  return pid;
+}
+
+pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment,
+                             NSError **error) {
+  NSError *failure = nil;
+  pid_t pid = launchMacApplication(appURL, arguments, environment, &failure);
+  if (failure && error) *error = failure;
   return pid;
 }
