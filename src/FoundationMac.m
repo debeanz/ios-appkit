@@ -1,6 +1,7 @@
 #import "AKShimPrivate.h"
 #import "AppKitShim/FoundationMac.h"
 #import <UserNotifications/UserNotifications.h>
+#import <objc/runtime.h>
 
 NSString *const NSUserNotificationDefaultSoundName = @"DefaultSoundName";
 
@@ -243,3 +244,32 @@ AK_UNIMPLEMENTED_CLASS_FORWARDER
 AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER
 @end
+
+#pragma mark NSProcessInfo's macOS-only calls
+
+// Sudden and automatic termination (a Mac app saying it may be killed without notice) mean
+// nothing to an iOS app, and its user is always "mobile". Added only where iOS's NSProcessInfo
+// lacks them, so a Mac game calling them doesn't stop on an unrecognized selector.
+static void processNoop(id self, SEL _cmd) {}
+static void processNoop1(id self, SEL _cmd, id reason) {}
+static void processNoopB(id self, SEL _cmd, BOOL on) {}
+static BOOL processNo(id self, SEL _cmd) { return NO; }
+static id processUserName(id self, SEL _cmd) { return @"mobile"; }
+
+__attribute__((constructor)) static void addProcessInfoCalls(void) {
+  Class c = NSProcessInfo.class;
+  struct { const char *name; IMP imp; const char *types; } calls[] = {
+    { "disableSuddenTermination", (IMP)processNoop, "v@:" },
+    { "enableSuddenTermination", (IMP)processNoop, "v@:" },
+    { "disableAutomaticTermination:", (IMP)processNoop1, "v@:@" },
+    { "enableAutomaticTermination:", (IMP)processNoop1, "v@:@" },
+    { "setAutomaticTerminationSupportEnabled:", (IMP)processNoopB, "v@:B" },
+    { "automaticTerminationSupportEnabled", (IMP)processNo, "B@:" },
+    { "userName", (IMP)processUserName, "@@:" },
+    { "fullUserName", (IMP)processUserName, "@@:" },
+  };
+  for (size_t i = 0; i < sizeof calls / sizeof calls[0]; i++) {
+    SEL s = sel_registerName(calls[i].name);
+    if (!class_respondsToSelector(c, s)) class_addMethod(c, s, calls[i].imp, calls[i].types);
+  }
+}

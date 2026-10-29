@@ -69,6 +69,8 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 - (NSSize)convertSizeFromBacking:(NSSize)size;
 - (NSPoint)convertPointToBacking:(NSPoint)point;
 - (NSPoint)convertPointFromBacking:(NSPoint)point;
+- (NSRect)backingAlignedRect:(NSRect)rect options:(unsigned long long)options;
+- (BOOL)mouse:(NSPoint)point inRect:(NSRect)rect;
 
 - (void)addSubview:(NSView *)view;
 - (void)removeFromSuperview;

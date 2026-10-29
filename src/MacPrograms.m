@@ -257,6 +257,81 @@ static NSString *throughShimIfLacking(NSString *lib, NSArray<NSString *> *names,
   return lib;
 }
 
+// UnityPlayer.dylib defines operator new and delete (Unity's memory manager) and exports them.
+// dyld then binds every image loaded after it that refers to operator new (GameAssembly's code
+// among them) to Unity's, while iOS's libc++ in the shared cache keeps the system delete: a
+// std::string grown inside libc++ frees Unity's memory with free(), "pointer being freed was not
+// allocated" in il2cpp_init (found running Tunic's Mac build, debeanz/tunic-ios-port). Renaming
+// the four in its export trie, one letter of the edge that completes each name (__Znwm becomes
+// __ZnWm, its nothrow and sized variants with it), makes every image use the system's. Same
+// length: nothing moves. Returns how many are (with `write`, were) renamed.
+static const char *const kOperatorNewDelete[] = { "__Znwm", "__Znam", "__ZdlPv", "__ZdaPv" };
+
+static BOOL readUleb(const uint8_t *p, const uint8_t *end, uint64_t *value, const uint8_t **next) {
+  uint64_t v = 0;
+  unsigned shift = 0;
+  while (p < end) {
+    uint8_t b = *p++;
+    if (shift < 64) v |= (uint64_t)(b & 0x7f) << shift;
+    shift += 7;
+    if (!(b & 0x80)) { *value = v; *next = p; return YES; }
+  }
+  return NO;
+}
+
+static int hideInTrie(const uint8_t *trie, size_t size, uint8_t *write, uint64_t node, char *name, size_t length, int depth) {
+  if (depth > 64 || node >= size) return 0;
+  const uint8_t *p = trie + node, *end = trie + size;
+  uint64_t terminal, child;
+  if (!readUleb(p, end, &terminal, &p) || terminal >= (uint64_t)(end - p)) return 0;
+  p += terminal;
+  int children = *p++, hidden = 0;
+  for (int i = 0; i < children && p < end; i++) {
+    const uint8_t *label = p;
+    size_t n = strnlen((const char *)label, (size_t)(end - label));
+    if (label + n >= end || !readUleb(label + n + 1, end, &child, &p)) return hidden;
+    if (length + n >= 256) continue;
+    memcpy(name + length, label, n);
+    name[length + n] = 0;
+    BOOL completes = NO, leadsOn = NO;
+    for (size_t k = 0; k < sizeof kOperatorNewDelete / sizeof kOperatorNewDelete[0]; k++) {
+      const char *t = kOperatorNewDelete[k];
+      size_t tl = strlen(t);
+      if (length >= tl || strncmp(name, t, length)) continue;   // not on its path
+      if (length + n >= tl) completes |= !strncmp(name, t, tl);
+      else leadsOn |= !strncmp(name, t, length + n);
+    }
+    if (completes) {
+      if (write) write[label - trie] = islower(label[0]) ? (uint8_t)toupper(label[0]) : '!';
+      hidden++;
+    } else if (leadsOn) {
+      hidden += hideInTrie(trie, size, write, child, name, length + n, depth + 1);
+    }
+  }
+  return hidden;
+}
+
+static int hideOperatorNewDelete(const uint8_t *code, size_t size, uint8_t *write) {
+  const struct mach_header_64 *mh = (const void *)code;
+  const uint8_t *cmds = (const uint8_t *)(mh + 1);
+  uint32_t off = 0, trieOff = 0, trieSize = 0;
+  for (uint32_t i = 0; i < mh->ncmds && off + sizeof(struct load_command) <= mh->sizeofcmds; i++) {
+    const struct load_command *lc = (const void *)(cmds + off);
+    if (!lc->cmdsize) break;
+    if (lc->cmd == LC_DYLD_INFO || lc->cmd == LC_DYLD_INFO_ONLY) {
+      trieOff = ((const struct dyld_info_command *)lc)->export_off;
+      trieSize = ((const struct dyld_info_command *)lc)->export_size;
+    } else if (lc->cmd == LC_DYLD_EXPORTS_TRIE) {
+      trieOff = ((const struct linkedit_data_command *)lc)->dataoff;
+      trieSize = ((const struct linkedit_data_command *)lc)->datasize;
+    }
+    off += lc->cmdsize;
+  }
+  if (!trieSize || (uint64_t)trieOff + trieSize > size) return 0;
+  char name[256] = "";
+  return hideInTrie(code + trieOff, trieSize, write ? write + trieOff : NULL, 0, name, 0, 0);
+}
+
 // Beside a game's converted copy: a link to the app's Frameworks folder, for binaries whose
 // header has no room for that folder's full path (see convertFile).
 static NSString *const kShimLink = @".shim";
@@ -424,10 +499,12 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
       return [NSString stringWithFormat:@"no room in its header (%llu bytes free, %lu needed)",
               firstSection - sizeof *mh, (unsigned long)out.length];
   }
+  int operators = [path.lastPathComponent isEqualToString:@"UnityPlayer.dylib"] ? hideOperatorNewDelete(code.bytes, code.length, NULL) : 0;
   // Already as it should be: left alone.
-  if (thin && !exec && mh->ncmds == ncmds && mh->sizeofcmds == out.length && !memcmp(cmds, out.bytes, out.length)) return nil;
+  if (thin && !exec && !operators && mh->ncmds == ncmds && mh->sizeofcmds == out.length && !memcmp(cmds, out.bytes, out.length)) return nil;
 
   NSMutableData *m = [code mutableCopy];
+  if (operators) hideOperatorNewDelete(m.bytes, m.length, m.mutableBytes);
   struct mach_header_64 *w = m.mutableBytes;
   memset((uint8_t *)(w + 1), 0, MAX(w->sizeofcmds, (uint32_t)out.length));
   memcpy((uint8_t *)(w + 1), out.bytes, out.length);
@@ -440,6 +517,8 @@ static NSString *convertFile(NSString *path, NSString *programDir, NSString *bun
   NSError *error;
   if (![m writeToFile:path options:NSDataWritingAtomic error:&error]) return error.localizedDescription;
   *changed = YES;
+  if (operators)
+    gameLog(@"  %@: its own operator new and delete hidden (%d exports): every library uses the system's", path.lastPathComponent, operators);
   if (squeeze)
     gameLog(@"  %@: its header was nearly full; it made room by %@", path.lastPathComponent,
             squeeze == 1 ? @"leaving out what only tools read and reaching the app's Frameworks through a short link"
@@ -1107,6 +1186,7 @@ BOOL AKHeaderIsGameImage(const struct mach_header *header) {
 }
 
 static void bindOutput(const struct mach_header *header, intptr_t slide);   // its printing (below)
+static void bindUnityQuit(const struct mach_header *header, intptr_t slide);   // Unity's quit (below)
 
 #pragma mark Starting a game again
 
@@ -1204,6 +1284,8 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindClock(header, slide);
   AKGameBindLuaJIT(header, slide);   // LuaJIT's compiler off, its interpreter on (GameLuaJIT.m)
   bindOutput(header, slide);
+  size_t nameLength = strlen(info.dli_fname);
+  if (nameLength > 18 && !strcmp(info.dli_fname + nameLength - 18, "/UnityPlayer.dylib")) bindUnityQuit(header, slide);
   AKGameBindProcess(header, slide);   // its heap, exit handlers and dispatch sources (GameTeardown.m)
   snapshotImage(header, slide);
   const struct mach_header_64 *mh = (const void *)header;
@@ -1537,6 +1619,27 @@ static void bindOutput(const struct mach_header *header, intptr_t slide) {
   });
 }
 
+// Unity's Mac player quits by tearing itself down and then stopping the run loop it saved, its
+// only CFRunLoopStop (Tunic's Mac build showed it, debeanz/tunic-ios-port); on a Mac the process
+// ends next. Here a game's player stopping the app's main run loop or the game's own ends the game
+// a second later, unless it ended itself. The app's main run loop (UIKit's) isn't actually stopped.
+static void unityRunLoopStop(CFRunLoopRef loop) {
+  CFRunLoopRef main = CFRunLoopGetMain();
+  if (loop != main) CFRunLoopStop(loop);
+  pid_t pid = gGamePid;
+  if (!pid || (loop != main && loop != gGameRunLoop)) return;
+  gameLog(@"Unity's player stopped its run loop (how it quits): ending the game in 1 s unless it ends itself");
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    if (gGamePid == pid) endGame(pid);
+  });
+}
+
+static void bindUnityQuit(const struct mach_header *header, intptr_t slide) {
+  AKRebindImports(header, slide, ^void *(const char *symbol) {
+    return strcmp(symbol, "_CFRunLoopStop") ? NULL : (void *)unityRunLoopStop;
+  });
+}
+
 static void gameEnded(pid_t pid, int status) {
   pthread_mutex_lock(&gGameLock);   // held by the launcher until gGamePid is set
   BOOL ours = pid == gGamePid;
@@ -1708,6 +1811,7 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
   AKGameInstallTimers();
   AKGameWatchProcess();
   AKGameWatchGameControllers();
+  AKGameMetalPrepare();
   AKGameHeapBegin(appURL.lastPathComponent.stringByDeletingPathExtension);
   AKGameAudioBegin();
   // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.
@@ -1732,6 +1836,14 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
 
   NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObject:program];
   for (id a in arguments) if ([a isKindOfClass:NSString.class]) [args addObject:a];
+  // Unity's own log (graphics setup, scripting errors) next to the app's logs: on a Mac it goes to
+  // ~/Library/Logs, deep in this app's container.
+  if ([NSFileManager.defaultManager fileExistsAtPath:[copy stringByAppendingPathComponent:@"Contents/Frameworks/UnityPlayer.dylib"]] &&
+      ![args containsObject:@"-logFile"]) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    [args addObjectsFromArray:@[ @"-logFile", [docs stringByAppendingPathComponent:@"unity-player.log"] ]];
+    gameLog(@"Unity's log: Documents/unity-player.log");
+  }
   char **argv = calloc(args.count + 1, sizeof(char *));
   for (NSUInteger i = 0; i < args.count; i++) argv[i] = (char *)args[i].UTF8String;
   pid_t pid = AKSpawnInProcess(program.fileSystemRepresentation, argv, NULL, "/");

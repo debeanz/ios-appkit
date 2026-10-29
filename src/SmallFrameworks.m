@@ -54,7 +54,10 @@ uint32_t AKCTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef *descriptor
 #pragma mark CoreFoundation / IOKit
 
 NSString *const NSURLTagNamesKey = @"NSURLTagNamesKey";
-CFDictionaryRef IODisplayCreateInfoDictionary(uint32_t framebuffer, uint32_t options) { return NULL; }
+// Empty rather than NULL: Unity's player looks its display's name up in it without checking.
+CFDictionaryRef IODisplayCreateInfoDictionary(uint32_t framebuffer, uint32_t options) {
+  return CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+}
 
 #pragma mark VideoToolbox
 

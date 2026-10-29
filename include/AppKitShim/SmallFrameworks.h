@@ -40,7 +40,8 @@ extern NSString *const kCAContextCIFilterBehavior;
 #pragma mark CoreFoundation / IOKit
 
 extern NSString *const NSURLTagNamesKey;
-// The display info dictionary macOS builds from an IOKit display service; iOS exposes none.
+// The display info dictionary macOS builds from an IOKit display service; iOS exposes none, so
+// it comes back empty.
 extern CFDictionaryRef IODisplayCreateInfoDictionary(uint32_t framebuffer, uint32_t options) CF_RETURNS_RETAINED;
 
 #pragma mark VideoToolbox

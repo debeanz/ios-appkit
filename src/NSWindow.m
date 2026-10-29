@@ -333,9 +333,24 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 
 - (NSPoint)mouseLocationOutsideOfEventStream { return [NSEvent mouseLocation]; }
 
-// Borderless on iOS: the content rect and frame rect are the same.
+// Borderless on iOS: the content rect and frame rect are the same, for any style.
 - (NSRect)contentRectForFrameRect:(NSRect)frameRect { return frameRect; }
 - (NSRect)frameRectForContentRect:(NSRect)contentRect { return contentRect; }
++ (NSRect)contentRectForFrameRect:(NSRect)frameRect styleMask:(NSWindowStyleMask)style { return frameRect; }
++ (NSRect)frameRectForContentRect:(NSRect)contentRect styleMask:(NSWindowStyleMask)style { return contentRect; }
+
+// Window points and backing pixels, at the window's backing scale.
+- (NSRect)convertRectToBacking:(NSRect)r {
+  CGFloat s = self.backingScaleFactor;
+  return NSMakeRect(r.origin.x * s, r.origin.y * s, r.size.width * s, r.size.height * s);
+}
+- (NSRect)convertRectFromBacking:(NSRect)r {
+  CGFloat s = self.backingScaleFactor;
+  return NSMakeRect(r.origin.x / s, r.origin.y / s, r.size.width / s, r.size.height / s);
+}
+- (NSRect)backingAlignedRect:(NSRect)r options:(unsigned long long)options {
+  return [self convertRectFromBacking:AKNearestPixelRect([self convertRectToBacking:r])];
+}
 
 #pragma mark Coordinates — every window fills the screen from its corner
 

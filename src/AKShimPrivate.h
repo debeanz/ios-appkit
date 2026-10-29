@@ -2,6 +2,12 @@
 #import "AppKitShim/AppKit.h"
 #import <UIKit/UIKit.h>
 
+// A rect's edges moved to the nearest whole unit (backing pixels, for backingAlignedRect:options:).
+static inline NSRect AKNearestPixelRect(NSRect r) {
+  CGFloat x0 = round(NSMinX(r)), y0 = round(NSMinY(r)), x1 = round(NSMaxX(r)), y1 = round(NSMaxY(r));
+  return NSMakeRect(x0, y0, x1 - x0, y1 - y0);
+}
+
 // The UIView behind every NSView. Drawing lives in NSView.m; touch, keyboard and
 // pointer input are added by a category in InputBridge.m.
 @interface _AKShimBackingView : UIView
@@ -192,6 +198,8 @@ void AKGameControllersHoldBack(void);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioBegin(void);    // a game starts: the app's audio session plays (each launch)
+// MetalCompat.m: Metal answers a Mac game's code as a Mac GPU would (once, before the first game).
+void AKGameMetalPrepare(void);
 void AKGameAudioStop(void);     // the game ended: all its sound stops (its units and queues, the session)
 void AKGameAudioRelease(void);  // and, its threads stopped, its units and queues go
 // GameHID.m: the game ended: its HID managers and devices stop calling it.

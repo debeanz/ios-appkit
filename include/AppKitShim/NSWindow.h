@@ -73,4 +73,9 @@ extern NSString *const NSBackingPropertyOldScaleFactorKey;
 - (NSPoint)mouseLocationOutsideOfEventStream;
 - (NSRect)contentRectForFrameRect:(NSRect)frameRect;
 - (NSRect)frameRectForContentRect:(NSRect)contentRect;
++ (NSRect)contentRectForFrameRect:(NSRect)frameRect styleMask:(NSWindowStyleMask)style;
++ (NSRect)frameRectForContentRect:(NSRect)contentRect styleMask:(NSWindowStyleMask)style;
+- (NSRect)convertRectToBacking:(NSRect)rect;
+- (NSRect)convertRectFromBacking:(NSRect)rect;
+- (NSRect)backingAlignedRect:(NSRect)rect options:(unsigned long long)options;
 @end

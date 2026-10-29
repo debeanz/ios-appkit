@@ -499,6 +499,17 @@ static void AKOnMainLater(dispatch_block_t block) {
   CGFloat s = [self _ak_backingScale];
   return NSMakeRect(r.origin.x / s, r.origin.y / s, r.size.width / s, r.size.height / s);
 }
+// Edges to the nearest backing pixel (AppKit's NSAlignAllEdgesNearest; the per-edge options
+// aren't told apart).
+- (NSRect)backingAlignedRect:(NSRect)r options:(unsigned long long)options {
+  return [self convertRectFromBacking:AKNearestPixelRect([self convertRectToBacking:r])];
+}
+
+// A point in a rect as AppKit counts it: the edge the y axis starts from is inside.
+- (BOOL)mouse:(NSPoint)p inRect:(NSRect)r {
+  if (p.x < NSMinX(r) || p.x >= NSMaxX(r)) return NO;
+  return self.isFlipped ? (p.y >= NSMinY(r) && p.y < NSMaxY(r)) : (p.y > NSMinY(r) && p.y <= NSMaxY(r));
+}
 - (NSSize)convertSizeToBacking:(NSSize)size {
   CGFloat s = [self _ak_backingScale];
   return NSMakeSize(size.width * s, size.height * s);
