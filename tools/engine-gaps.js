@@ -63,6 +63,7 @@ function arm64Slice(buf) {
   let arm64e = false;
   for (let i = 0; i < all.length; i++) {
     if (all[i].cpu !== mg.CPU_ARM64) continue;
+    if (all[i].buf.length < 32 || all[i].buf.readUInt32LE(0) !== 0xfeedfacf) return { archive: true };   // a static library's slice
     if (subtypes[i] === CPU_SUBTYPE_ARM64E) { arm64e = true; continue; }
     return { slice: all[i].buf };
   }
@@ -122,9 +123,11 @@ function main() {
       } catch { continue; }
       if (buf.length < 32 || !mg.slices(buf).length) continue;
       for (const [re, what] of CODEGEN) if (re.test('/' + rel)) e.codegen.push(`${rel}: ${what}`);
-      const { slice, why } = arm64Slice(buf);
+      const { slice, why, archive } = arm64Slice(buf);
+      if (archive) continue;   // linked into a game when it's built, not loaded
       if (!slice) { e.cannotRun.push(`${rel}: ${why}`); continue; }
-      const r = mg.parseSlice(slice);
+      let r;
+      try { r = mg.parseSlice(slice); } catch (err) { e.cannotRun.push(`${rel}: unreadable (${err.message})`); continue; }
       if (r.platform && r.platform !== 'macOS') continue;   // an xcframework's iOS copies
       e.binaries++;
       if (slice.includes('_luaJIT_setmode\0')) e.luajit.push(rel);
