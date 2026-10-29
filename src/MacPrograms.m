@@ -1021,6 +1021,7 @@ int AKGameApplicationMain(int argc, const char *argv[]) {
   NSApplication *app = NSApplication.sharedApplication;
   NSDictionary *info = gGameBundle.infoDictionary;
   gameLog(@"NSApplicationMain: principal class %@, main nib %@", info[@"NSPrincipalClass"] ?: @"-", info[@"NSMainNibFile"] ?: @"-");
+  gameLog(@"its display: %ld Hz", (long)AKDisplayRefreshRate(UIScreen.mainScreen));
   // As AppKit does: the main nib makes its delegate, windows and views, NSApp its owner.
   NSString *mainNib = [info[@"NSMainNibFile"] isKindOfClass:NSString.class] ? info[@"NSMainNibFile"] : nil;
   if (mainNib) AKLoadNib(mainNib, gGameBundle, app, NULL);

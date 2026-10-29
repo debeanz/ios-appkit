@@ -42,7 +42,7 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
 
 // 1 to a game, as its windows are (NSWindow.m).
 - (CGFloat)backingScaleFactor { return AKIsGameThread() ? 1 : _screen.scale; }
-- (NSInteger)maximumFramesPerSecond { return _screen.maximumFramesPerSecond; }
+- (NSInteger)maximumFramesPerSecond { return AKDisplayRefreshRate(_screen); }   // CVDisplayLink.m
 
 // EDR (HDR) headroom. These return a CGFloat, which the unimplemented-method fallback
 // can't fake (it would set the integer, not the floating-point, return register and SDL

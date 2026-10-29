@@ -196,3 +196,6 @@ BOOL AKGameOverlayShown(void);
 void AKGameOverlayHide(void);    // back to the game
 void AKGameOverlayReset(void);   // the game ended
 BOOL AKControllerMenuViewPressed(GCController *controller, BOOL menu);
+
+// CVDisplayLink.m: the refresh rate every display query reports (the screen's, at most 60 Hz).
+NSInteger AKDisplayRefreshRate(UIScreen *screen);

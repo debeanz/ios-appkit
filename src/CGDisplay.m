@@ -119,7 +119,7 @@ static AKDisplayMode *AKModeForDisplay(CGDirectDisplayID display) {
   m.height = (size_t)pts.height;
   m.pixelWidth = (size_t)(pts.width * screen.scale);
   m.pixelHeight = (size_t)(pts.height * screen.scale);
-  m.refreshRate = (double)screen.maximumFramesPerSecond; // 120 on ProMotion screens
+  m.refreshRate = (double)AKDisplayRefreshRate(screen);   // CVDisplayLink.m: as frames go out
   return m;
 }
 

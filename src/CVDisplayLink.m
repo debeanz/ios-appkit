@@ -31,12 +31,7 @@ static uint64_t AKHostTimeFromSeconds(CFTimeInterval seconds) {
   CADisplayLink *_link; // touched only on _thread
 }
 
-// At most 60: Mac apps that pace frames by the display link here draw on the CPU (Chromium
-// composites in software), and a ProMotion screen's 120 Hz doubled that work for no gain.
-- (NSInteger)framesPerSecond {
-  NSInteger fps = AKScreenForDisplayID(self.display).maximumFramesPerSecond;
-  return fps > 0 ? MIN(fps, 60) : 60;
-}
+- (NSInteger)framesPerSecond { return AKDisplayRefreshRate(AKScreenForDisplayID(self.display)); }
 
 - (CVTimeStamp)timeStampForTime:(CFTimeInterval)t period:(CFTimeInterval)period {
   CVTimeStamp ts = {0};
@@ -100,6 +95,16 @@ static uint64_t AKHostTimeFromSeconds(CFTimeInterval seconds) {
 
 @end
 
+// The refresh rate every display query answers with: the screen's, at most 60 Hz. An app gets
+// 120 Hz ticks on a ProMotion screen only when its own Info.plist asks (here, LiveContainer's),
+// and frames go out at 60 (AKOpenGL.m), so 60 is the rate a Mac app actually sees. Saying 120
+// while delivering 60 halved a game that counts refreshes (DELTARUNE ran at half speed). It also
+// spares the CPU: Chromium composites in software.
+NSInteger AKDisplayRefreshRate(UIScreen *screen) {
+  NSInteger fps = screen.maximumFramesPerSecond;
+  return fps > 0 ? MIN(fps, 60) : 60;
+}
+
 static AKDisplayLink *AKLink(CVDisplayLinkRef ref) { return (__bridge AKDisplayLink *)(void *)ref; }
 
 CVReturn CVDisplayLinkCreateWithCGDisplay(CGDirectDisplayID displayID, CVDisplayLinkRef *out) {
@@ -154,11 +159,10 @@ CVReturn CVDisplayLinkStop(CVDisplayLinkRef link) {
 
 Boolean CVDisplayLinkIsRunning(CVDisplayLinkRef link) { return link && AKLink(link).running; }
 
-// Seconds per refresh of the link's display (the panel's fastest rate: ProMotion goes to 120 Hz).
+// Seconds per refresh of the link's display, as it ticks.
 double CVDisplayLinkGetActualOutputVideoRefreshPeriod(CVDisplayLinkRef link) {
   UIScreen *screen = link ? AKScreenForDisplayID(AKLink(link).display) : nil;
-  NSInteger fps = (screen ?: UIScreen.mainScreen).maximumFramesPerSecond;
-  return fps > 0 ? 1.0 / fps : 0;
+  return 1.0 / AKDisplayRefreshRate(screen ?: UIScreen.mainScreen);
 }
 
 CGDirectDisplayID CVDisplayLinkGetCurrentCGDisplay(CVDisplayLinkRef link) { return link ? AKLink(link).display : kCGNullDirectDisplay; }
