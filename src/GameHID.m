@@ -9,6 +9,7 @@
 #import "AKShimPrivate.h"
 #import <GameController/GameController.h>
 #import <mach/mach_time.h>
+#import <objc/runtime.h>
 
 typedef int32_t AKIOReturn;
 enum { kAKIOReturnSuccess = 0, kAKIOReturnUnsupported = (int32_t)0xe00002c7 };
@@ -185,7 +186,10 @@ static AKHIDDevice *deviceFor(GCController *controller) {
   }
 }
 
+static void holdBackGameControllerElements(void);
+
 void AKGameControllersHoldBack(void) {
+  holdBackGameControllerElements();
   @synchronized (AKHIDDevice.class) {
     for (GCController *c in GCController.controllers) {
       if (!c.extendedGamepad) continue;
@@ -545,5 +549,172 @@ void AKGameControllersShutdown(void) {
     stopTimer(&d->timer);
     d->input = (AKValueCallback){ NULL, NULL };
     d->removed = NULL;
+  }
+}
+
+#pragma mark Games that read GameController themselves
+
+// A game that reads controllers through GameController (rather than IOKit HID above) holds the
+// same GCController objects Steam's interface does. Its reads and handlers get the treatment the
+// HID path gives: while Steam's overlay is over it the controller is at rest for it (reads are
+// zero, its handlers aren't called), a button held as the overlay closes is up for it until let
+// go (the A that chose Resume), Menu and View come as Steam lets them through (held back a
+// moment, for the View + Menu chord) and Home is Steam's. Only calls from the game's own code are
+// touched: Steam's interface reads the same objects.
+static char kHeldKey;
+
+static GCController *controllerOf(id element, int *which) {   // which: 1 Menu, 2 View, 3 Home, 0 other
+  *which = 0;
+  for (GCController *c in GCController.controllers) {
+    GCExtendedGamepad *g = c.extendedGamepad;
+    if (!g) continue;
+    if (element == g.buttonMenu) { *which = 1; return c; }
+    if (element == g.buttonOptions) { *which = 2; return c; }
+    if (element == g.buttonHome) { *which = 3; return c; }
+  }
+  return nil;
+}
+
+// Whether the game sees this element at rest now; `down` is its real state.
+static BOOL atRestForGame(id element, BOOL down) {
+  if (AKGameOverlayShown()) return YES;
+  if (objc_getAssociatedObject(element, &kHeldKey)) {
+    if (down) return YES;
+    objc_setAssociatedObject(element, &kHeldKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  return NO;
+}
+
+static void holdBackGameControllerElements(void) {
+  for (GCController *c in GCController.controllers) {
+    for (GCControllerElement *e in c.physicalInputProfile.allElements) {
+      if ([e isKindOfClass:GCControllerButtonInput.class] && ((GCControllerButtonInput *)e).isPressed)
+        objc_setAssociatedObject(e, &kHeldKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+  }
+}
+
+static NSMutableSet<NSValue *> *gHookedMethods;
+
+static BOOL claimMethod(Method m) {
+  if (!m) return NO;
+  @synchronized (GCController.class) {
+    if (!gHookedMethods) gHookedMethods = [NSMutableSet set];
+    NSValue *key = [NSValue valueWithPointer:m];
+    if ([gHookedMethods containsObject:key]) return NO;
+    [gHookedMethods addObject:key];
+  }
+  return YES;
+}
+
+static void hookButtonClass(Class cls) {
+  SEL valueSel = @selector(value), pressedSel = @selector(isPressed);
+  Method value = class_getInstanceMethod(cls, valueSel), pressed = class_getInstanceMethod(cls, pressedSel);
+  if (claimMethod(value)) {
+    __block IMP orig = NULL;
+    orig = method_setImplementation(value, imp_implementationWithBlock(^float(GCControllerButtonInput *self) {
+      float v = ((float (*)(id, SEL))orig)(self, valueSel);
+      if (!AKAddressIsInGame(__builtin_return_address(0))) return v;
+      int which;
+      GCController *c = controllerOf(self, &which);
+      if (which == 3) return 0;
+      if (which) return !AKGameOverlayShown() && AKControllerMenuViewPressed(c, which == 1) ? 1 : 0;
+      return atRestForGame(self, v > 0.5f) ? 0 : v;
+    }));
+  }
+  if (claimMethod(pressed)) {
+    __block IMP orig = NULL;
+    orig = method_setImplementation(pressed, imp_implementationWithBlock(^BOOL(GCControllerButtonInput *self) {
+      BOOL p = ((BOOL (*)(id, SEL))orig)(self, pressedSel);
+      if (!AKAddressIsInGame(__builtin_return_address(0))) return p;
+      int which;
+      GCController *c = controllerOf(self, &which);
+      if (which == 3) return NO;
+      if (which) return !AKGameOverlayShown() && AKControllerMenuViewPressed(c, which == 1);
+      return atRestForGame(self, p) ? NO : p;
+    }));
+  }
+}
+
+static void hookAxisClass(Class cls) {
+  SEL valueSel = @selector(value);
+  Method value = class_getInstanceMethod(cls, valueSel);
+  if (!claimMethod(value)) return;
+  __block IMP orig = NULL;
+  orig = method_setImplementation(value, imp_implementationWithBlock(^float(GCControllerAxisInput *self) {
+    float v = ((float (*)(id, SEL))orig)(self, valueSel);
+    return AKAddressIsInGame(__builtin_return_address(0)) && AKGameOverlayShown() ? 0 : v;
+  }));
+}
+
+// Handlers the game sets are wrapped: not called while it should see the controller at rest (a
+// button's release after the overlay closed included, as it never saw that press).
+static void hookHandlerSetter(Class cls, SEL sel, id (^wrap)(id element, id handler)) {
+  Method m = class_getInstanceMethod(cls, sel);
+  if (!claimMethod(m)) return;
+  __block IMP orig = NULL;
+  orig = method_setImplementation(m, imp_implementationWithBlock(^(id self, id handler) {
+    if (handler && AKAddressIsInGame(__builtin_return_address(0))) handler = wrap(self, handler);
+    ((void (*)(id, SEL, id))orig)(self, sel, handler);
+  }));
+}
+
+static void hookElementClasses(Class button, Class axis, Class dpad) {
+  if (button) {
+    hookButtonClass(button);
+    hookHandlerSetter(button, @selector(setValueChangedHandler:), ^id(id element, id handler) {
+      GCControllerButtonValueChangedHandler h = handler;
+      return ^(GCControllerButtonInput *b, float value, BOOL pressed) { if (!atRestForGame(b, pressed)) h(b, value, pressed); };
+    });
+    hookHandlerSetter(button, @selector(setPressedChangedHandler:), ^id(id element, id handler) {
+      GCControllerButtonValueChangedHandler h = handler;
+      return ^(GCControllerButtonInput *b, float value, BOOL pressed) { if (!atRestForGame(b, pressed)) h(b, value, pressed); };
+    });
+  }
+  if (axis) {
+    hookAxisClass(axis);
+    hookHandlerSetter(axis, @selector(setValueChangedHandler:), ^id(id element, id handler) {
+      GCControllerAxisValueChangedHandler h = handler;
+      return ^(GCControllerAxisInput *a, float value) { if (!AKGameOverlayShown()) h(a, value); };
+    });
+  }
+  if (dpad) {
+    hookHandlerSetter(dpad, @selector(setValueChangedHandler:), ^id(id element, id handler) {
+      GCControllerDirectionPadValueChangedHandler h = handler;
+      return ^(GCControllerDirectionPad *d, float x, float y) { if (!AKGameOverlayShown()) h(d, x, y); };
+    });
+  }
+}
+
+static id wrapGamepadHandler(id element, GCExtendedGamepadValueChangedHandler h) {
+  return ^(GCExtendedGamepad *g, GCControllerElement *e) {
+    BOOL down = [e isKindOfClass:GCControllerButtonInput.class] && ((GCControllerButtonInput *)e).isPressed;
+    if (!atRestForGame(e, down)) h(g, e);
+  };
+}
+
+void AKGameWatchGameControllers(void) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    hookElementClasses(GCControllerButtonInput.class, GCControllerAxisInput.class, GCControllerDirectionPad.class);
+    hookHandlerSetter(GCExtendedGamepad.class, @selector(setValueChangedHandler:), ^id(id element, id h) { return wrapGamepadHandler(element, h); });
+    // A controller connected later may bring classes of its own.
+    [NSNotificationCenter.defaultCenter addObserverForName:GCControllerDidConnectNotification object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *n) { AKGameWatchGameControllers(); }];
+    hookHandlerSetter(GCPhysicalInputProfile.class, @selector(setValueDidChangeHandler:), ^id(id element, id handler) {
+      void (^h)(GCPhysicalInputProfile *, GCControllerElement *) = handler;
+      return ^(GCPhysicalInputProfile *p, GCControllerElement *e) {
+        BOOL down = [e isKindOfClass:GCControllerButtonInput.class] && ((GCControllerButtonInput *)e).isPressed;
+        if (!atRestForGame(e, down)) h(p, e);
+      };
+    });
+  });
+  // The concrete classes of the controllers connected now (GameController may use subclasses).
+  for (GCController *c in GCController.controllers) {
+    GCExtendedGamepad *g = c.extendedGamepad;
+    if (!g) continue;
+    hookElementClasses(object_getClass(g.buttonA), object_getClass(g.leftThumbstick.xAxis), object_getClass(g.dpad));
+    hookHandlerSetter(object_getClass(g), @selector(setValueChangedHandler:), ^id(id element, id h) { return wrapGamepadHandler(element, h); });
   }
 }

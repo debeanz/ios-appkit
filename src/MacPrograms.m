@@ -1541,6 +1541,7 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
   preloadSharedLibraries();
   AKGameInstallTimers();
   AKGameWatchProcess();
+  AKGameWatchGameControllers();
   AKGameHeapBegin(appURL.lastPathComponent.stringByDeletingPathExtension);
   AKGameAudioBegin();
   // Global, as on macOS: its plugins (libYoYoGamepad) bind flat-namespace symbols to the program.

@@ -205,16 +205,32 @@ static NSView *AKViewUnder(NSWindow *w, NSPoint windowPoint) {
   return ((_AKShimBackingView *)hit).owner ?: w.contentView;
 }
 
+// The running game's window in front of everything (no Steam overlay over it), or nil.
+static NSWindow *AKGameWindowInFront(void) {
+  if (!AKGameIsRunning() || AKGameOverlayShown()) return nil;
+  NSWindow *found = nil;
+  for (NSWindow *w in NSApp.windows) {
+    if (!w._ak_gameWindow || !w.visible) continue;
+    if (w.isKeyWindow) return w;
+    if (!found) found = w;
+  }
+  return found;
+}
+
 static void AKPostOnMain(AKCGEvent *ev) {
   NSEventModifierFlags flags = (NSEventModifierFlags)(ev.flags & AKFlagMask);
+  // Keys and the mouse Steam posts while a game is in front are Steam Input's (a controller
+  // played as keyboard and mouse for a game without controller support): they go to the game's
+  // own event loop, as macOS puts them in its event queue.
+  NSWindow *game = AKGameWindowInFront();
   // With the Safari engine Steam's interface is web pages, so the keys Steam types (its
   // on-screen keyboard, played with a controller) go to the focused page, not a window here.
-  if (AKWHStageView() && (ev.type == kCGEventKeyDown || ev.type == kCGEventKeyUp)) {
+  if (!game && AKWHStageView() && (ev.type == kCGEventKeyDown || ev.type == kCGEventKeyUp)) {
     AKWHTypeKey(ev.type == kCGEventKeyDown, ev.fields[@(kCGKeyboardEventKeycode)].unsignedShortValue, AKEventText(ev),
                 (flags & NSEventModifierFlagCommand) != 0);
     return;
   }
-  NSWindow *w = NSApp.keyWindow;
+  NSWindow *w = game ?: NSApp.keyWindow;
   if (!w) return;
   NSEvent *e = nil;
   switch (ev.type) {
@@ -243,6 +259,12 @@ static void AKPostOnMain(AKCGEvent *ev) {
       break;
     }
     default: return;
+  }
+  if (game) {
+    static unsigned logged;
+    if (++logged <= 5) fprintf(stderr, "[AppKitShim] game: Steam Input sends it an event (CGEvent type %d)\n", (int)ev.type);
+    [NSApp _ak_postGameEvent:e];
+    return;
   }
   [NSApp sendEvent:e];
 }

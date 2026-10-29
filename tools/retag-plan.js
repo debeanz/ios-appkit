@@ -42,9 +42,12 @@ const SHIM_INSTALL = '@rpath/AppKitShim.framework/AppKitShim';
 // Helper programs the app runs in-process (iOS won't launch them as processes): the
 // packager turns each into a loadable library (tools/exec-to-dylib.js) and the shim runs its
 // main() on a thread (src/InProcessExec.m). Steam Helper is steamwebhelper, the CEF program
-// that draws Steam's whole interface, Big Picture included.
+// that draws Steam's whole interface, Big Picture included; ipcserver is Steam's IPC broker.
 const IN_PROCESS_PROGRAMS = [
   /^Frameworks\/Steam Helper\.app\/Contents\/MacOS\/Steam Helper$/,
+  // com.valvesoftware.steam.ipctool, which steam_osx registers with launchd on a Mac:
+  // SteamAPI_Init - Steam's own components and every game's Steamworks - finds Steam through it.
+  /^ipcserver$/,
 ];
 
 function isMissing(p) {

@@ -49,6 +49,7 @@ UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);
 @interface NSApplication (AKShimPrivate)
 - (void)_registerWindow:(NSWindow *)window;
 - (void)_unregisterWindow:(NSWindow *)window;
+- (void)_ak_postGameEvent:(NSEvent *)event;   // into the running game's event loop
 @end
 
 @interface NSEvent (AKShimPrivate)
@@ -195,6 +196,9 @@ void AKGameAudioStop(void);     // the game ended: all its sound stops (its unit
 void AKGameAudioRelease(void);  // and, its threads stopped, its units and queues go
 // GameHID.m: the game ended: its HID managers and devices stop calling it.
 void AKGameControllersShutdown(void);
+// GameHID.m: games reading GameController themselves see it as the HID path shows it (overlay,
+// held buttons, Menu/View). Each launch.
+void AKGameWatchGameControllers(void);
 // CVDisplayLink.m: the game ended: display links calling its code stop.
 void AKGameDisplayLinksStop(void);
 // GameTeardown.m: what ends with a game, as with its process on a Mac (see there).

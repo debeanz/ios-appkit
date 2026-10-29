@@ -506,6 +506,35 @@ static void onImageAdded(const struct mach_header *mh, intptr_t slide) {
   if (strstr(info.dli_fname, "Steam Helper.app/Contents/MacOS/Steam Helper")) redirectHelperWindows(info.dli_fname);
 }
 
+// Steam's IPC broker. On a Mac steam_osx registers ipcserver with launchd as the Mach service
+// com.valvesoftware.steam.ipctool; SteamAPI_Init - in Steam's own components ("ipcserver init
+// failed" without it) and in every game's Steamworks - looks it up to reach Steam. It runs here
+// in-process, before Steam, its service in the shim's in-process bootstrap (MachBootstrap.m).
+static void startIPCServer(NSString *client) {
+  // A game's Steamworks (libsteam_api) loads steamclient.dylib from where Steam lives on a Mac,
+  // <Steam root>/Steam.AppBundle/Steam/Contents/MacOS: that folder leads to the client here,
+  // so it gets the steamclient.dylib Steam already runs (dyld hands back the loaded image).
+  NSString *macos = [steamRoot() stringByAppendingPathComponent:@"Steam.AppBundle/Steam/Contents/MacOS"];
+  NSFileManager *fm = NSFileManager.defaultManager;
+  NSString *target = [fm destinationOfSymbolicLinkAtPath:macos error:nil];
+  if (![target isEqualToString:client]) {
+    [fm removeItemAtPath:macos error:nil];
+    [fm createDirectoryAtPath:macos.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    NSError *error;
+    if ([fm createSymbolicLinkAtPath:macos withDestinationPath:client error:&error]) hostlog(@"Steam.AppBundle leads to the client, for games' Steamworks");
+    else hostlog(@"  Steam.AppBundle link failed: %@", error.localizedDescription);
+  }
+  NSString *path = [client stringByAppendingPathComponent:@"ipcserver"];
+  if (!gSpawnInProcess || !gIsInProcess || !gIsInProcess(path.fileSystemRepresentation)) {
+    hostlog(@"  ipcserver isn't runnable in-process: Steamworks can't reach Steam");
+    return;
+  }
+  char *argv[] = { strdup(path.fileSystemRepresentation), NULL };
+  pid_t pid = gSpawnInProcess(path.fileSystemRepresentation, argv, NULL, client.fileSystemRepresentation);
+  if (pid > 0) hostlog(@"Steam's IPC broker (ipcserver) running in-process as pid %d", pid);
+  else hostlog(@"  ipcserver didn't start (%d)", pid);
+}
+
 // Point every Steam image's CreateSimpleProcess at the host's, and register the helper's
 // extra arguments with the shim.
 static void installProcessLauncher(void) {
@@ -590,6 +619,7 @@ static void launchSteam(void *steamui, void *launcher) {
               master ? master : "(unset)", service ? service : "(unset)");
     });
   }
+  startIPCServer(client);
   hostlog(@"calling SteamDllMainEx (%p) with: %@", entry, [args componentsJoinedByString:@" "]);
   hostlog(@"(Steam's own output goes to steam-console.log; a crash goes to crash.log)");
   int rc = entry(argc, argv, launcherPump);

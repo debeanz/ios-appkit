@@ -169,6 +169,12 @@ static char kGameEventKey;
 
 static BOOL isGameEvent(NSEvent *e) { return objc_getAssociatedObject(e, &kGameEventKey) != nil; }
 
+// An event for the running game's loop, from anywhere (Steam Input's keys and mouse, CGEvents.m).
+- (void)_ak_postGameEvent:(NSEvent *)event {
+  objc_setAssociatedObject(event, &kGameEventKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  [self postEvent:event atStart:NO];
+}
+
 - (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart {
   if (AKGameIsRunning() && (AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0))))
     objc_setAssociatedObject(event, &kGameEventKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
