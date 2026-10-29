@@ -27,6 +27,7 @@
 // its own (NSApplication.m), and its windows go above Steam's interface (NSWindow.m).
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <crt_externs.h>
 #import <dlfcn.h>
 #import <fcntl.h>
 #import <limits.h>
@@ -926,6 +927,88 @@ static BOOL hasPrefix(const char *path, NSString *prefix) {
 
 static void bindOutput(const struct mach_header *header, intptr_t slide);   // its printing (below)
 
+#pragma mark Starting a game again
+
+// A game's images stay loaded after it ends (dyld never unloads an image with Objective-C in
+// it), and a second launch ran main() over the first run's globals: GameMaker printed "Failed
+// to load the game" and stopped. So each game image's own data - its __data, __bss and
+// __common sections, the C and C++ globals - is copied as dyld hands the image over, and its
+// initializers noted; a later launch of the same game puts those bytes back and runs the
+// initializers again (fresh C++ globals, static locals' guards cleared), as a new process
+// would start. Objective-C sections, pointers bound to other libraries and constant data are
+// left alone; what the first run allocated stays allocated.
+typedef struct {
+  const struct mach_header_64 *header;
+  int spans, inits;
+  struct { uint8_t *at; size_t size; uint8_t *copy; } span[8];
+  uintptr_t init[64];
+} ak_snapshot;
+static ak_snapshot gSnapshots[32];
+static int gSnapshotCount;
+
+static void snapshotImage(const struct mach_header *header, intptr_t slide) {
+  const struct mach_header_64 *mh = (const void *)header;
+  for (int i = 0; i < gSnapshotCount; i++) if (gSnapshots[i].header == mh) return;
+  if (gSnapshotCount >= 32 || mh->magic != MH_MAGIC_64) return;
+  ak_snapshot *s = &gSnapshots[gSnapshotCount];
+  memset(s, 0, sizeof *s);
+  s->header = mh;
+  const uint8_t *lc = (const uint8_t *)(mh + 1);
+  for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
+    const struct segment_command_64 *seg = (const void *)lc;
+    if (seg->cmd != LC_SEGMENT_64) continue;
+    BOOL data = !strncmp(seg->segname, "__DATA", 16) || !strncmp(seg->segname, "__DATA_DIRTY", 16);
+    const struct section_64 *sect = (const void *)(seg + 1);
+    for (uint32_t j = 0; j < seg->nsects; j++, sect++) {
+      uint32_t type = sect->flags & SECTION_TYPE;
+      if (type == S_MOD_INIT_FUNC_POINTERS) {
+        const uintptr_t *fn = (const uintptr_t *)(sect->addr + slide);
+        for (uint64_t k = 0; k < sect->size / sizeof(uintptr_t) && s->inits < 64; k++) s->init[s->inits++] = fn[k];
+      } else if (type == S_INIT_FUNC_OFFSETS) {
+        const uint32_t *off = (const uint32_t *)(sect->addr + slide);
+        for (uint64_t k = 0; k < sect->size / sizeof(uint32_t) && s->inits < 64; k++) s->init[s->inits++] = (uintptr_t)mh + off[k];
+      } else if (data && sect->size && s->spans < 8 &&
+                 (!strncmp(sect->sectname, "__data", 16) || !strncmp(sect->sectname, "__bss", 16) || !strncmp(sect->sectname, "__common", 16))) {
+        uint8_t *at = (uint8_t *)(sect->addr + slide), *copy = malloc(sect->size);
+        if (!copy) continue;
+        memcpy(copy, at, sect->size);
+        s->span[s->spans].at = at;
+        s->span[s->spans].size = sect->size;
+        s->span[s->spans].copy = copy;
+        s->spans++;
+      }
+    }
+  }
+  gSnapshotCount++;
+}
+
+// Every image of the game in `bundle` (a path with its trailing slash) back as it was loaded.
+static int freshStart(NSString *bundle, NSString *bundleReal) {
+  int images = 0;
+  for (int i = 0; i < gSnapshotCount; i++) {
+    ak_snapshot *s = &gSnapshots[i];
+    Dl_info info;
+    if (!dladdr(s->header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundle) || hasPrefix(info.dli_fname, bundleReal)))
+      continue;
+    for (int k = 0; k < s->spans; k++) memcpy(s->span[k].at, s->span[k].copy, s->span[k].size);
+    images++;
+  }
+  // Then their initializers, in the order the images loaded.
+  const char *argv[] = { gGameProgram.fileSystemRepresentation, NULL };
+  char exec[PATH_MAX + 32];
+  snprintf(exec, sizeof exec, "executable_path=%s", argv[0]);
+  const char *apple[] = { exec, NULL };
+  for (int i = 0; i < gSnapshotCount; i++) {
+    ak_snapshot *s = &gSnapshots[i];
+    Dl_info info;
+    if (!dladdr(s->header, &info) || !info.dli_fname || !(hasPrefix(info.dli_fname, bundle) || hasPrefix(info.dli_fname, bundleReal)))
+      continue;
+    for (int k = 0; k < s->inits; k++)
+      ((void (*)(int, const char **, char **, const char **, const void *))s->init[k])(1, argv, *_NSGetEnviron(), apple, NULL);
+  }
+  return images;
+}
+
 static void imageAdded(const struct mach_header *header, intptr_t slide) {
   NSString *bundlePath = gGameBundlePath, *real = gGameBundleReal;
   Dl_info info;
@@ -938,6 +1021,7 @@ static void imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindAudio(header, slide);
   AKGameBindClock(header, slide);
   bindOutput(header, slide);
+  snapshotImage(header, slide);
   const struct mach_header_64 *mh = (const void *)header;
   const uint8_t *lc = (const uint8_t *)(mh + 1);
   for (uint32_t i = 0; i < mh->ncmds; i++, lc += ((const struct load_command *)lc)->cmdsize) {
@@ -1162,7 +1246,7 @@ static void gameSaidItQuit(void) {
   if (!pid || gWatchingQuit) return;
   gWatchingQuit = YES;
   gNextGameStarted = NO;
-  gameLog(@"it printed ###game_end###: it is quitting");
+  gameLog(@"it is shutting down (game_end): it is quitting");
   dispatch_async(dispatch_get_main_queue(), ^{
     __block uint64_t frames = framesShown();
     __block CFAbsoluteTime framesAt = CFAbsoluteTimeGetCurrent();
@@ -1193,7 +1277,9 @@ static void gameSaidItQuit(void) {
 static void noteOutput(const char *text, size_t n) {
   if (!text || !n) return;
   gLastOutput = CFAbsoluteTimeGetCurrent();
-  if (n >= 14 && memmem(text, n, "###game_end###", 14)) gameSaidItQuit();
+  // GameMaker frees its scripts as it shuts down: after game_end(), and after a game that failed
+  // to load, which prints no game_end.
+  if ((n >= 14 && memmem(text, n, "###game_end###", 14)) || (n >= 19 && memmem(text, n, "Script_Free called ", 19))) gameSaidItQuit();
   else if (n >= 23 && memmem(text, n, "Processing command line", 23)) gNextGameStarted = YES;
 }
 
@@ -1340,23 +1426,31 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     gameLog(@"its download was changed by an earlier build of this app (which converted it in place); Steam's checks fail "
             @"on it until it's restored: in Steam, the game's Properties > Installed Files > Verify integrity");
 
-  // It runs from its converted copy; the download stays as Steam installed it.
+  // It runs from its converted copy; the download stays as Steam installed it. A game started
+  // before in this session runs again from the copy still loaded (its files aren't rewritten
+  // under the loaded images), from a fresh start (see freshStart).
+  static NSMutableDictionary<NSString *, NSArray<NSString *> *> *loadedCopies;   // download -> [copy, program]
+  NSArray<NSString *> *loaded = loadedCopies[appURL.path];
+  void *already = loaded ? dlopen(loaded[1].fileSystemRepresentation, RTLD_LAZY | RTLD_NOLOAD) : NULL;
+  if (already) dlclose(already);
+  BOOL again = already != NULL;
   static dispatch_once_t tidy;
   dispatch_once(&tidy, ^{ removeOrphanCopies(); });
-  NSString *copy;
-  NSString *why = mirrorApp(appURL.path, &copy);
+  NSString *copy = again ? loaded[0] : nil;
+  NSString *why = again ? nil : mirrorApp(appURL.path, &copy);
   if (why) { fail([NSString stringWithFormat:@"couldn't make its converted copy: %@", why]); return -1; }
   NSString *rel = [sourceProgram hasPrefix:[appURL.path stringByAppendingString:@"/"]]
                       ? [sourceProgram substringFromIndex:appURL.path.length + 1]
                       : [@"Contents/MacOS" stringByAppendingPathComponent:sourceProgram.lastPathComponent];
-  NSString *program = [copy stringByAppendingPathComponent:rel];
+  NSString *program = again ? loaded[1] : [copy stringByAppendingPathComponent:rel];
   NSBundle *app = [NSBundle bundleWithPath:copy];
   if (!app || ![NSFileManager.defaultManager fileExistsAtPath:program]) { fail(@"its converted copy has no program"); return -1; }
-  why = convertApp(app, program);
+  why = again ? nil : convertApp(app, program);
   if (why) { fail(why); return -1; }
+  if (again) gameLog(@"it ran before in this session: its loaded copy starts again");
   // Signed with LiveContainer's certificate: ask the kernel now, the way dyld will, and on a
   // refusal log enough to tell why.
-  if (liveContainerCertificate(NULL)) {
+  if (!again && liveContainerCertificate(NULL)) {
     NSString *refused = kernelVerdict(program);
     if (refused) {
       gameLog(@"iOS refuses %@: %@", program.lastPathComponent, refused);
@@ -1430,6 +1524,9 @@ pid_t AKLaunchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments, NSDi
     rebound += AKRebindSymbol(prefix.fileSystemRepresentation, "_NSGetExecutablePath", (void *)gameExecutablePath);
   }
   gameLog(@"loaded (%d images of its own); %d main-bundle and program-path calls redirected", (int)gGameImageCount, rebound);
+  if (again) gameLog(@"%d of its images back as they were loaded, their initializers run again", freshStart(gGameBundlePath, gGameBundleReal));
+  if (!loadedCopies) loadedCopies = [NSMutableDictionary dictionary];
+  loadedCopies[appURL.path] = @[ copy, program ];
   noteOwnAllocator(image);
 
   NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObject:program];

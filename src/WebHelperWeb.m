@@ -723,9 +723,11 @@ static void callbackToPage(uint64_t handle, NSDictionary *msg) {
 
 #pragma mark Controller input for the pages
 
-// The page's System.UI.RegisterForSystemKeyEvents callback (registered with Steam, which
-// calls it for the Steam/Quick Access buttons it sees), and whether Steam ever has.
-static uint64_t gSystemKeyHandle;
+// The pages' System.UI.RegisterForSystemKeyEvents callbacks, and whether Steam ever called one.
+// Steam calls every registered one for the Steam/Quick Access buttons it sees: the first is the
+// controller input's (it opens the menus), later ones belong to Big Picture's windows and do
+// their own part. A key sent to the latest alone never reached the menus once those came.
+static NSMutableOrderedSet<NSNumber *> *gSystemKeyHandles;
 static BOOL gSteamSendsSystemKeys;
 
 void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed) {
@@ -737,15 +739,16 @@ void AKWHSendControllerButton(uint32_t controller, uint32_t button, BOOL pressed
 // game in front: Steam's interface gives a system key with an app id to that app's overlay window
 // when no window of its own has the focus (FocusNavController GetEventTarget).
 void AKWHSendSystemKey(uint32_t key, uint32_t controller) {
-  if (!gSystemKeyHandle || gSteamSendsSystemKeys) return;
+  if (!gSystemKeyHandles.count || gSteamSendsSystemKeys) return;
   uint32_t appID = gOverlayUp ? AKGameAppID() : 0;
   NSDictionary *(^field)(NSString *, uint32_t) = ^(NSString *name, uint32_t v) {
     return @{ @"name": name, @"value": @{ @"int_value": @(v) } };
   };
-  callbackToPage(gSystemKeyHandle, @{ @"arguments": @[ @{
+  NSDictionary *event = @{ @"arguments": @[ @{
     @"is_object": @YES,
     @"object_properties": @[ field(@"eKey", key), field(@"nControllerIndex", controller), field(@"nAppID", appID) ],
-  } ] });
+  } ] };
+  for (NSNumber *handle in [gSystemKeyHandles copy]) callbackToPage(handle.unsignedLongLongValue, event);
 }
 
 void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
@@ -790,7 +793,7 @@ void AKWHWebHandleCommand(uint32_t cmd, uint32_t browser, NSDictionary *msg) {
         }];
       break;
     case kAKWHJSExecuteCallback:
-      if ([msg[@"function_handle"] unsignedLongLongValue] == gSystemKeyHandle && gSystemKeyHandle) gSteamSendsSystemKeys = YES;
+      if ([gSystemKeyHandles containsObject:@([msg[@"function_handle"] unsignedLongLongValue])]) gSteamSendsSystemKeys = YES;
       callbackToPage([msg[@"function_handle"] unsignedLongLongValue], msg);
       break;
     case kAKWHJSReleaseCallback: {
@@ -1094,7 +1097,10 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     NSArray *args = globalizeHandles(m[@"args"] ?: @[], b);
     if ([m[@"name"] isEqualToString:@"System.UI.RegisterForSystemKeyEvents"]) {
       id handle = [args.firstObject isKindOfClass:NSDictionary.class] ? args.firstObject[@"function_handle"] : nil;
-      if (handle) gSystemKeyHandle = [handle unsignedLongLongValue];
+      if (handle) {
+        if (!gSystemKeyHandles) gSystemKeyHandles = [NSMutableOrderedSet orderedSet];
+        [gSystemKeyHandles addObject:@([handle unsignedLongLongValue])];
+      }
     }
     if (gameOverlayCall(m[@"name"], args)) return;   // answered here
     AKWHSend(kAKWHJSMethodCall, b.handle, @{
@@ -1104,6 +1110,7 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
       @"arguments": args,
     });
   } else if ([op isEqualToString:@"release"]) {
+    [gSystemKeyHandles removeObject:@(globalHandle(b, [m[@"handle"] unsignedLongLongValue]))];
     AKWHSend(kAKWHJSReleaseCallback, b.handle, @{
       @"browser_handle": @(b.handle),
       @"owning_browser_handle": @(gMethodOwner ?: b.handle),
@@ -1463,7 +1470,7 @@ static void restartForSteam(void) {
   gSteamConfig = nil;   // a new one, with the bridge script for the new helper's methods
   gPendingOpen = nil;
   gNextIndex = 0x4000;
-  gSystemKeyHandle = 0;
+  [gSystemKeyHandles removeAllObjects];
   gSteamSendsSystemKeys = NO;
   gOverlayInfoChanged = gOverlayGameFocus = 0;
   gOverlayUp = NO;
