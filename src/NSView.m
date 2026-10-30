@@ -23,6 +23,7 @@
     [owner _ak_performOnOwnerThread:^{ [(NSOpenGLView *)owner _ak_display]; }];
     return;
   }
+  if ([owner _ak_drawsOnGameThread]) { [owner _ak_drawOnOwnerThread]; return; }
   if (owner.isFlipped) { [owner drawRect:rect]; return; }
   // An unflipped view draws with y going up, as on the Mac.
   CGContextRef ctx = UIGraphicsGetCurrentContext();
@@ -66,6 +67,8 @@ static void AKViewDidMoveToWindow(NSView *view) {
   CGSize _boundsScale;   // its bounds' size over its frame's, from -setBoundsSize: (zero: the same)
   BOOL _applyingLayout;
   CFRunLoopRef _ownerLoop; // run loop of the thread that made this view (Chromium's UI thread for its views)
+  BOOL _madeByGame;        // on a game's main thread
+  BOOL _drawPending;       // a draw on that thread is on its way (atomic)
 }
 
 - (instancetype)init { return [self initWithFrame:NSZeroRect]; }
@@ -81,6 +84,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
     _lastSize = frame.size;
     _layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     _ownerLoop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());
+    _madeByGame = AKIsGameThread();
   }
   return self;
 }
@@ -120,6 +124,54 @@ static void AKViewDidMoveToWindow(NSView *view) {
   if (!loop || loop == CFRunLoopGetCurrent()) { block(); return; }
   CFRunLoopPerformBlock(loop, kCFRunLoopCommonModes, block);
   CFRunLoopWakeUp(loop);
+}
+
+// AppKit asks a view to draw on the main thread, which for a game is its own main thread, not
+// UIKit's: Unity's -drawRect: runs a frame of its player loop and presents it, which only works
+// there (on UIKit's thread it found no graphics device and stopped the app), and SDL's sends its
+// window's expose event. So a game's own -drawRect: runs on the game's thread, from its run
+// loop as AppKit's drawing would, into an image of its own that becomes the view's contents. A
+// view the GPU draws (its layer a Metal or OpenGL one) gets a one-pixel context instead: nothing
+// drawn there would show.
+- (BOOL)_ak_drawsOnGameThread {
+  return _madeByGame && AKAddressIsInGame((const void *)class_getMethodImplementation(self.class, @selector(drawRect:)));
+}
+
+- (void)_ak_drawOnOwnerThread {
+  if (__atomic_exchange_n(&_drawPending, YES, __ATOMIC_ACQ_REL)) return;   // one is on its way
+  CGSize size = _backing.bounds.size;
+  CGFloat scale = _backing.contentScaleFactor;
+  __weak NSView *weakSelf = self;
+  [self _ak_performOnOwnerThread:^{
+    NSView *view = weakSelf;
+    if (!view) return;
+    __atomic_store_n(&view->_drawPending, NO, __ATOMIC_RELEASE);
+    CALayer *hosted = view->_hostedLayer;
+    BOOL gpu = hosted && ![hosted isMemberOfClass:CALayer.class];
+    size_t w = gpu ? 1 : (size_t)ceil(size.width * scale), h = gpu ? 1 : (size_t)ceil(size.height * scale);
+    if (!w || !h) return;
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(NULL, w, h, 8, 0, space, (CGBitmapInfo)kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+    CGColorSpaceRelease(space);
+    if (!ctx) return;
+    // A bitmap measures from its bottom-left, as an unflipped view does.
+    BOOL flipped = view.isFlipped;
+    if (!gpu) {
+      CGContextScaleCTM(ctx, scale, scale);
+      if (flipped) { CGContextTranslateCTM(ctx, 0, size.height); CGContextScaleCTM(ctx, 1, -1); }
+    }
+    NSGraphicsContext *previous = [NSGraphicsContext currentContext];
+    [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithCGContext:ctx flipped:flipped]];
+    [view drawRect:view.bounds];
+    [NSGraphicsContext setCurrentContext:previous];
+    CGImageRef image = gpu ? NULL : CGBitmapContextCreateImage(ctx);
+    CGContextRelease(ctx);
+    if (!image) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      view->_backing.layer.contents = (__bridge id)image;
+      CGImageRelease(image);
+    });
+  }];
 }
 
 - (UIView *)backingView { return _backing; }

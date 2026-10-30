@@ -186,6 +186,8 @@ NSRect AKNibDecodeFrame(NSCoder *coder);
 @interface NSView (AKShimNib)
 - (void)_ak_applyNibCoder:(NSCoder *)coder;           // NSvFlags, OpenGL resolution, subviews
 - (void)_ak_performOnOwnerThread:(dispatch_block_t)block; // the thread that made the view
+- (BOOL)_ak_drawsOnGameThread;   // a game's view with its own -drawRect:
+- (void)_ak_drawOnOwnerThread;   // that -drawRect: on the game's thread, into its contents
 @end
 
 // NSOpenGL.m: a game's OpenGL views as AppKit's first display after launch leaves them: each
@@ -246,6 +248,12 @@ void AKGameFrameTimerState(int *count, CFAbsoluteTime *began, CFAbsoluteTime *en
 void AKGameBindClock(const struct mach_header *header, intptr_t slide);
 // GameLuaJIT.m: a game's LuaJIT runs on its interpreter, its compiler kept off.
 void AKGameBindLuaJIT(const struct mach_header *header, intptr_t slide);
+// GameMainThread.m: the game's main queue, main run loop and main-thread questions are its own
+// main thread's. Here: called on that thread (its run loop is the one). QueueFor: the queue its
+// code meant (the main queue is its main thread's).
+void AKGameBindMainThread(const struct mach_header *header, intptr_t slide);
+void AKGameMainThreadHere(void);
+dispatch_queue_t AKGameQueueFor(dispatch_queue_t queue);
 // MacPrograms.m: what one of a game's binaries, as downloaded, would lack here (nil: nothing;
 // else cannot / helper / missing {library: [names]} / unchecked). GameLibrary.m asks it.
 NSDictionary *AKGameBinaryGaps(NSString *path, NSString *programDir, BOOL isProgram);

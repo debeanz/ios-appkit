@@ -1381,6 +1381,7 @@ static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindAudio(header, slide);
   AKGameBindClock(header, slide);
   AKGameBindLuaJIT(header, slide);   // LuaJIT's compiler off, its interpreter on (GameLuaJIT.m)
+  AKGameBindMainThread(header, slide);   // its main queue and main thread are its own (GameMainThread.m)
   bindOutput(header, slide);
   size_t nameLength = strlen(info.dli_fname);
   if (nameLength > 18 && !strcmp(info.dli_fname + nameLength - 18, "/UnityPlayer.dylib")) bindUnityQuit(header, slide);
@@ -1479,6 +1480,7 @@ static Class appDelegateClass(void) {
 }
 
 int AKGameApplicationMain(int argc, const char *argv[]) {
+  AKGameMainThreadHere();
   NSApplication *app = NSApplication.sharedApplication;
   NSDictionary *info = gGameBundle.infoDictionary;
   gameLog(@"NSApplicationMain: principal class %@, main nib %@", info[@"NSPrincipalClass"] ?: @"-", info[@"NSMainNibFile"] ?: @"-");
@@ -1504,6 +1506,7 @@ int AKGameApplicationMain(int argc, const char *argv[]) {
 }
 
 void AKGameNoteRunLoop(void) {
+  AKGameMainThreadHere();
   if (gGameRunLoop || !AKIsGameThread()) return;
   pthread_mutex_lock(&gGameLock);
   if (!gGameRunLoop) gGameRunLoop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());

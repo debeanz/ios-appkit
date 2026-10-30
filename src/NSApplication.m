@@ -83,10 +83,14 @@ static NSEvent *gCurrentEvent[2];   // Steam's, a game's (-currentEvent)
 
 @synthesize delegate = _delegate;
 
-- (id<NSApplicationDelegate>)delegate { return AKIsGameThread() ? gGameDelegate : _delegate; }
+// The game's code asks for its delegate from its other threads too (Unity's view sends it
+// -UpdatePlayer), so its calls count wherever they come from.
+- (id<NSApplicationDelegate>)delegate {
+  return AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0)) ? gGameDelegate : _delegate;
+}
 
 - (void)setDelegate:(id<NSApplicationDelegate>)delegate {
-  if (AKIsGameThread()) gGameDelegate = delegate;
+  if (AKIsGameThread() || AKAddressIsInGame(__builtin_return_address(0))) gGameDelegate = delegate;
   else _delegate = delegate;
 }
 

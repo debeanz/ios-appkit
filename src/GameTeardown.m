@@ -101,7 +101,7 @@ static int gameAtexit(void (*fn)(void)) { gExitHandlers++; return 0; }
 static NSHashTable *gSources;
 
 static dispatch_source_t gameSourceCreate(dispatch_source_type_t type, uintptr_t handle, uintptr_t mask, dispatch_queue_t queue) {
-  dispatch_source_t s = dispatch_source_create(type, handle, mask, queue);
+  dispatch_source_t s = dispatch_source_create(type, handle, mask, AKGameQueueFor(queue));   // the main queue: its main thread's
   if (s) @synchronized (NSHashTable.class) {
     if (!gSources) gSources = [NSHashTable weakObjectsHashTable];
     [gSources addObject:s];
