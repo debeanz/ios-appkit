@@ -252,6 +252,10 @@ void AKGameBindLuaJIT(const struct mach_header *header, intptr_t slide);
 // main thread's. Here: called on that thread (its run loop is the one). QueueFor: the queue its
 // code meant (the main queue is its main thread's).
 void AKGameBindMainThread(const struct mach_header *header, intptr_t slide);
+// GameBundles.m: a Mac bundle's program (Contents/MacOS/<CFBundleExecutable>), or nil; a game's
+// CFBundle calls find and load its plug-in bundles' programs that way.
+NSString *AKMacBundleProgram(NSString *bundlePath);
+void AKGameBindBundles(const struct mach_header *header, intptr_t slide);
 void AKGameMainThreadHere(void);
 dispatch_queue_t AKGameQueueFor(dispatch_queue_t queue);
 // MacPrograms.m: what one of a game's binaries, as downloaded, would lack here (nil: nothing;

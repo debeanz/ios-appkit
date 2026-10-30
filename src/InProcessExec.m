@@ -190,6 +190,16 @@ const char *AKInProcessCurrentPath(void) { return tCurrentProc ? tCurrentProc->p
 
 static void triggerWatches(pid_t pid, int status);
 
+// A process's end leaves its main thread where it is, as a Mac process's end leaves everything:
+// no thread-exit cleanup runs. pthread_exit's would drain the thread's autorelease pools and run
+// its thread-local destructors, releasing objects the program's code never expects to see go at
+// exit (Unity's quit released one of its own whose -dealloc then crashed the app). The thread
+// sleeps for good; a game's teardown stops it with the game's other threads.
+static void stopThreadHere(void) __attribute__((noreturn));
+static void stopThreadHere(void) {
+  for (;;) sleep(3600);
+}
+
 static void finishProc(ak_vproc *p, int status) {
   pid_t pid = p->pid;
   pthread_mutex_lock(&gProcLock);
@@ -243,8 +253,8 @@ static void *procMain(void *arg) {
   tCurrentPid = p->pid;
   pthread_setname_np(baseName(p->path));
   // A signal stack of its own, so a crash handler still runs when this thread's stack has
-  // overflowed (GameCrash.m ends a crashed game alone). Freed as the thread exits, however it
-  // does; one parked after a crash keeps it.
+  // overflowed (GameCrash.m ends a crashed game alone). Freed if the thread exits; a stand-in's
+  // own end stops its thread where it is instead (stopThreadHere), keeping it.
   static dispatch_once_t altKeyOnce;
   dispatch_once(&altKeyOnce, ^{ pthread_key_create(&gAltStackKey, freeAltStack); });
   stack_t alt = { .ss_sp = malloc(kAltStackSize), .ss_size = kAltStackSize, .ss_flags = 0 };
@@ -262,12 +272,12 @@ static void *procMain(void *arg) {
   char execPath[PATH_MAX + 32];
   snprintf(execPath, sizeof execPath, "executable_path=%s", p->path);
   char *apple[] = { execPath, NULL };
-  int status;
+  // Returning from main is exit() on the Mac: the pool around it isn't drained either.
   @autoreleasepool {
-    status = p->function ? p->function(p->argc, p->argv) : p->entry(p->argc, p->argv, p->envp, apple);
+    int status = p->function ? p->function(p->argc, p->argv) : p->entry(p->argc, p->argv, p->envp, apple);
+    if (!endedUnderThread()) finishProc(p, status);   // else it was ended for everyone already
+    stopThreadHere();
   }
-  if (!endedUnderThread()) finishProc(p, status);   // else it was ended for everyone already
-  return NULL;
 }
 
 // Run a function of this app as if it were the named program: on a thread of its own, with
@@ -645,7 +655,7 @@ void AKInProcessExitIfEnded(void) {
   if (!tCurrentProc || !endedUnderThread()) return;
   shimLog("in-process pid %d: its thread stops (it was ended for Steam already)", tCurrentPid);
   tCurrentProc = NULL;
-  pthread_exit(NULL);
+  stopThreadHere();
 }
 
 // Where a stand-in's main thread is: stopped only while its frame pointers are copied (nothing
@@ -695,16 +705,16 @@ void AKInProcessLogStack(pid_t pid, const char *why) {
 // exit() on a stand-in's main thread ends that "process", not the app.
 void exit(int status) {
   ak_vproc *p = tCurrentProc;
-  if (p && endedUnderThread()) { tCurrentProc = NULL; pthread_exit(NULL); }
-  if (p) { finishProc(p, status); pthread_exit(NULL); }
+  if (p && endedUnderThread()) { tCurrentProc = NULL; stopThreadHere(); }
+  if (p) { finishProc(p, status); stopThreadHere(); }
   REAL(void (*)(int), exit)(status);
   abort();
 }
 
 void _exit(int status) {
   ak_vproc *p = tCurrentProc;
-  if (p && endedUnderThread()) { tCurrentProc = NULL; pthread_exit(NULL); }
-  if (p) { finishProc(p, status); pthread_exit(NULL); }
+  if (p && endedUnderThread()) { tCurrentProc = NULL; stopThreadHere(); }
+  if (p) { finishProc(p, status); stopThreadHere(); }
   REAL(void (*)(int), _exit)(status);
   abort();
 }

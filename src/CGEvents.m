@@ -165,6 +165,30 @@ double CGEventSourceGetLocalEventsSuppressionInterval(CGEventSourceRef source) {
 }
 int64_t CGEventGetIntegerValueField(CGEventRef e, CGEventField field) { return e ? AKEv(e).fields[@(field)].longLongValue : 0; }
 
+// The NSEvent a CGEvent stands for (Unity makes one from CGEventCreate(NULL) to read where the
+// pointer is and which modifier keys are down). The two number their event types alike, and
+// their modifier flags too.
+@implementation NSEvent (AKCGEvent)
++ (NSEvent *)eventWithCGEvent:(CGEventRef)cgEvent {
+  if (!cgEvent) return nil;
+  CGEventType type = CGEventGetType(cgEvent);
+  NSPoint location = AKAppKitPointFromQuartz(CGEventGetLocation(cgEvent));
+  NSEventModifierFlags flags = (NSEventModifierFlags)(CGEventGetFlags(cgEvent) & 0xffff0000);
+  NSTimeInterval time = NSProcessInfo.processInfo.systemUptime;
+  if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
+    NSString *text = AKEv(cgEvent).unicode ?: @"";
+    return [NSEvent keyEventWithType:(NSEventType)type location:location modifierFlags:flags timestamp:time windowNumber:0 context:nil
+                          characters:text charactersIgnoringModifiers:text isARepeat:NO
+                             keyCode:(unsigned short)CGEventGetIntegerValueField(cgEvent, kCGKeyboardEventKeycode)];
+  }
+  BOOL mouse = (type >= kCGEventLeftMouseDown && type <= kCGEventRightMouseDragged) ||
+               (type >= kCGEventOtherMouseDown && type <= kCGEventOtherMouseDragged);
+  return [NSEvent mouseEventWithType:mouse ? (NSEventType)type : NSEventTypeMouseMoved location:location modifierFlags:flags
+                           timestamp:time windowNumber:0 context:nil eventNumber:0
+                          clickCount:(NSInteger)CGEventGetIntegerValueField(cgEvent, kCGMouseEventClickState) pressure:0];
+}
+@end
+
 // The text a key event types: the explicit string, else the key translated through the US
 // layout with the event's modifiers, as macOS derives it from the current layout.
 static NSString *AKEventText(AKCGEvent *e) {

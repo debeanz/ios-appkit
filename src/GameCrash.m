@@ -9,6 +9,7 @@
 // named, adds it to crash.log, and ends the game as Steam's Stop would (Steam sees its process
 // gone and Big Picture comes back; the teardown then stops its other threads). That includes a
 // game stopping on a gap in the shim ("unrecognized selector": the uncaught exception's abort).
+// A thread of a game that has already ended, crashing in that game's code, just stops.
 // Everything else - Steam's crashes, the web helper's, game code crashing on the main thread
 // (which can't be parked without freezing the app) or on Core Audio's threads (see
 // audioThread) - goes to the host's handler as before.
@@ -80,9 +81,18 @@ static BOOL audioThread(void) {
 static void onFatalSignal(int sig, siginfo_t *info, void *uap) {
   pid_t pid = AKGamePid();
   uintptr_t frames[kFrames];
-  int n = pid && !pthread_main_np() && !audioThread() ? captureFrames(uap, frames) : 0;
-  BOOL game = NO;
-  for (int i = 0; i < n && !game; i++) game = AKAddressIsInGame((const void *)frames[i]);
+  int n = !pthread_main_np() && !audioThread() ? captureFrames(uap, frames) : 0;
+  BOOL game = NO, ended = NO;
+  for (int i = 0; i < n && !game; i++) {
+    game = pid && AKAddressIsInGame((const void *)frames[i]);
+    ended = ended || AKAddressIsDeadGameCode((const void *)frames[i]);
+  }
+  // A thread of a game that has already ended (still finishing its last call): only it stops.
+  if (!game && ended) {
+    static const char line[] = "[AppKitShim] game: a thread of a game that had ended crashed; it stops there, Steam stays\n";
+    write(2, line, sizeof line - 1);
+    for (;;) sleep(3600);
+  }
   if (!game) { hostHandler(sig, info, uap); return; }
   if (__sync_bool_compare_and_swap(&gHandling, 0, 1)) {
     gSignal = sig;

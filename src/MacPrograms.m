@@ -1382,6 +1382,7 @@ static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindClock(header, slide);
   AKGameBindLuaJIT(header, slide);   // LuaJIT's compiler off, its interpreter on (GameLuaJIT.m)
   AKGameBindMainThread(header, slide);   // its main queue and main thread are its own (GameMainThread.m)
+  AKGameBindBundles(header, slide);      // its plug-in bundles' programs are found (GameBundles.m)
   bindOutput(header, slide);
   size_t nameLength = strlen(info.dli_fname);
   if (nameLength > 18 && !strcmp(info.dli_fname + nameLength - 18, "/UnityPlayer.dylib")) bindUnityQuit(header, slide);
@@ -1810,11 +1811,7 @@ static void gameEnded(pid_t pid, int status) {
 static NSString *programOf(NSBundle *app, NSURL *appURL) {
   NSString *program = app.executablePath;
   if (program && [NSFileManager.defaultManager fileExistsAtPath:program]) return program;
-  NSDictionary *info = [NSDictionary dictionaryWithContentsOfURL:[appURL URLByAppendingPathComponent:@"Contents/Info.plist"]];
-  NSString *name = [info[@"CFBundleExecutable"] isKindOfClass:NSString.class] ? info[@"CFBundleExecutable"]
-                                                                             : appURL.lastPathComponent.stringByDeletingPathExtension;
-  program = [[appURL.path stringByAppendingPathComponent:@"Contents/MacOS"] stringByAppendingPathComponent:name];
-  return [NSFileManager.defaultManager fileExistsAtPath:program] ? program : nil;
+  return AKMacBundleProgram(appURL.path);
 }
 
 // The app's own C++ libraries a game uses (the OpenGL stack: AKOpenGL, Mesa, and MoltenVK,
