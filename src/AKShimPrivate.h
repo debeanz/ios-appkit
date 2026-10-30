@@ -222,6 +222,24 @@ void AKGameBindMetal(const struct mach_header *header, intptr_t slide);
 void AKGameNoteDrawsWithMetal(void);
 CGFloat AKGameBackingScale(void);
 void AKGameBackingScaleReset(void);
+// GameProfiles.m: per-game performance settings (Steam's Performance tab, WebHelperDeck.js). A
+// game's profile is fixed as it starts (its game id: SteamGameId) and dropped as it ends; how it
+// draws ("metal", "opengl") shows on the tab. The share of the screen's pixels it draws at (from
+// launch), its frame rate limit (0: none) and the Metal HUD's layer settings, read by NSScreen.m,
+// AKOpenGL (through NSOpenGL.m) and the Metal layers in its windows.
+extern NSString *const AKDefaultProfileID;   // "769", Steam's id for the default profile
+void AKGameProfileBegin(NSString *gameID);
+void AKGameProfileEnd(void);
+void AKGameProfileNoteDraws(NSString *how);
+double AKGameRenderFraction(void);
+int AKGameFrameLimit(void);
+BOOL AKGameHUDShown(void);
+NSDictionary *AKGameHUDProperties(void);
+NSDictionary *AKPerfState(void);
+NSDictionary *AKPerfUpdate(NSDictionary *update);
+NSDictionary *AKPerfSetAppSetting(NSString *key, id value);
+// NSOpenGL.m: AKOpenGL takes the running game's settings again (main thread).
+void AKGameGLOptionsChanged(void);
 // GameCrash.m: from the first launch on, a game that crashes ends alone; the app keeps running.
 void AKGameCrashGuardInstall(void);
 void AKGameAudioStop(void);     // the game ended: all its sound stops (its units and queues, the session)

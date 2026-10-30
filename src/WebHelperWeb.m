@@ -27,6 +27,7 @@
 #import "WebHelper.h"
 
 #include "WebHelperBridge.inc"
+#include "WebHelperDeck.inc"
 
 static const uint32_t kSharedJSContextType = 12;   // CMsgBrowserCreate.browser_type
 static const double kMinWidth = 853, kMinHeight = 534;   // Big Picture's window minimum (CSS px)
@@ -87,6 +88,10 @@ static void applyOverlayVisibility(AKWHBrowser *b);
 static void gameOverlayClosed(AKWHBrowser *b);
 pid_t AKGamePid(void);          // MacPrograms.m: the game Steam started, or 0
 uint32_t AKGameAppID(void);     // its app id, or 0
+// WebHelperDeck.m: the Quick Access additions' calls, and its pushes to Steam's interface page.
+void AKWHDeckCall(NSString *name, id args, void (^reply)(id result));
+void AKWHDeckSetPush(void (^push)(NSString *event, id value));
+void AKWHPerfStateChanged(void);
 
 #pragma mark Browsers
 
@@ -684,8 +689,15 @@ static void installBridge(AKWHBrowser *b) {
     @"screen": @{ @"width": @(floor(s.width / z)), @"height": @(floor(s.height / z)) },
     @"self": @{ @"id": @(b.index), @"handle": @(b.handle) },   // popups get theirs from window.open
   };
+  // The bridge, then the Quick Access additions (WebHelperDeck.js), which start only in the
+  // interface page itself.
   NSString *source = [[NSString stringWithUTF8String:kAKWHBridgeJS]
-      stringByAppendingFormat:@"\nakwhInstall(window, %@);\n", jsonString(config)];
+      stringByAppendingFormat:@"\nakwhInstall(window, %@);\n%@\nakdeckInstall(window);\n", jsonString(config),
+                              [NSString stringWithUTF8String:kAKWHDeckJS]];
+  AKWHDeckSetPush(^(NSString *event, id value) {
+    for (AKWHBrowser *p in [gBrowsers copy])
+      if (p.type == kSharedJSContextType && p.webView) enqueue(p, @{ @"t": @"deck", @"ev": event, @"a": @[ value ?: NSNull.null ] });
+  });
   WKUserScript *script = [[WKUserScript alloc] initWithSource:source injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES];
   [steamConfiguration().userContentController addUserScript:script];
   AKWHLog(YES, @"SteamClient bridge ready: %lu methods from Steam, screen %.0fx%.0f CSS px (zoom %.2f)",
@@ -968,6 +980,7 @@ static void gameOverlayClosed(AKWHBrowser *b) {
 }
 
 void AKWHGameChanged(void) {
+  AKWHPerfStateChanged();   // the Performance tab's current game, and the screen kept on while playing
   if (gOverlayInfoChanged) callbackToPage(gOverlayInfoChanged, @{ @"arguments": @[] });
   tellGameFocus();
   if (!AKGamePid()) {
@@ -1150,6 +1163,13 @@ static void browserViewCall(AKWHBrowser *owner, AKWHBrowser *v, NSString *name, 
     sendOnSocket(b, m);
   } else if ([op isEqualToString:@"ws-close"]) {
     closeSocket(b, m);
+  } else if ([op isEqualToString:@"deck"]) {
+    id requestID = m[@"id"];
+    __weak AKWHBrowser *weak = b;
+    AKWHDeckCall([m[@"name"] isKindOfClass:NSString.class] ? m[@"name"] : @"", m[@"args"], ^(id result) {
+      AKWHBrowser *page = weak;
+      if (page && requestID) enqueue(page, @{ @"t": @"deck", @"id": requestID, @"v": result ?: NSNull.null });
+    });
   } else if ([op isEqualToString:@"will-open"]) {
     gPendingOpen = m;
   } else if ([op isEqualToString:@"window"]) {

@@ -1006,6 +1006,10 @@ static void bringUpClient(void) {
 
 int main(int argc, char *argv[]) {
   @autoreleasepool {
+    // Apple's Metal Performance HUD, available to this app's Metal layers: each layer shows it only
+    // when told to (developerHUDProperties: a game's, at the overlay level chosen on Steam's
+    // Performance tab; the shim starts every layer with it hidden, GameProfiles.m).
+    setenv("MTL_HUD_ENABLED", "1", 0);
     captureConsole();
     installCrashReporting();
     return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));

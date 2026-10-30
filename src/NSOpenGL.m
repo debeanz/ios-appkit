@@ -24,6 +24,7 @@ static struct {
   CGLError (*setParameter)(CGLContextObj, int32_t, const AKGLint *);
   CGLError (*getParameter)(CGLContextObj, int32_t, AKGLint *);
   void (*setDrawable)(CGLContextObj, void *, double);
+  void (*setOptions)(double, int, CFDictionaryRef);
 } GL;
 
 static BOOL loadGL(void) {
@@ -45,11 +46,23 @@ static BOOL loadGL(void) {
     FN(releaseContext, CGLReleaseContext); FN(contextFormat, CGLGetPixelFormat); FN(setCurrent, CGLSetCurrentContext);
     FN(current, CGLGetCurrentContext); FN(flush, CGLFlushDrawable); FN(update, CGLUpdateContext);
     FN(setParameter, CGLSetParameter); FN(getParameter, CGLGetParameter); FN(setDrawable, AKGLSetDrawable);
+    FN(setOptions, AKGLSetOptions);
 #undef FN
     loaded = GL.choose && GL.create && GL.setCurrent && GL.flush && GL.setDrawable && GL.current;
     if (!loaded) fprintf(stderr, "[AppKitShim] OpenGL: AKOpenGL.framework lacks CGL functions\n");
+    if (loaded) dispatch_async(dispatch_get_main_queue(), ^{ AKGameGLOptionsChanged(); });
   });
   return loaded;
+}
+
+// The running game's settings (GameProfiles.m): the pixels per point its frames are drawn at (0:
+// the screen's), its frame rate limit and the Metal HUD's layer settings (none: no HUD).
+void AKGameGLOptionsChanged(void) {
+  if (!GL.setOptions) return;
+  double fraction = AKGameRenderFraction();
+  double scale = fraction < 1 ? MAX(1, UIScreen.mainScreen.scale * fraction) : 0;
+  NSDictionary *hud = AKGameHUDShown() ? AKGameHUDProperties() : nil;
+  GL.setOptions(scale, AKGameFrameLimit(), (__bridge CFDictionaryRef)hud);
 }
 
 #pragma mark Pixel formats
@@ -60,6 +73,7 @@ static BOOL loadGL(void) {
 
 - (instancetype)initWithAttributes:(const uint32_t *)attribs {
   if (!AKGameIsRunning() || !loadGL() || !(self = [super init])) return nil;
+  AKGameProfileNoteDraws(@"opengl");
   // NSOpenGLPFA* and kCGLPFA* are the same numbers.
   if (GL.choose((const int32_t *)attribs, &_pix, NULL) != kCGLNoError || !_pix) return nil;
   return self;

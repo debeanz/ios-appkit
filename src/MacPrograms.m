@@ -1847,6 +1847,7 @@ static void gameEnded(pid_t pid, int status) {
   }
   AKGameDidEnd(pid);
   AKGameAppEnded();
+  AKGameProfileEnd();
   pthread_mutex_lock(&gGameLock);
   gGamePid = 0;
   gGameProgram = nil;
@@ -1970,6 +1971,11 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
     AKInProcessSetExitObserver(gameEnded);
     AKInProcessSetSignalObserver(gameSignalled);
   });
+  // Its performance profile (GameProfiles.m: Steam's Performance tab), before anything measures
+  // the screen.
+  NSString *profileID = [environment[@"SteamGameId"] isKindOfClass:NSString.class] ? environment[@"SteamGameId"]
+                      : [environment[@"SteamAppId"] isKindOfClass:NSString.class] ? environment[@"SteamAppId"] : nil;
+  AKGameProfileBegin(profileID);
   // A Unity player draws with Metal: its picture at the screen's scale from the start (NSScreen.m).
   if ([NSFileManager.defaultManager fileExistsAtPath:[app.bundlePath stringByAppendingPathComponent:@"Contents/Frameworks/UnityPlayer.dylib"]])
     AKGameNoteDrawsWithMetal();
@@ -2004,6 +2010,7 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
     gGameProgram = nil;
     gGameImageCount = 0;
     pthread_mutex_unlock(&gGameLock);
+    AKGameProfileEnd();
   };
   preloadSharedLibraries();
   AKGameInstallTimers();

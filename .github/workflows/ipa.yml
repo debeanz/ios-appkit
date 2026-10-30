@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test the Quick Access additions and check the scripts compiled into the app are current
+        run: |
+          node tests/deck-test.js
+          node tools/gen-bridge.js
+          git diff --exit-code src/WebHelperBridge.inc src/WebHelperDeck.inc
+
       - name: Use the newest Xcode on the runner
         run: |
           XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)

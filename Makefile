@@ -122,7 +122,7 @@ opengl:
 	$(CC) $(CFLAGS) -dynamiclib -install_name @rpath/AKOpenGL.framework/AKOpenGL \
 	  -compatibility_version 1.0 -current_version 1.0 -Wl,-rpath,@loader_path/.. \
 	  opengl/AKOpenGL.m -Wl,-reexport_library,$(GL_DIR)/libOSMesa.dylib \
-	  -framework Foundation -framework UIKit -framework QuartzCore -framework IOSurface \
+	  -framework Foundation -framework UIKit -framework QuartzCore -framework IOSurface -framework Metal \
 	  -o $(OPENGL)/AKOpenGL
 	sed 's/AppKitShim/AKOpenGL/g' framework/Info.plist > $(OPENGL)/Info.plist
 	@echo "built $(OPENGL)/AKOpenGL (re-exports $(GL_DIR)/libOSMesa.dylib)"

@@ -514,6 +514,9 @@ function akwhInstall(win, config) {
             if (typeof win.SteamClientInitialized === 'function') win.SteamClientInitialized();
           } else if (m.t === 'exception') {
             win.console.error('SteamClient: ' + m.text);
+          } else if (m.t === 'deck') {
+            // The Quick Access additions' replies and updates (WebHelperDeck.js).
+            if (typeof win.__akDeckReceive === 'function') win.__akDeckReceive(m);
           }
         } catch (e) {
           reportError(e);

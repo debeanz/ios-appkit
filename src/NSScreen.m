@@ -11,21 +11,20 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
 // filtering) and so jagged. It sees the screen's own scale, as on a Retina Mac: a Unity game from
 // its start (Unity draws with Metal on the Mac, and measures its screens before it makes its
 // device), any other from when its code makes a Metal device or gives a view a Metal layer
-// (AK_GAME_RENDER_SCALE asks for less).
+// (the game's resolution setting on Steam's Performance tab, GameProfiles.m, or
+// AK_GAME_RENDER_SCALE, asks for less).
 static BOOL gGameDrawsWithMetal;   // atomic
-void AKGameNoteDrawsWithMetal(void) { __atomic_store_n(&gGameDrawsWithMetal, YES, __ATOMIC_RELAXED); }
+void AKGameNoteDrawsWithMetal(void) {
+  if (!__atomic_exchange_n(&gGameDrawsWithMetal, YES, __ATOMIC_RELAXED)) AKGameProfileNoteDraws(@"metal");
+}
 void AKGameBackingScaleReset(void) { __atomic_store_n(&gGameDrawsWithMetal, NO, __ATOMIC_RELAXED); }
 CGFloat AKGameBackingScale(void) {
   if (!__atomic_load_n(&gGameDrawsWithMetal, __ATOMIC_RELAXED)) return 1;
-  static CGFloat scale;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    CGFloat screen = UIScreen.mainScreen.scale;
-    const char *env = getenv("AK_GAME_RENDER_SCALE");
-    double asked = env ? atof(env) : 0;
-    scale = asked >= 1 && asked < screen ? asked : screen;
-  });
-  return scale;
+  CGFloat screen = UIScreen.mainScreen.scale;
+  const char *env = getenv("AK_GAME_RENDER_SCALE");
+  double asked = env ? atof(env) : 0;
+  if (asked >= 1 && asked < screen) return asked;
+  return MAX(1, screen * AKGameRenderFraction());
 }
 
 @implementation NSScreen {

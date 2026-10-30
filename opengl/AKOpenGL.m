@@ -12,6 +12,7 @@
 // a Mac game draws to is the front buffer here (glDrawBuffer/glReadBuffer below).
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurfaceRef.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
@@ -401,6 +402,14 @@ CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint index, CGLPixelForm
   IOSurfaceRef surfaces[3];
   int slot, width, height, rowPixels;
   BOOL bound;
+  // While the Metal HUD is up, frames go through a Metal layer instead (presentWithMetal): each
+  // surface as a texture, and the copy of it still on the GPU (the surface isn't drawn into
+  // again until that is done).
+  CAMetalLayer *metalLayer;
+  BOOL metalLayerPending;
+  id<MTLTexture> textures[3];
+  id<MTLCommandBuffer> copies[3];
+  NSDictionary *hudShown;
   // Pacing and the frame-rate line in the log.
   uint64_t lastPresent;
   unsigned frames, framesSinceLog;
@@ -411,9 +420,12 @@ CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint index, CGLPixelForm
 @implementation AKGLContext
 - (void)dealloc {
   if (mesa) OSMesaDestroyContext(mesa);
-  for (int i = 0; i < 3; i++) if (surfaces[i]) CFRelease(surfaces[i]);
-  CALayer *l = layer;
-  if (l) dispatch_async(dispatch_get_main_queue(), ^{ [l removeFromSuperlayer]; });
+  for (int i = 0; i < 3; i++) {
+    [copies[i] waitUntilCompleted];
+    if (surfaces[i]) CFRelease(surfaces[i]);
+  }
+  CALayer *l = layer, *m = metalLayer;
+  if (l || m) dispatch_async(dispatch_get_main_queue(), ^{ [l removeFromSuperlayer]; [m removeFromSuperlayer]; });
   pthread_mutex_destroy(&lock);
 }
 @end
@@ -445,11 +457,17 @@ void AKGLDestroyAllContexts(void) {
     if (c->mesa) OSMesaDestroyContext(c->mesa);
     c->mesa = NULL;
     c->bound = NO;
-    for (int i = 0; i < 3; i++) if (c->surfaces[i]) { CFRelease(c->surfaces[i]); c->surfaces[i] = NULL; }
-    CALayer *l = c->layer;
+    for (int i = 0; i < 3; i++) {
+      [c->copies[i] waitUntilCompleted];
+      c->copies[i] = nil;
+      c->textures[i] = nil;
+      if (c->surfaces[i]) { CFRelease(c->surfaces[i]); c->surfaces[i] = NULL; }
+    }
+    CALayer *l = c->layer, *m = c->metalLayer;
     c->layer = nil;
+    c->metalLayer = nil;
     pthread_mutex_unlock(&c->lock);
-    if (l) dispatch_async(dispatch_get_main_queue(), ^{ [l removeFromSuperlayer]; });
+    if (l || m) dispatch_async(dispatch_get_main_queue(), ^{ [l removeFromSuperlayer]; [m removeFromSuperlayer]; });
   }
 }
 static __thread void *tCurrent;   // this thread's current context (unretained)
@@ -537,6 +555,9 @@ static void sizeSurfaces(AKGLContext *c) {
   if (w == c->width && h == c->height && c->surfaces[0]) return;
   unbind(c);
   for (int i = 0; i < 3; i++) {
+    [c->copies[i] waitUntilCompleted];
+    c->copies[i] = nil;
+    c->textures[i] = nil;
     if (c->surfaces[i]) CFRelease(c->surfaces[i]);
     c->surfaces[i] = makeSurface(w, h);
   }
@@ -555,6 +576,9 @@ static BOOL bind(AKGLContext *c) {
   IOSurfaceRef s = c->surfaces[c->slot];
   if (!s) return NO;
   if (!c->bound) {
+    // Shown through Metal: its copy to the screen finishes before the next frame is drawn into it.
+    [c->copies[c->slot] waitUntilCompleted];
+    c->copies[c->slot] = nil;
     IOSurfaceLock(s, 0, NULL);
     c->bound = YES;
   }
@@ -604,10 +628,12 @@ static void measure(AKGLContext *c) {
   CALayer *layer = c->layer;
   if (!view || !layer) return;
   CGRect bounds = view.bounds;
-  if (!CGRectEqualToRect(layer.frame, bounds)) {
+  CAMetalLayer *metal = c->metalLayer;
+  if (!CGRectEqualToRect(layer.frame, bounds) || (metal && !CGRectEqualToRect(metal.frame, bounds))) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     layer.frame = bounds;
+    metal.frame = bounds;
     [CATransaction commit];
   }
   c->wantedWidth = (int)lround(bounds.size.width * c->scale);
@@ -625,17 +651,35 @@ static void measureLater(AKGLContext *c) {
   });
 }
 
+// What the app sets for the running game (AKGLSetOptions, from its settings on Steam's
+// Performance tab): the pixels per point its frames are drawn at (0: the screen's), its frame
+// rate limit (0: none) and, while the Metal HUD is up, the HUD's layer settings.
+static double gRenderScale;   // atomic (as bits)
+static int gFrameLimit;       // atomic
+static NSDictionary *gHUD;    // under @synchronized (AKGLContext.class)
+
+void AKGLSetOptions(double renderScale, int frameLimit, CFDictionaryRef hud) {
+  uint64_t bits;
+  memcpy(&bits, &renderScale, sizeof bits);
+  __atomic_store_n((uint64_t *)&gRenderScale, bits, __ATOMIC_RELAXED);
+  __atomic_store_n(&gFrameLimit, frameLimit, __ATOMIC_RELAXED);
+  @synchronized (AKGLContext.class) { gHUD = [(__bridge NSDictionary *)hud copy]; }
+}
+
+static NSDictionary *currentHUD(void) {
+  @synchronized (AKGLContext.class) { return gHUD; }
+}
+
 // Pixels per point for a drawable asked for below the screen's resolution (a game's 1x window,
-// NSWindow.m): the screen's own, unless AK_GL_RENDER_SCALE asks for fewer (each frame is read
-// back from the GPU, so fewer pixels cost less). 0: the screen's.
+// NSWindow.m): the screen's own, unless the game's resolution setting or AK_GL_RENDER_SCALE asks
+// for fewer (each frame is read back from the GPU, so fewer pixels cost less). 0: the screen's.
 static double renderScale(void) {
-  static double scale;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    const char *env = getenv("AK_GL_RENDER_SCALE");
-    scale = env && atof(env) >= 1 ? atof(env) : 0;
-  });
-  return scale;
+  const char *env = getenv("AK_GL_RENDER_SCALE");
+  if (env && atof(env) >= 1) return atof(env);
+  uint64_t bits = __atomic_load_n((uint64_t *)&gRenderScale, __ATOMIC_RELAXED);
+  double scale;
+  memcpy(&scale, &bits, sizeof scale);
+  return scale >= 1 ? scale : 0;
 }
 
 void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
@@ -654,7 +698,10 @@ void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
   onMain(^{
     if (c->view != view) {
       [c->layer removeFromSuperlayer];
+      [c->metalLayer removeFromSuperlayer];
       c->layer = nil;
+      c->metalLayer = nil;
+      c->hudShown = nil;
       c->view = view;
       if (view) {
         CALayer *layer = [CALayer layer];
@@ -670,6 +717,8 @@ void AKGLSetDrawable(CGLContextObj ctx, void *uiView, double scale) {
     double up = screenScale / c->scale;
     c->layer.contentsScale = c->scale;
     c->layer.magnificationFilter = up > 1 && fabs(up - round(up)) < 0.01 ? kCAFilterNearest : kCAFilterLinear;
+    c->metalLayer.contentsScale = c->scale;
+    c->metalLayer.magnificationFilter = c->layer.magnificationFilter;
     measure(c);
   });
   glLog(@"context %p shows in a %dx%d view (%.0fx%@)", ctx, c->wantedWidth, c->wantedHeight, c->scale,
@@ -683,6 +732,88 @@ CGLError CGLUpdateContext(CGLContextObj ctx) {
 }
 
 CGLError CGLClearDrawable(CGLContextObj ctx) { AKGLSetDrawable(ctx, NULL, 1); return kCGLNoError; }
+
+#pragma mark Frames through Metal (with the Metal HUD)
+
+static id<MTLDevice> metalDevice(void) {
+  static id<MTLDevice> device;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ device = MTLCreateSystemDefaultDevice(); });
+  return device;
+}
+
+static id<MTLCommandQueue> metalQueue(void) {
+  static id<MTLCommandQueue> queue;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ queue = [metalDevice() newCommandQueue]; });
+  return queue;
+}
+
+static void dropMetalLayer(AKGLContext *c) {
+  CAMetalLayer *m = c->metalLayer;
+  c->metalLayer = nil;
+  c->hudShown = nil;
+  dispatch_async(dispatch_get_main_queue(), ^{ [m removeFromSuperlayer]; });
+}
+
+// The frame in surface `slot`, copied into the next drawable of a Metal layer over the contents
+// layer and presented, with the HUD's settings on that layer. NO (shown the usual way) until the
+// layer exists - it is made on the main thread - or when no drawable of the frame's size comes.
+static BOOL presentWithMetal(AKGLContext *c, int slot, NSDictionary *hud) {
+  UIView *view = c->view;
+  id<MTLDevice> device = metalDevice();
+  if (!view || !device || !metalQueue()) return NO;
+  CAMetalLayer *ml = c->metalLayer;
+  if (!ml) {
+    if (!c->metalLayerPending) {
+      c->metalLayerPending = YES;
+      double scale = c->scale;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        c->metalLayerPending = NO;
+        UIView *v = c->view;
+        if (!v || c->metalLayer) return;
+        CAMetalLayer *layer = [CAMetalLayer layer];
+        layer.name = @"AKOpenGL";   // the shim leaves its HUD setting and pacing to this file
+        layer.device = device;
+        layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        layer.framebufferOnly = NO;   // a copy's destination
+        layer.opaque = YES;
+        layer.contentsScale = scale;
+        layer.magnificationFilter = c->layer.magnificationFilter ?: kCAFilterLinear;
+        layer.frame = v.bounds;
+        [v.layer addSublayer:layer];
+        c->metalLayer = layer;
+        glLog(@"context %p: frames go through Metal while the Metal HUD is up", (__bridge void *)c);
+      });
+    }
+    return NO;
+  }
+  if (c->hudShown != hud) {
+    c->hudShown = hud;
+    if (@available(iOS 16.0, *)) ml.developerHUDProperties = hud;
+  }
+  CGSize size = CGSizeMake(c->width, c->height);
+  if (!CGSizeEqualToSize(ml.drawableSize, size)) ml.drawableSize = size;
+  id<MTLTexture> texture = c->textures[slot];
+  if (!texture) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:c->width height:c->height mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead;
+    d.storageMode = MTLStorageModeShared;
+    texture = c->textures[slot] = [device newTextureWithDescriptor:d iosurface:c->surfaces[slot] plane:0];
+    if (!texture) return NO;
+  }
+  id<CAMetalDrawable> drawable = [ml nextDrawable];
+  if (!drawable || drawable.texture.width != texture.width || drawable.texture.height != texture.height) return NO;
+  id<MTLCommandBuffer> copy = [metalQueue() commandBuffer];
+  id<MTLBlitCommandEncoder> blit = [copy blitCommandEncoder];
+  [blit copyFromTexture:texture toTexture:drawable.texture];
+  [blit endEncoding];
+  [copy presentDrawable:drawable];
+  [copy commit];
+  c->copies[slot] = copy;
+  return YES;
+}
 
 // Frames put on screen by every context so far (the app watches a game that says it quits
 // for its frames to stop: MacPrograms.m).
@@ -699,13 +830,18 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
   IOSurfaceRef shown = c->surfaces[c->slot];
   unbind(c);
   // On screen from this thread, in a transaction of its own: queued behind Steam's busy main
-  // thread, frames reached the screen late and unevenly.
-  CALayer *layer = c->layer;
-  if (layer) {
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    layer.contents = (__bridge id)shown;
-    [CATransaction commit];
+  // thread, frames reached the screen late and unevenly. While the Metal HUD is up, through a
+  // Metal layer (the HUD measures and shows what Metal layers present).
+  NSDictionary *hud = currentHUD();
+  if (!(hud && presentWithMetal(c, c->slot, hud))) {
+    if (!hud && c->metalLayer) dropMetalLayer(c);
+    CALayer *layer = c->layer;
+    if (layer) {
+      [CATransaction begin];
+      [CATransaction setDisableActions:YES];
+      layer.contents = (__bridge id)shown;
+      [CATransaction commit];
+    }
   }
   c->slot = (c->slot + 1) % 3;
   __atomic_add_fetch(&gFramesShown, 1, __ATOMIC_RELAXED);
@@ -713,12 +849,14 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
   if (++c->frames % 30 == 0) dispatch_async(dispatch_get_main_queue(), ^{ measure(c); });
   bind(c);
 
-  // Frames go out at most once per 60 Hz refresh (more with a longer swap interval), waiting
-  // asleep: a game that turned vsync off (GameMaker does) would otherwise keep a core busy timing
-  // its frames, which heats a phone.
+  // Frames go out at most once per 60 Hz refresh (more with a longer swap interval, or the
+  // game's frame rate limit), waiting asleep: a game that turned vsync off (GameMaker does) would
+  // otherwise keep a core busy timing its frames, which heats a phone.
   static mach_timebase_info_data_t tb;
   if (!tb.denom) mach_timebase_info(&tb);
   uint64_t period = 1000000000ull / 60 * tb.denom / tb.numer * (uint64_t)MAX(c->swapInterval, 1);
+  int limit = __atomic_load_n(&gFrameLimit, __ATOMIC_RELAXED);
+  if (limit > 0) period = MAX(period, 1000000000ull / (uint64_t)limit * tb.denom / tb.numer);
   uint64_t now = mach_absolute_time();
   if (c->lastPresent && now < c->lastPresent + period) mach_wait_until(c->lastPresent + period);
   c->lastPresent = mach_absolute_time();
