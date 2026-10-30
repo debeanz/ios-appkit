@@ -263,6 +263,10 @@ void AKGameBindMainThread(const struct mach_header *header, intptr_t slide);
 // CFBundle calls find and load its plug-in bundles' programs that way.
 NSString *AKMacBundleProgram(NSString *bundlePath);
 void AKGameBindBundles(const struct mach_header *header, intptr_t slide);
+// GameSteamworks.m: the running game's own steamclient (nil: none; MacPrograms.m copies it), which
+// its Steamworks library loads in place of Steam's, as the game's pid.
+void AKGameSetSteamclient(NSString *path);
+void AKGameBindSteamworks(const struct mach_header *header, intptr_t slide, const char *path);
 void AKGameMainThreadHere(void);
 dispatch_queue_t AKGameQueueFor(dispatch_queue_t queue);
 // MacPrograms.m: what one of a game's binaries, as downloaded, would lack here (nil: nothing;

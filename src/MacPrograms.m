@@ -977,6 +977,62 @@ static NSString *convertApp(NSBundle *app, NSString *program) {
   return why ? [NSString stringWithFormat:@"couldn't sign it: %@", why] : nil;
 }
 
+#pragma mark Its own Steamworks client
+
+// A Mac game's Steamworks (steam_api) loads steamclient.dylib from Steam's folder into the
+// game's own process: a client of its own, which reads the game's app ID (SteamAppId) as it
+// starts and talks to Steam's engine over Steam's IPC as the game's pid. Here the game runs in
+// Steam's process, and that path gave it the steamclient Steam itself runs, whose client state
+// is Steam's: its app ID read once at Steam's start, its pid Steam's. Steam refused the game's
+// user ("CreateFn failed for SteamUser023 User"), so SteamAPI_Init failed, and a game that plays
+// through Steam's networking (Cat Mail Co.'s New Game) waited forever. So a game that ships
+// Steamworks gets a steamclient.dylib of its own next to its converted copy: a copy of Steam's,
+// with links to the libraries it shares with Steam (their loaded images, as before), signed
+// like the game. GameSteamworks.m hands it to the game's steam_api and makes it the game's pid.
+static NSString *const kSteamclientStamp = @"copied-from";
+
+static NSString *prepareSteamclient(NSBundle *app) {
+  NSFileManager *fm = NSFileManager.defaultManager;
+  BOOL shipsSteamworks = NO;
+  NSDirectoryEnumerator *walk = [fm enumeratorAtPath:app.bundlePath];
+  for (NSString *rel in walk) {
+    NSString *name = rel.lastPathComponent;
+    if ([name hasPrefix:@"libsteam_api"] || [name isEqualToString:@"steam_api"]) { shipsSteamworks = YES; break; }
+  }
+  if (!shipsSteamworks) return nil;
+  NSString *client = [frameworksDir().stringByDeletingLastPathComponent stringByAppendingPathComponent:@"client"];
+  NSString *source = [client stringByAppendingPathComponent:@"steamclient.dylib"];
+  NSString *dir = [app.bundlePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"steamclient"];
+  NSString *copy = [dir stringByAppendingPathComponent:@"steamclient.dylib"];
+  NSDictionary *attributes = [fm attributesOfItemAtPath:source error:nil];
+  if (!attributes) return nil;
+  // Copied again when Steam's changes (an update), not when signing changed the copy.
+  NSString *stampPath = [dir stringByAppendingPathComponent:kSteamclientStamp];
+  NSString *stamp = [NSString stringWithFormat:@"%@ %.0f", attributes[NSFileSize], [attributes[NSFileModificationDate] timeIntervalSince1970]];
+  BOOL fresh = ![fm fileExistsAtPath:copy] ||
+               ![[NSString stringWithContentsOfFile:stampPath encoding:NSUTF8StringEncoding error:nil] isEqualToString:stamp];
+  if (fresh) {
+    NSError *error;
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm removeItemAtPath:copy error:nil];
+    if (![fm copyItemAtPath:source toPath:copy error:&error]) {
+      gameLog(@"its Steamworks client couldn't be copied (%@): it shares Steam's", error.localizedDescription);
+      return nil;
+    }
+  }
+  for (NSString *lib in @[ @"libtier0_s.dylib", @"libvstdlib_s.dylib", @"libaudio.dylib" ])
+    linkTo([dir stringByAppendingPathComponent:lib], [client stringByAppendingPathComponent:lib]);
+  if (fresh) {
+    NSString *password;
+    NSData *certificate = liveContainerCertificate(&password);
+    NSString *why = certificate ? signFiles(@[ copy ], certificate, password) : nil;
+    if (why) { gameLog(@"its Steamworks client couldn't be signed (%@): it shares Steam's", why); return nil; }
+    [stamp writeToFile:stampPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    gameLog(@"it ships Steamworks: it gets a steamclient of its own (a copy of Steam's), as a Mac game's process has");
+  }
+  return copy;
+}
+
 #pragma mark What it still needs
 
 // The functions and classes a converted binary imports from system libraries (iOS's, or the
@@ -1384,6 +1440,7 @@ static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindMainThread(header, slide);   // its main queue and main thread are its own (GameMainThread.m)
   AKGameBindBundles(header, slide);      // its plug-in bundles' programs are found (GameBundles.m)
   AKGameBindMetal(header, slide);        // its Metal device marks it as drawn at the screen's scale (MetalCompat.m)
+  AKGameBindSteamworks(header, slide, info.dli_fname);   // its Steamworks loads its own steamclient (GameSteamworks.m)
   bindOutput(header, slide);
   size_t nameLength = strlen(info.dli_fname);
   if (nameLength > 18 && !strcmp(info.dli_fname + nameLength - 18, "/UnityPlayer.dylib")) bindUnityQuit(header, slide);
@@ -1880,6 +1937,7 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
   why = again ? nil : convertApp(app, program);
   if (why) { fail(why); return -1; }
   if (again) gameLog(@"it ran before in this session: its loaded copy starts again");
+  AKGameSetSteamclient(prepareSteamclient(app));   // its own Steamworks client (GameSteamworks.m)
   // Signed with LiveContainer's certificate: ask the kernel now, the way dyld will, and on a
   // refusal log enough to tell why.
   if (!again && liveContainerCertificate(NULL)) {
