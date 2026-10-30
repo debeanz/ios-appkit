@@ -287,4 +287,4 @@ function verify() {
 if (require.main === module) {
   if (process.argv[2] === '--verify') verify(); else route();
 }
-module.exports = { SHIM, iosPath, loadSdk, resolveIos };
+module.exports = { SHIM, THROUGH_SHIM, iosPath, loadSdk, resolveIos };

@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const mg = require('./machogap.js');
 const { canon } = require('./ios-sdk-gap.js');
-const { SHIM, loadSdk, resolveIos } = require('./lib-routes.js');
+const { SHIM, THROUGH_SHIM, loadSdk, resolveIos } = require('./lib-routes.js');
 
 const OPENGL = '@rpath/AKOpenGL.framework/AKOpenGL';
 const MH_EXECUTE = 2;
@@ -111,7 +111,7 @@ function main() {
   for (const engine of fs.readdirSync(enginesDir).sort()) {
     const root = path.join(enginesDir, engine);
     if (!fs.statSync(root).isDirectory()) continue;
-    const e = report[engine] = { binaries: 0, cannotRun: [], codegen: [], luajit: [], missing: {}, flatLookups: 0 };
+    const e = report[engine] = { binaries: 0, cannotRun: [], codegen: [], luajit: [], missing: {}, notShim: {}, flatLookups: 0 };
     const sent = new Set();
     for (const file of walkFiles(root)) {
       const rel = path.relative(root, file);
@@ -148,6 +148,15 @@ function main() {
         byLib.get(lib).push(imp.name);
       }
       for (const [lib, names] of byLib) {
+        // A library the shim stands in front of (lib-routes.js THROUGH_SHIM): a name it doesn't
+        // answer itself reaches iOS's, whose answers don't work here (FMOD's AudioHardwareGetProperty).
+        if (THROUGH_SHIM.has(lib)) {
+          const passed = names.filter(n => !shimExports.has(n) && !n.startsWith('_k'));
+          if (passed.length) {
+            const list = e.notShim[lib] || (e.notShim[lib] = new Set());
+            for (const n of passed) list.add(n.replace(/^_/, ''));
+          }
+        }
         let to = routeOf(lib);
         if (!to) continue;
         if (to !== SHIM && to !== OPENGL && reexports.has(to) && names.some(n => !provides(to, n))) to = SHIM;
@@ -159,6 +168,7 @@ function main() {
       }
     }
     for (const k of Object.keys(e.missing)) e.missing[k] = [...e.missing[k]].sort();
+    for (const k of Object.keys(e.notShim)) e.notShim[k] = [...e.notShim[k]].sort();
     selectors[engine] = [...sent].sort();
   }
   if (selectorsPath) fs.writeFileSync(selectorsPath, JSON.stringify(selectors) + '\n');
@@ -174,6 +184,7 @@ function main() {
     for (const l of e.luajit) console.log(`  LuaJIT: ${l}`);
     if (e.flatLookups) console.log(`  ${e.flatLookups} imports looked up by name at load (flat namespace)`);
     for (const [k, list] of Object.entries(e.missing)) console.log(`  ${k} (${list.length}): ${list.join(' ')}`);
+    for (const [k, list] of Object.entries(e.notShim)) console.log(`  ${k}: iOS's answers, not the shim's (${list.length}): ${list.join(' ')}`);
   }
   console.log(`\n${total} missing names across ${Object.keys(report).length} engines; wrote ${outPath}`);
 }
