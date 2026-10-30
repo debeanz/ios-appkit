@@ -281,3 +281,23 @@ void AKGameMetalPrepare(void) {
             bc ? "supported" : "not supported");
   }});
 }
+
+// A game's code making its Metal device: it draws with Metal, so it gets the screen's scale
+// (AKGameBackingScale, NSScreen.m) from then on - before it measures its screens and window.
+__attribute__((ns_returns_retained)) static id<MTLDevice> gameCreateSystemDefaultDevice(void) {
+  AKGameNoteDrawsWithMetal();
+  return MTLCreateSystemDefaultDevice();
+}
+
+__attribute__((ns_returns_retained)) static NSArray<id<MTLDevice>> *gameCopyAllDevices(void) {
+  AKGameNoteDrawsWithMetal();
+  return MTLCopyAllDevices();
+}
+
+void AKGameBindMetal(const struct mach_header *header, intptr_t slide) {
+  AKRebindImports(header, slide, ^void *(const char *symbol) {
+    if (!strcmp(symbol, "_MTLCreateSystemDefaultDevice")) return (void *)gameCreateSystemDefaultDevice;
+    if (!strcmp(symbol, "_MTLCopyAllDevices")) return (void *)gameCopyAllDevices;
+    return NULL;
+  });
+}

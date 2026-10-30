@@ -215,6 +215,13 @@ uint32_t AKGameAudioBufferFrames(void);   // the buffer size it asked for (64-40
 void AKGameAudioSetBufferFrames(uint32_t frames);
 // MetalCompat.m: Metal answers a Mac game's code as a Mac GPU would (once, before the first game).
 void AKGameMetalPrepare(void);
+// MetalCompat.m: a game's code making a Metal device (its images' imports) marks it as drawn with
+// Metal. NSScreen.m: the scale a game's picture is drawn at - 1 (OpenGL: AKOpenGL renders at the
+// screen's resolution itself), or the screen's once it draws with Metal; reset as it ends.
+void AKGameBindMetal(const struct mach_header *header, intptr_t slide);
+void AKGameNoteDrawsWithMetal(void);
+CGFloat AKGameBackingScale(void);
+void AKGameBackingScaleReset(void);
 // GameCrash.m: from the first launch on, a game that crashes ends alone; the app keeps running.
 void AKGameCrashGuardInstall(void);
 void AKGameAudioStop(void);     // the game ended: all its sound stops (its units and queues, the session)

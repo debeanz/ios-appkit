@@ -1383,6 +1383,7 @@ static BOOL imageAdded(const struct mach_header *header, intptr_t slide) {
   AKGameBindLuaJIT(header, slide);   // LuaJIT's compiler off, its interpreter on (GameLuaJIT.m)
   AKGameBindMainThread(header, slide);   // its main queue and main thread are its own (GameMainThread.m)
   AKGameBindBundles(header, slide);      // its plug-in bundles' programs are found (GameBundles.m)
+  AKGameBindMetal(header, slide);        // its Metal device marks it as drawn at the screen's scale (MetalCompat.m)
   bindOutput(header, slide);
   size_t nameLength = strlen(info.dli_fname);
   if (nameLength > 18 && !strcmp(info.dli_fname + nameLength - 18, "/UnityPlayer.dylib")) bindUnityQuit(header, slide);
@@ -1911,6 +1912,9 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
     AKInProcessSetExitObserver(gameEnded);
     AKInProcessSetSignalObserver(gameSignalled);
   });
+  // A Unity player draws with Metal: its picture at the screen's scale from the start (NSScreen.m).
+  if ([NSFileManager.defaultManager fileExistsAtPath:[app.bundlePath stringByAppendingPathComponent:@"Contents/Frameworks/UnityPlayer.dylib"]])
+    AKGameNoteDrawsWithMetal();
   pthread_mutex_lock(&gGameLock);
   gGameBundle = app;
   gGameSourceBundle = source;

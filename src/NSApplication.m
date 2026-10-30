@@ -97,6 +97,7 @@ static NSEvent *gCurrentEvent[2];   // Steam's, a game's (-currentEvent)
 - (BOOL)isRunning { return AKIsGameThread() ? gGameRunning : _running; }
 
 void AKGameAppEnded(void) {
+  AKGameBackingScaleReset();
   gGameDelegate = nil;
   gCurrentEvent[1] = nil;
   gGameRunning = gGameStopped = NO;

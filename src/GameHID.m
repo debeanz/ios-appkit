@@ -5,7 +5,9 @@
 // controller with a gamepad profile is a wired Xbox 360 controller — the layout Mac gamepad
 // mapping databases know (SDL's "X360 Controller": 15 buttons, A B X Y LB RB LS RS Start Back
 // Guide and the d-pad; sticks on X/Y and Rx/Ry, triggers on Z and Rz) — whose values are read
-// from GameController when the game asks, and sent to its input callbacks as they change.
+// from GameController when the game asks, and sent to its input callbacks as they change: as
+// element values, as the input reports that controller sends (Unity's Input System reads those),
+// and through queues of values (Unity's older input).
 #import "AKShimPrivate.h"
 #import <GameController/GameController.h>
 #import <mach/mach_time.h>
@@ -17,6 +19,23 @@ enum { kAKElementMisc = 1, kAKElementButton = 2, kAKElementAxis = 3 };
 typedef void (*AKHIDDeviceCallback)(void *context, AKIOReturn result, void *sender, void *device);
 typedef void (*AKHIDValueCallback)(void *context, AKIOReturn result, void *sender, void *value);
 typedef void (*AKHIDCallback)(void *context, AKIOReturn result, void *sender);
+typedef void (*AKHIDReportCallback)(void *context, AKIOReturn result, void *sender, uint32_t type, uint32_t reportID, uint8_t *report,
+                                    long length);
+typedef void (*AKHIDReportTimeCallback)(void *context, AKIOReturn result, void *sender, uint32_t type, uint32_t reportID,
+                                        uint8_t *report, long length, uint64_t timeStamp);
+
+// An input report callback (a device's, with the buffer its caller gave, or a manager's), and the
+// report it was last sent.
+enum { kAKReportSize = 20 };
+typedef struct {
+  AKHIDReportCallback fn;
+  AKHIDReportTimeCallback timed;
+  void *context;
+  uint8_t *buffer;
+  long length;
+  uint8_t last[kAKReportSize];
+  BOOL sent;
+} AKReportCallback;
 
 static void hidLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
 static void hidLog(NSString *fmt, ...) {
@@ -59,6 +78,9 @@ typedef struct { AKHIDValueCallback fn; void *context; } AKValueCallback;
   int64_t last[32];                       // per element, as last sent to callbacks
   uint32_t location;
   AKValueCallback input;
+  AKReportCallback report;
+  uint8_t scratch[kAKReportSize];         // the report last sent to managers' callbacks (they give no buffer)
+  BOOL scratchSent;
   AKHIDCallback removed;
   void *removedContext;
   CFRunLoopTimerRef timer;                // when scheduled on its own
@@ -74,6 +96,7 @@ typedef struct { AKHIDValueCallback fn; void *context; } AKValueCallback;
   AKHIDDeviceCallback matched, removed;
   void *matchedContext, *removedContext;
   AKValueCallback input;
+  AKReportCallback report;
   NSMutableArray<AKHIDDevice *> *known;
   CFRunLoopTimerRef timer;
   dispatch_queue_t queue;
@@ -270,6 +293,56 @@ static void sendChanges(AKHIDDevice *d, AKValueCallback *managerInput) {
   }
 }
 
+// Its input report as a wired Xbox 360 controller sends it on a Mac (the 360Controller driver's,
+// which Unity's Input System reads as XboxGamepadMacOS): 0x00 0x14, then the buttons (d-pad up
+// down left right, Start, Back, the stick presses, LB, RB, Guide, -, A, B, X, Y from bit 0),
+// the triggers (0-255), and the sticks (16-bit, little-endian, y growing downward).
+static void buildReport(AKHIDDevice *d, uint8_t r[kAKReportSize]) {
+  static const uint8_t bitOf[16] = { [1] = 12, [2] = 13, [3] = 14, [4] = 15, [5] = 8, [6] = 9, [7] = 6, [8] = 7,
+                                     [9] = 4, [10] = 5, [11] = 10, [12] = 0, [13] = 1, [14] = 2, [15] = 3 };
+  memset(r, 0, kAKReportSize);
+  r[1] = kAKReportSize;
+  uint16_t buttons = 0;
+  for (AKHIDElement *e in d->elements) {
+    int64_t v = readElement(d, e);
+    if (e->page == 9) {
+      if (v && e->usage < 16) buttons |= (uint16_t)(1u << bitOf[e->usage]);
+      continue;
+    }
+    int offset = e->usage == 0x30 ? 6 : e->usage == 0x31 ? 8 : e->usage == 0x33 ? 10 : e->usage == 0x34 ? 12 : 0;
+    if (offset) { r[offset] = (uint8_t)(v & 0xff); r[offset + 1] = (uint8_t)((v >> 8) & 0xff); }
+    else if (e->usage == 0x32) r[4] = (uint8_t)v;
+    else if (e->usage == 0x35) r[5] = (uint8_t)v;
+  }
+  r[2] = (uint8_t)(buttons & 0xff);
+  r[3] = (uint8_t)(buttons >> 8);
+}
+
+static void deliverReport(AKReportCallback *cb, AKHIDDevice *d, uint8_t *buffer, long length, const uint8_t r[kAKReportSize]) {
+  long n = MIN(length, (long)kAKReportSize);
+  if (n <= 0) return;
+  memcpy(buffer, r, (size_t)n);
+  if (cb->timed) cb->timed(cb->context, kAKIOReturnSuccess, (__bridge void *)d, 0, 0, buffer, n, mach_absolute_time());
+  else cb->fn(cb->context, kAKIOReturnSuccess, (__bridge void *)d, 0, 0, buffer, n);   // type 0: an input report
+}
+
+// Its report, when it changed, to the device's report callback and the manager's.
+static void sendReport(AKHIDDevice *d, AKReportCallback *managerReport) {
+  BOOL toDevice = d->report.fn || d->report.timed, toManager = managerReport && (managerReport->fn || managerReport->timed);
+  if (!toDevice && !toManager) return;
+  uint8_t r[kAKReportSize];
+  buildReport(d, r);
+  if (toDevice && (!d->report.sent || memcmp(r, d->report.last, kAKReportSize))) {
+    memcpy(d->report.last, r, kAKReportSize);
+    d->report.sent = YES;
+    deliverReport(&d->report, d, d->report.buffer, d->report.length, r);
+  }
+  if (toManager && (!d->scratchSent || memcmp(r, d->scratch, kAKReportSize))) {
+    d->scratchSent = YES;
+    deliverReport(managerReport, d, d->scratch, kAKReportSize, r);
+  }
+}
+
 static void pollManager(AKHIDManager *m) {
   @autoreleasepool {
     NSArray<AKHIDDevice *> *now = connectedDevices();
@@ -284,7 +357,10 @@ static void pollManager(AKHIDManager *m) {
       if (m->removed) m->removed(m->removedContext, kAKIOReturnSuccess, (__bridge void *)m, (__bridge void *)d);
       if (d->removed) d->removed(d->removedContext, kAKIOReturnSuccess, (__bridge void *)d);
     }
-    for (AKHIDDevice *d in m->known) sendChanges(d, &m->input);
+    for (AKHIDDevice *d in m->known) {
+      sendChanges(d, &m->input);
+      sendReport(d, &m->report);
+    }
   }
 }
 
@@ -329,7 +405,6 @@ static void hManagerRegisterDeviceMatchingCallback(void *m, AKHIDDeviceCallback 
 static void hManagerRegisterDeviceRemovalCallback(void *m, AKHIDDeviceCallback cb, void *ctx) { MGR(m)->removed = cb; MGR(m)->removedContext = ctx; }
 static void hManagerRegisterInputValueCallback(void *m, AKHIDValueCallback cb, void *ctx) { MGR(m)->input = (AKValueCallback){ cb, ctx }; }
 static void hIgnore2(void *a, void *b) {}
-static void hIgnore3(void *a, void *b, void *c) {}
 static AKIOReturn hManagerOpen(void *m, uint32_t options) { return kAKIOReturnSuccess; }
 static AKIOReturn hManagerClose(void *m, uint32_t options) {
   AKHIDManager *mgr = MGR(m);
@@ -397,11 +472,24 @@ static AKIOReturn hDeviceReport(void *d, int type, long id, uint8_t *report, lon
 static AKIOReturn hDeviceGetReport(void *d, int type, long id, uint8_t *report, long *length) { return kAKIOReturnUnsupported; }
 
 static void hDeviceRegisterInputValueCallback(void *d, AKHIDValueCallback cb, void *ctx) { DEV(d)->input = (AKValueCallback){ cb, ctx }; }
+// Input reports (Unity's Input System reads a gamepad as its reports).
+static void hDeviceRegisterInputReportCallback(void *d, uint8_t *report, long length, AKHIDReportCallback cb, void *ctx) {
+  DEV(d)->report = (AKReportCallback){ .fn = report ? cb : NULL, .context = ctx, .buffer = report, .length = length };
+}
+static void hDeviceRegisterInputReportTimeCallback(void *d, uint8_t *report, long length, AKHIDReportTimeCallback cb, void *ctx) {
+  DEV(d)->report = (AKReportCallback){ .timed = report ? cb : NULL, .context = ctx, .buffer = report, .length = length };
+}
+static void hManagerRegisterInputReportCallback(void *m, AKHIDReportCallback cb, void *ctx) {
+  MGR(m)->report = (AKReportCallback){ .fn = cb, .context = ctx };
+}
+static void hManagerRegisterInputReportTimeCallback(void *m, AKHIDReportTimeCallback cb, void *ctx) {
+  MGR(m)->report = (AKReportCallback){ .timed = cb, .context = ctx };
+}
 static void hDeviceRegisterRemovalCallback(void *d, AKHIDCallback cb, void *ctx) { DEV(d)->removed = cb; DEV(d)->removedContext = ctx; }
 static void hDeviceSchedule(void *d, CFRunLoopRef loop, CFStringRef mode) {
   AKHIDDevice *dev = DEV(d);
   stopTimer(&dev->timer);
-  dev->timer = pollTimer(loop, mode, ^{ @autoreleasepool { sendChanges(dev, NULL); } });
+  dev->timer = pollTimer(loop, mode, ^{ @autoreleasepool { sendChanges(dev, NULL); sendReport(dev, NULL); } });
 }
 static void hDeviceUnschedule(void *d, CFRunLoopRef loop, CFStringRef mode) { stopTimer(&DEV(d)->timer); }
 
@@ -459,6 +547,100 @@ static void *hValueCreateWithIntegerValue(CFAllocatorRef a, void *element, uint6
 }
 static CFTypeID hTypeID(void) { return hidTypeID(); }
 
+// Queues of element values (Unity's older input reads joysticks this way): each change of an
+// element in the queue since it was added, oldest first; or, scheduled, a callback when there are.
+@interface AKHIDQueue : NSObject {
+@public
+  __weak AKHIDDevice *device;
+  NSMutableArray<AKHIDElement *> *elements;
+  NSMutableArray<AKHIDValue *> *pending;
+  int64_t last[64];
+  long depth;
+  BOOL started;
+  AKHIDCallback available;
+  void *availableContext;
+  CFRunLoopTimerRef timer;
+}
+@end
+@implementation AKHIDQueue
+@end
+
+#define QUEUE(ref) ((__bridge AKHIDQueue *)(ref))
+static NSHashTable<AKHIDQueue *> *gQueues;   // the game's, until it ends
+
+// The changes of its elements since it last looked, to the end of the queue (at most its depth).
+static void fillQueue(AKHIDQueue *q) {
+  AKHIDDevice *d = q->device;
+  if (!d || !q->started) return;
+  NSUInteger n = MIN(q->elements.count, 64u);
+  for (NSUInteger i = 0; i < n; i++) {
+    int64_t now = readElement(d, q->elements[i]);
+    if (now == q->last[i]) continue;
+    q->last[i] = now;
+    if ((long)q->pending.count >= MAX(q->depth, 1)) [q->pending removeObjectAtIndex:0];
+    [q->pending addObject:freshValue(q->elements[i], now)];
+  }
+}
+
+static void *hQueueCreate(CFAllocatorRef a, void *device, long depth, uint32_t options) {
+  AKHIDQueue *q = [AKHIDQueue new];
+  q->device = DEV(device);
+  q->elements = [NSMutableArray array];
+  q->pending = [NSMutableArray array];
+  q->depth = depth;
+  @synchronized (AKHIDQueue.class) {
+    if (!gQueues) gQueues = [NSHashTable weakObjectsHashTable];
+    [gQueues addObject:q];
+  }
+  return (void *)CFBridgingRetain(q);
+}
+static void hQueueAddElement(void *q, void *e) {
+  AKHIDQueue *queue = QUEUE(q);
+  if ([queue->elements indexOfObjectIdenticalTo:ELEM(e)] != NSNotFound || queue->elements.count >= 64 || !queue->device) return;
+  queue->last[queue->elements.count] = readElement(queue->device, ELEM(e));   // changes from now on
+  [queue->elements addObject:ELEM(e)];
+}
+static void hQueueRemoveElement(void *q, void *e) {
+  AKHIDQueue *queue = QUEUE(q);
+  NSUInteger i = [queue->elements indexOfObjectIdenticalTo:ELEM(e)];
+  if (i == NSNotFound) return;
+  memmove(&queue->last[i], &queue->last[i + 1], sizeof(int64_t) * (queue->elements.count - i - 1));
+  [queue->elements removeObjectAtIndex:i];
+}
+static Boolean hQueueContainsElement(void *q, void *e) { return [QUEUE(q)->elements indexOfObjectIdenticalTo:ELEM(e)] != NSNotFound; }
+static void hQueueStart(void *q) { QUEUE(q)->started = YES; }
+static void hQueueStop(void *q) { QUEUE(q)->started = NO; }
+static void *hQueueCopyNextValue(void *q) {
+  AKHIDQueue *queue = QUEUE(q);
+  @autoreleasepool {
+    if (!queue->pending.count) fillQueue(queue);
+    if (!queue->pending.count) return NULL;
+    AKHIDValue *v = queue->pending.firstObject;
+    [queue->pending removeObjectAtIndex:0];
+    return (void *)CFBridgingRetain(v);
+  }
+}
+static void *hQueueCopyNextValueWithTimeout(void *q, double timeout) { return hQueueCopyNextValue(q); }
+static void *hQueueGetDevice(void *q) { return (__bridge void *)QUEUE(q)->device; }
+static long hQueueGetDepth(void *q) { return QUEUE(q)->depth; }
+static void hQueueSetDepth(void *q, long depth) { QUEUE(q)->depth = depth; }
+static void hQueueRegisterValueAvailableCallback(void *q, AKHIDCallback cb, void *ctx) {
+  QUEUE(q)->available = cb;
+  QUEUE(q)->availableContext = ctx;
+}
+static void hQueueSchedule(void *q, CFRunLoopRef loop, CFStringRef mode) {
+  AKHIDQueue *queue = QUEUE(q);
+  stopTimer(&queue->timer);
+  __weak AKHIDQueue *weakQueue = queue;
+  queue->timer = pollTimer(loop, mode, ^{
+    AKHIDQueue *strong = weakQueue;
+    if (!strong) return;
+    @autoreleasepool { fillQueue(strong); }
+    if (strong->pending.count && strong->available) strong->available(strong->availableContext, kAKIOReturnSuccess, (__bridge void *)strong);
+  });
+}
+static void hQueueUnschedule(void *q, CFRunLoopRef loop, CFStringRef mode) { stopTimer(&QUEUE(q)->timer); }
+
 #pragma mark Binding a game library's imports
 
 static NSDictionary<NSString *, NSValue *> *bridge(void) {
@@ -472,7 +654,9 @@ static NSDictionary<NSString *, NSValue *> *bridge(void) {
       F(IOHIDManagerRegisterDeviceMatchingCallback, hManagerRegisterDeviceMatchingCallback),
       F(IOHIDManagerRegisterDeviceRemovalCallback, hManagerRegisterDeviceRemovalCallback),
       F(IOHIDManagerRegisterInputValueCallback, hManagerRegisterInputValueCallback),
-      F(IOHIDManagerRegisterInputReportCallback, hIgnore3), F(IOHIDManagerSetInputValueMatching, hIgnore2),
+      F(IOHIDManagerRegisterInputReportCallback, hManagerRegisterInputReportCallback),
+      F(IOHIDManagerRegisterInputReportWithTimeStampCallback, hManagerRegisterInputReportTimeCallback),
+      F(IOHIDManagerSetInputValueMatching, hIgnore2),
       F(IOHIDManagerSetInputValueMatchingMultiple, hIgnore2), F(IOHIDManagerOpen, hManagerOpen),
       F(IOHIDManagerClose, hManagerClose), F(IOHIDManagerScheduleWithRunLoop, hManagerSchedule),
       F(IOHIDManagerUnscheduleFromRunLoop, hManagerUnschedule), F(IOHIDManagerSetDispatchQueue, hManagerSetDispatchQueue),
@@ -486,7 +670,9 @@ static NSDictionary<NSString *, NSValue *> *bridge(void) {
       F(IOHIDDeviceGetValue, hDeviceGetValue), F(IOHIDDeviceGetValueWithOptions, hDeviceGetValueWithOptions),
       F(IOHIDDeviceSetValue, hDeviceSetValue), F(IOHIDDeviceSetReport, hDeviceReport), F(IOHIDDeviceGetReport, hDeviceGetReport),
       F(IOHIDDeviceRegisterInputValueCallback, hDeviceRegisterInputValueCallback),
-      F(IOHIDDeviceRegisterInputReportCallback, hIgnore3), F(IOHIDDeviceRegisterRemovalCallback, hDeviceRegisterRemovalCallback),
+      F(IOHIDDeviceRegisterInputReportCallback, hDeviceRegisterInputReportCallback),
+      F(IOHIDDeviceRegisterInputReportWithTimeStampCallback, hDeviceRegisterInputReportTimeCallback),
+      F(IOHIDDeviceRegisterRemovalCallback, hDeviceRegisterRemovalCallback),
       F(IOHIDDeviceSetInputValueMatching, hIgnore2), F(IOHIDDeviceSetInputValueMatchingMultiple, hIgnore2),
       F(IOHIDDeviceScheduleWithRunLoop, hDeviceSchedule), F(IOHIDDeviceUnscheduleFromRunLoop, hDeviceUnschedule),
       F(IOHIDDeviceGetTypeID, hTypeID),
@@ -506,6 +692,13 @@ static NSDictionary<NSString *, NSValue *> *bridge(void) {
       F(IOHIDValueGetTimeStamp, hValueGetTimeStamp), F(IOHIDValueGetLength, hValueGetLength),
       F(IOHIDValueGetBytePtr, hValueGetBytePtr), F(IOHIDValueGetScaledValue, hValueGetScaledValue),
       F(IOHIDValueCreateWithIntegerValue, hValueCreateWithIntegerValue), F(IOHIDValueGetTypeID, hTypeID),
+      F(IOHIDQueueCreate, hQueueCreate), F(IOHIDQueueAddElement, hQueueAddElement), F(IOHIDQueueRemoveElement, hQueueRemoveElement),
+      F(IOHIDQueueContainsElement, hQueueContainsElement), F(IOHIDQueueStart, hQueueStart), F(IOHIDQueueStop, hQueueStop),
+      F(IOHIDQueueCopyNextValue, hQueueCopyNextValue), F(IOHIDQueueCopyNextValueWithTimeout, hQueueCopyNextValueWithTimeout),
+      F(IOHIDQueueGetDevice, hQueueGetDevice), F(IOHIDQueueGetDepth, hQueueGetDepth), F(IOHIDQueueSetDepth, hQueueSetDepth),
+      F(IOHIDQueueRegisterValueAvailableCallback, hQueueRegisterValueAvailableCallback),
+      F(IOHIDQueueScheduleWithRunLoop, hQueueSchedule), F(IOHIDQueueUnscheduleFromRunLoop, hQueueUnschedule),
+      F(IOHIDQueueGetTypeID, hTypeID),
     };
 #undef F
   });
@@ -544,11 +737,24 @@ void AKGameControllersShutdown(void) {
     hManagerClose((__bridge void *)m, 0);
     m->matched = m->removed = NULL;
     m->input = (AKValueCallback){ NULL, NULL };
+    m->report = (AKReportCallback){ 0 };
   }
   for (AKHIDDevice *d in connectedDevices()) {
     stopTimer(&d->timer);
     d->input = (AKValueCallback){ NULL, NULL };
+    d->report = (AKReportCallback){ 0 };
+    d->scratchSent = NO;
     d->removed = NULL;
+  }
+  NSArray<AKHIDQueue *> *queues;
+  @synchronized (AKHIDQueue.class) {
+    queues = gQueues.allObjects;
+    [gQueues removeAllObjects];
+  }
+  for (AKHIDQueue *q in queues) {
+    stopTimer(&q->timer);
+    q->started = NO;
+    q->available = NULL;
   }
 }
 

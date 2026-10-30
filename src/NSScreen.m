@@ -3,6 +3,31 @@
 
 NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenColorSpaceDidChangeNotification";
 
+// The scale a game's picture is drawn at. One drawn with OpenGL sees 1x (points): Mac games of its
+// time size their picture that way (GameMaker drew in a third of a 3x surface), and AKOpenGL
+// renders its frames at the screen's resolution itself. One drawn with Metal - Unity, SDL's
+// Metal view, MoltenVK - renders at what it's told and nothing enlarges it after: told 1x, it
+// drew a third of the screen's pixels, shown enlarged pixel by pixel (Unity asks for nearest
+// filtering) and so jagged. It sees the screen's own scale, as on a Retina Mac: a Unity game from
+// its start (Unity draws with Metal on the Mac, and measures its screens before it makes its
+// device), any other from when its code makes a Metal device or gives a view a Metal layer
+// (AK_GAME_RENDER_SCALE asks for less).
+static BOOL gGameDrawsWithMetal;   // atomic
+void AKGameNoteDrawsWithMetal(void) { __atomic_store_n(&gGameDrawsWithMetal, YES, __ATOMIC_RELAXED); }
+void AKGameBackingScaleReset(void) { __atomic_store_n(&gGameDrawsWithMetal, NO, __ATOMIC_RELAXED); }
+CGFloat AKGameBackingScale(void) {
+  if (!__atomic_load_n(&gGameDrawsWithMetal, __ATOMIC_RELAXED)) return 1;
+  static CGFloat scale;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    CGFloat screen = UIScreen.mainScreen.scale;
+    const char *env = getenv("AK_GAME_RENDER_SCALE");
+    double asked = env ? atof(env) : 0;
+    scale = asked >= 1 && asked < screen ? asked : screen;
+  });
+  return scale;
+}
+
 @implementation NSScreen {
   UIScreen *_screen;
 }
@@ -51,8 +76,8 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
   return link ?: [CADisplayLink displayLinkWithTarget:target selector:selector];
 }
 
-// 1 to a game, as its windows are (NSWindow.m).
-- (CGFloat)backingScaleFactor { return AKIsGameThread() ? 1 : _screen.scale; }
+// A game's, as its windows' (NSWindow.m): AKGameBackingScale.
+- (CGFloat)backingScaleFactor { return AKIsGameThread() ? AKGameBackingScale() : _screen.scale; }
 - (NSInteger)maximumFramesPerSecond { return AKDisplayRefreshRate(_screen); }   // CVDisplayLink.m
 - (NSTimeInterval)minimumRefreshInterval { return 1.0 / MAX(1, self.maximumFramesPerSecond); }
 - (NSTimeInterval)maximumRefreshInterval { return self.minimumRefreshInterval; }

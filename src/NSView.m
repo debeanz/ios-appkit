@@ -328,6 +328,7 @@ static char kBestResolutionKey;
   _hostedLayer = layer;
   if (!layer) return;
   _wantsLayer = YES;
+  if (_madeByGame && [layer isKindOfClass:CAMetalLayer.class]) AKGameNoteDrawsWithMetal();   // its picture at the screen's scale
   AKOnMainSync(^{
     if (!self->_flipLayer) {
       // macOS layers measure from the bottom-left, iOS layers from the top-left. Hosting the
