@@ -5,6 +5,7 @@
 // calls at runtime, which no static symbol list captures. The honest fix for each is to
 // implement it; until then a zero return is what most AppKit calls can tolerate.
 #import "AKShimPrivate.h"
+#import <dlfcn.h>
 #import <objc/runtime.h>
 #import <os/lock.h>
 
@@ -19,6 +20,58 @@ NSMethodSignature *AKGenericSignatureForSelector(SEL sel) {
   NSMutableString *types = [NSMutableString stringWithString:@"@@:"];  // return, self, _cmd
   for (NSUInteger i = 0; i < args; i++) [types appendString:@"@"];
   return [NSMethodSignature signatureWithObjCTypes:types.UTF8String];
+}
+
+// macOS's own type encodings for the methods of the shim's classes that return a struct or a
+// floating-point value (tools/mac-methods.m writes them next to the shim at build time): with
+// the real signature the zero returned lands where the caller reads it (d0-d3 for an NSRect, d0
+// for a CGFloat), not in x0 with garbage left where it looks.
+//   "<Class> -<selector> <types>" and "^ <Class> <its superclass>", as on macOS.
+static NSDictionary<NSString *, NSString *> *gMacTypes, *gMacSupers;
+
+static void loadMacTypes(void) {
+  Dl_info info;
+  if (!dladdr((const void *)loadMacTypes, &info) || !info.dli_fname) return;
+  NSString *path = [@(info.dli_fname).stringByDeletingLastPathComponent stringByAppendingPathComponent:@"mac-method-types.txt"];
+  NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+  NSMutableDictionary *types = [NSMutableDictionary dictionary], *supers = [NSMutableDictionary dictionary];
+  for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+    NSArray<NSString *> *f = [line componentsSeparatedByString:@" "];
+    if (f.count == 3 && [f[0] isEqualToString:@"^"]) supers[f[1]] = f[2];
+    else if (f.count == 3) types[[NSString stringWithFormat:@"%@ %@", f[0], f[1]]] = f[2];
+  }
+  gMacTypes = types;
+  gMacSupers = supers;
+}
+
+// The shim class a receiver's class is (a game's NSWindow subclass is an NSWindow), under its
+// AppKit name, then up macOS's lineage.
+static const char *macTypes(Class cls, SEL sel, BOOL classMethod) {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{ loadMacTypes(); });
+  if (!gMacTypes.count) return NULL;
+  for (Class c = cls; c; c = class_getSuperclass(c)) {
+    NSString *name = @(class_getName(c));
+    if ([name isEqualToString:@"AKShimFont"]) name = @"NSFont";
+    else if ([name hasPrefix:@"AKShim_"]) name = [name substringFromIndex:7];
+    for (NSString *n = name; n; n = gMacSupers[n]) {
+      NSString *types = gMacTypes[[NSString stringWithFormat:@"%@ %c%s", n, classMethod ? '+' : '-', sel_getName(sel)]];
+      if (types) return types.UTF8String;
+    }
+  }
+  return NULL;
+}
+
+NSMethodSignature *AKFallbackSignature(id receiver, SEL sel, BOOL classMethod) {
+  const char *types = macTypes(classMethod ? (Class)receiver : object_getClass(receiver), sel, classMethod);
+  if (types) {
+    @try {
+      NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:types];
+      if (sig) return sig;
+    } @catch (NSException *e) {
+    }
+  }
+  return AKGenericSignatureForSelector(sel);
 }
 
 void AKLogUnimplemented(id obj, SEL sel) {

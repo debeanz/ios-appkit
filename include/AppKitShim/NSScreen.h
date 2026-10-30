@@ -12,8 +12,19 @@ extern NSNotificationName const NSScreenColorSpaceDidChangeNotification;
 @property (class, readonly, strong) NSScreen *mainScreen;
 @property (nonatomic, readonly) NSRect frame;
 @property (nonatomic, readonly) NSRect visibleFrame;
+@property (class, readonly, strong) NSScreen *deepestScreen;
 @property (nonatomic, readonly) CGFloat backingScaleFactor;
 @property (nonatomic, readonly) NSInteger maximumFramesPerSecond;
+@property (nonatomic, readonly) NSTimeInterval minimumRefreshInterval, maximumRefreshInterval;
+@property (nonatomic, readonly) NSTimeInterval displayUpdateGranularity, lastDisplayUpdateTimestamp;
+// No notch: zero insets and no areas beside one.
+@property (nonatomic, readonly) NSEdgeInsets safeAreaInsets;
+@property (nonatomic, readonly) NSRect auxiliaryTopLeftArea, auxiliaryTopRightArea;
+@property (nonatomic, readonly) int depth;
+@property (nonatomic, readonly) const int *supportedWindowDepths;
+- (NSRect)convertRectToBacking:(NSRect)rect;
+- (NSRect)convertRectFromBacking:(NSRect)rect;
+- (NSRect)backingAlignedRect:(NSRect)rect options:(unsigned long long)options;
 @property (nonatomic, readonly, copy) NSString *localizedName;
 // NSScreenNumber (the CGDirectDisplayID), NSDeviceSize and NSDeviceResolution, as on the Mac.
 @property (nonatomic, readonly, copy) NSDictionary<NSString *, id> *deviceDescription;

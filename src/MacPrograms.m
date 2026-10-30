@@ -39,6 +39,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <pthread.h>
+#import <sys/stat.h>
 #import "AKShimPrivate.h"
 #import "AppKitShim/LibSystemMac.h"
 #import "SteamIPC.h"
@@ -1738,11 +1739,44 @@ static void bindUnityQuit(const struct mach_header *header, intptr_t slide) {
   });
 }
 
+// Steam's console (stdout and stderr to steam-console.log) as a game starts. Unity's -logFile
+// points the process's stdout and stderr at its own log, and nothing would point them back: they
+// come back when the game ends.
+static int gConsoleOut = -1, gConsoleErr = -1;
+
+static void keepConsole(void) {
+  if (gConsoleOut < 0) gConsoleOut = dup(STDOUT_FILENO);
+  if (gConsoleErr < 0) gConsoleErr = dup(STDERR_FILENO);
+}
+
+static BOOL sameFile(int a, int b) {
+  struct stat x, y;
+  return fstat(a, &x) == 0 && fstat(b, &y) == 0 && x.st_dev == y.st_dev && x.st_ino == y.st_ino;
+}
+
+static void restoreConsole(void) {
+  fflush(stdout);
+  fflush(stderr);
+  BOOL moved = NO;
+  // The descriptors and the ones stdio writes through (freopen may have given it others).
+  int pairs[4][2] = { { gConsoleOut, STDOUT_FILENO }, { gConsoleOut, fileno(stdout) },
+                      { gConsoleErr, STDERR_FILENO }, { gConsoleErr, fileno(stderr) } };
+  for (int i = 0; i < 4; i++) {
+    int saved = pairs[i][0], fd = pairs[i][1];
+    if (saved >= 0 && fd >= 0 && !sameFile(saved, fd)) moved |= dup2(saved, fd) == fd;
+  }
+  if (gConsoleOut >= 0) close(gConsoleOut);
+  if (gConsoleErr >= 0) close(gConsoleErr);
+  gConsoleOut = gConsoleErr = -1;
+  if (moved) gameLog(@"its output went to its own log while it ran; Steam's is back in steam-console.log");
+}
+
 static void gameEnded(pid_t pid, int status) {
   pthread_mutex_lock(&gGameLock);   // held by the launcher until gGamePid is set
   BOOL ours = pid == gGamePid;
   pthread_mutex_unlock(&gGameLock);
   if (!ours) return;
+  restoreConsole();
   gameLog(@"%@ ended (%d)", gGameBundle.bundlePath.lastPathComponent, status);
   NSMutableArray<NSString *> *images = [NSMutableArray array];
   for (int i = 0; i < gGameImageCount; i++) {
@@ -1949,10 +1983,12 @@ static pid_t launchMacApplication(NSURL *appURL, NSArray<NSString *> *arguments,
   }
   char **argv = calloc(args.count + 1, sizeof(char *));
   for (NSUInteger i = 0; i < args.count; i++) argv[i] = (char *)args[i].UTF8String;
+  keepConsole();
   pid_t pid = AKSpawnInProcess(program.fileSystemRepresentation, argv, NULL, "/");
   free(argv);
   if (pid < 0) {
     NSString *reason = [NSString stringWithFormat:@"it wouldn't start (%s)", strerror(errno)];
+    restoreConsole();
     undo();
     fail(reason);
     return -1;

@@ -33,6 +33,7 @@ typedef NS_OPTIONS(NSUInteger, NSAutoresizingMaskOptions) {
 
 @property (nonatomic, assign) NSRect frame;
 @property (nonatomic, assign) NSRect bounds;
+- (void)setBoundsSize:(NSSize)size;   // scales its own coordinates; the frame stays
 @property (nonatomic, readonly, getter=isFlipped) BOOL flipped;
 @property (nonatomic, assign) BOOL wantsLayer;
 @property (nonatomic, assign) BOOL hidden;

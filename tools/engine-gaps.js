@@ -5,10 +5,12 @@
 // it would bind: the iOS SDK's export lists, the shim's own exports and the iOS libraries its
 // umbrella re-exports, or AKOpenGL. Also reported: code iOS can't run (Intel only, arm64e) and
 // engines that write machine code as they run, which iOS doesn't let this app map. Runs in CI
-// after the shim is built (ipa.yml); report only.
+// after the shim is built (ipa.yml); report only. With <selectors.json>, also writes the
+// Objective-C selectors each engine's code sends, for tools/mac-methods.m to check against the
+// shim's classes.
 //
 //   node tools/engine-gaps.js <engines-dir> <iphoneos-sdk> <routes.json> <shim-exports.txt>
-//                             <opengl-exports.txt> <runtime-gap.json> <out.json>
+//                             <opengl-exports.txt> <runtime-gap.json> <out.json> [selectors.json]
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -72,7 +74,7 @@ function arm64Slice(buf) {
 }
 
 function main() {
-  const [enginesDir, sdk, routesPath, shimExportsPath, glExportsPath, runtimePath, outPath] = process.argv.slice(2);
+  const [enginesDir, sdk, routesPath, shimExportsPath, glExportsPath, runtimePath, outPath, selectorsPath] = process.argv.slice(2);
   if (!outPath) {
     console.error('usage: node tools/engine-gaps.js <engines-dir> <iphoneos-sdk> <routes.json> <shim-exports.txt> <opengl-exports.txt> <runtime-gap.json> <out.json>');
     process.exit(2);
@@ -105,11 +107,12 @@ function main() {
     return resolveIos(lib, reach, byFile) || SHIM;
   };
 
-  const report = {};
+  const report = {}, selectors = {};
   for (const engine of fs.readdirSync(enginesDir).sort()) {
     const root = path.join(enginesDir, engine);
     if (!fs.statSync(root).isDirectory()) continue;
     const e = report[engine] = { binaries: 0, cannotRun: [], codegen: [], luajit: [], missing: {}, flatLookups: 0 };
+    const sent = new Set();
     for (const file of walkFiles(root)) {
       const rel = path.relative(root, file);
       let buf;
@@ -131,6 +134,10 @@ function main() {
       if (r.platform && r.platform !== 'macOS') continue;   // an xcframework's iOS copies
       e.binaries++;
       if (slice.includes('_luaJIT_setmode\0')) e.luajit.push(rel);
+      if (r.selectorBlob) {
+        const [fo, sz] = r.selectorBlob;
+        for (const n of slice.toString('latin1', fo, fo + sz).split('\0')) if (n) sent.add(n);
+      }
       // Strong imports by library, as the app sees them for throughShimIfLacking.
       const byLib = new Map();
       for (const imp of r.imports) {
@@ -152,7 +159,9 @@ function main() {
       }
     }
     for (const k of Object.keys(e.missing)) e.missing[k] = [...e.missing[k]].sort();
+    selectors[engine] = [...sent].sort();
   }
+  if (selectorsPath) fs.writeFileSync(selectorsPath, JSON.stringify(selectors) + '\n');
 
   fs.writeFileSync(outPath, JSON.stringify(report, null, 1) + '\n');
   let total = 0;

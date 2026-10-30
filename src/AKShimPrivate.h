@@ -73,13 +73,16 @@ UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);
 // still needs, the way a real AppKit object would already respond. A class opts in by
 // putting AK_UNIMPLEMENTED_FORWARDER in its @implementation. respondsToSelector: is
 // unaffected (it checks the real method list), so feature detection still sees the truth.
+// The zero returned has the method's real type when macOS's signature for it is known
+// (AKFallbackSignature: a struct or floating-point return goes where the caller reads it).
 void AKLogUnimplemented(id obj, SEL sel);
 NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
+NSMethodSignature *AKFallbackSignature(id receiver, SEL sel, BOOL classMethod);
 
 #define AK_UNIMPLEMENTED_FORWARDER \
   - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector { \
     NSMethodSignature *sig = [super methodSignatureForSelector:aSelector]; \
-    return sig ?: AKGenericSignatureForSelector(aSelector); \
+    return sig ?: AKFallbackSignature(self, aSelector, NO); \
   } \
   - (void)forwardInvocation:(NSInvocation *)anInvocation { \
     AKLogUnimplemented(self, anInvocation.selector); \
@@ -91,7 +94,7 @@ NSMethodSignature *AKGenericSignatureForSelector(SEL sel);
 #define AK_UNIMPLEMENTED_CLASS_FORWARDER \
   + (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector { \
     NSMethodSignature *sig = [super methodSignatureForSelector:aSelector]; \
-    return sig ?: AKGenericSignatureForSelector(aSelector); \
+    return sig ?: AKFallbackSignature(self, aSelector, YES); \
   } \
   + (void)forwardInvocation:(NSInvocation *)anInvocation { \
     AKLogUnimplemented(self, anInvocation.selector); \

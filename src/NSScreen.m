@@ -1,4 +1,5 @@
 #import "AKShimPrivate.h"
+#import <QuartzCore/QuartzCore.h>
 
 NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenColorSpaceDidChangeNotification";
 
@@ -40,9 +41,44 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
   return b;
 }
 
+// The screen with the most color depth: there's one kind here.
++ (NSScreen *)deepestScreen { return self.mainScreen; }
+
 // 1 to a game, as its windows are (NSWindow.m).
 - (CGFloat)backingScaleFactor { return AKIsGameThread() ? 1 : _screen.scale; }
 - (NSInteger)maximumFramesPerSecond { return AKDisplayRefreshRate(_screen); }   // CVDisplayLink.m
+- (NSTimeInterval)minimumRefreshInterval { return 1.0 / MAX(1, self.maximumFramesPerSecond); }
+- (NSTimeInterval)maximumRefreshInterval { return self.minimumRefreshInterval; }
+- (NSTimeInterval)displayUpdateGranularity { return 0; }   // any interval in that range
+- (NSTimeInterval)lastDisplayUpdateTimestamp { return CACurrentMediaTime(); }
+
+// Points <-> pixels at the scale the caller sees (Unity sizes its screen from the frame
+// converted, so these must hold: a struct return can't come from the unimplemented fallback).
+- (NSRect)convertRectToBacking:(NSRect)r {
+  CGFloat s = self.backingScaleFactor;
+  return NSMakeRect(r.origin.x * s, r.origin.y * s, r.size.width * s, r.size.height * s);
+}
+- (NSRect)convertRectFromBacking:(NSRect)r {
+  CGFloat s = self.backingScaleFactor;
+  return NSMakeRect(r.origin.x / s, r.origin.y / s, r.size.width / s, r.size.height / s);
+}
+- (NSRect)backingAlignedRect:(NSRect)r options:(unsigned long long)options {
+  return [self convertRectFromBacking:AKNearestPixelRect([self convertRectToBacking:r])];
+}
+
+// A Mac screen without a camera housing: nothing kept clear at the top, no areas beside it. A
+// Mac game takes these for a notch and would letterbox the picture below it; here its window
+// covers the whole screen (NSWindow.m), as on a Mac without one.
+- (NSEdgeInsets)safeAreaInsets { return NSEdgeInsetsMake(0, 0, 0, 0); }
+- (NSRect)auxiliaryTopLeftArea { return NSZeroRect; }
+- (NSRect)auxiliaryTopRightArea { return NSZeroRect; }
+
+// 8 bits a channel, RGB (NSWindowDepthTwentyfourBitRGB), the only depth listed.
+- (int)depth { return 0x208; }
+- (const int *)supportedWindowDepths {
+  static const int depths[] = { 0x208, 0 };
+  return depths;
+}
 
 // EDR (HDR) headroom. These return a CGFloat, which the unimplemented-method fallback
 // can't fake (it would set the integer, not the floating-point, return register and SDL

@@ -7,15 +7,16 @@
 //    there as each loads, AKGameBindProcess); exit handlers they register, which the app would
 //    only run at its own exit over a heap long gone, stay unregistered;
 //  - the Objective-C objects of its classes are noted as they are made, and the Metal buffers,
-//    textures, heaps and command queues its code makes (its own Metal, or MoltenVK's for Vulkan);
+//    textures and heaps its code makes (its own Metal, or MoltenVK's for Vulkan);
 //  - at its end (AKGameTeardown, main thread): whatever would call into it lets go (sound of any
 //    kind - the audio session stops all of it -, controllers through IOKit or GameController,
 //    display links, dispatch sources, notification observers); every thread with its code on
-//    the stack is stopped; its objects let go of what they hold; its OpenGL contexts and the
-//    Metal objects it made and left are freed; its classes' methods are made to do nothing (an
-//    object of its left somewhere can't run its code over freed memory); and then its zone is
-//    destroyed: everything it allocated, at once. A thread that can't be stopped safely keeps
-//    the heap (logged).
+//    the stack is stopped; its objects let go of what they hold; its OpenGL contexts are freed;
+//    its classes' methods are made to do nothing (an object of its left somewhere can't run its
+//    code over freed memory); and a moment on, once the GPU work it sent is done, the Metal
+//    objects it made and left are freed and its zone is destroyed: everything it allocated, at
+//    once. A thread that can't be stopped safely keeps the heap (logged). Its command queues
+//    stay: one with a command buffer still out (a frame it was making) can't be freed.
 // A later launch of the same game gets a new zone and its classes' methods back.
 #import "AKShimPrivate.h"
 #import <GameController/GameController.h>
@@ -207,8 +208,10 @@ static NSUInteger releaseInstanceVariables(NSArray<NSString *> *images) {
 
 #pragma mark Its Metal objects
 
-// Metal buffers, textures, heaps and command queues made by its code (Metal directly, or
-// MoltenVK for Vulkan), in the order made. Nothing of the game is left to hold them at its end.
+// Metal buffers, textures and heaps made by its code (Metal directly, or MoltenVK for Vulkan),
+// in the order made. Nothing of the game is left to hold them at its end. Not its command
+// queues: Metal ends the process when one goes with a command buffer of it not yet done, which
+// a game stopped mid-frame leaves.
 static NSPointerArray *gMetal;
 static NSMutableSet<NSString *> *gHooked;
 
@@ -253,16 +256,21 @@ static void hookMetal(void) {
   Class c = object_getClass(device);
   for (NSString *name in @[ @"newBufferWithLength:options:", @"newBufferWithBytes:length:options:",
                             @"newBufferWithBytesNoCopy:length:options:deallocator:", @"newTextureWithDescriptor:",
-                            @"newTextureWithDescriptor:iosurface:plane:", @"newHeapWithDescriptor:", @"newCommandQueue",
-                            @"newCommandQueueWithMaxCommandBufferCount:" ])
+                            @"newTextureWithDescriptor:iosurface:plane:", @"newHeapWithDescriptor:" ])
     hookMaker(c, NSSelectorFromString(name));
 }
 
-// The ones still alive, newest first (a texture before the heap it came from), each let go of
-// by every reference left: those were the game's.
-static NSUInteger freeMetal(void) {
+// What it made, taken at its end.
+static NSPointerArray *takeMetal(void) {
   NSPointerArray *made;
   @synchronized (NSHashTable.class) { made = gMetal; gMetal = nil; }
+  return made;
+}
+
+// The ones still alive, newest first (a texture before the heap it came from), each let go of
+// by every reference left: those were the game's. Called a moment after its end, so command
+// buffers it committed are done and have let go of theirs.
+static NSUInteger freeMetal(NSPointerArray *made) {
   NSUInteger freed = 0;
   for (NSInteger i = (NSInteger)made.count - 1; i >= 0; i--) {
     @autoreleasepool {
@@ -555,7 +563,7 @@ void AKGameTeardown(NSArray<NSString *> *images) {
   int stuck = 0, stopped = stopThreads(&stuck);
   if (!stuck) AKGameAudioRelease();
 
-  // What it held: its objects let go, its OpenGL contexts and leftover Metal objects freed.
+  // What it held: its objects let go, its OpenGL contexts freed (its Metal objects a moment on).
   NSUInteger objects = stuck ? 0 : releaseInstanceVariables(images);
   int contexts = 0;
   int (*contextCount)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "AKGLContextCount");
@@ -564,7 +572,7 @@ void AKGameTeardown(NSArray<NSString *> *images) {
     contexts = contextCount();
     destroyContexts();
   }
-  NSUInteger metal = stuck ? 0 : freeMetal();
+  NSPointerArray *metal = takeMetal();
 
   // Its code: every method of its classes does nothing now.
   int classes = 0;
@@ -581,25 +589,31 @@ void AKGameTeardown(NSArray<NSString *> *images) {
     free(names);
   }
   teardownLog(@"ended like its process: %d threads stopped%@, %lu controller handlers, %lu observers and %lu dispatch "
-              @"sources removed, %lu of its objects let go, %d OpenGL contexts and %lu Metal objects freed, %d classes "
-              @"silenced, %d exit handlers left unrun",
+              @"sources removed, %lu of its objects let go, %d OpenGL contexts freed, %d classes silenced, %d exit "
+              @"handlers left unrun",
               stopped, stuck ? [NSString stringWithFormat:@" (%d couldn't be)", stuck] : @"", (unsigned long)handlers,
-              (unsigned long)observers.count, (unsigned long)sources.count, (unsigned long)objects, contexts,
-              (unsigned long)metal, classes, gExitHandlers);
+              (unsigned long)observers.count, (unsigned long)sources.count, (unsigned long)objects, contexts, classes,
+              gExitHandlers);
   gExitHandlers = 0;
 
-  // Its heap, a moment on (blocks already queued that release its objects run first).
+  // Its Metal objects and its heap, a moment on: the GPU work it sent finishes, and blocks
+  // already queued that release its objects run, first.
   malloc_zone_t *zone = gZone;
   gZone = NULL;
-  if (!zone) return;
   if (stuck) {
-    teardownLog(@"its heap stays: a thread of its couldn't be stopped safely");
+    teardownLog(@"its heap and Metal objects stay: a thread of its couldn't be stopped safely");
     return;
   }
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    NSUInteger freed = freeMetal(metal);
+    if (!zone) {
+      if (freed) teardownLog(@"%lu Metal objects of its freed", (unsigned long)freed);
+      return;
+    }
     malloc_statistics_t stats = { 0 };
     malloc_zone_statistics(zone, &stats);
     malloc_destroy_zone(zone);
-    teardownLog(@"its heap freed: %.1f MB in use, %.1f MB held", stats.size_in_use / 1048576.0, stats.size_allocated / 1048576.0);
+    teardownLog(@"its heap freed: %.1f MB in use, %.1f MB held; %lu Metal objects of its freed",
+                stats.size_in_use / 1048576.0, stats.size_allocated / 1048576.0, (unsigned long)freed);
   });
 }

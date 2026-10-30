@@ -83,6 +83,14 @@ jobs:
           nm -gU build/device/AppKitShimCore.framework/AppKitShimCore > build/shim-exports.txt
           node tools/lib-routes.js --verify build/routes.json build/shim-exports.txt
 
+      - name: macOS's signatures for the shim's methods that return a struct or float (its fallback reads them)
+        continue-on-error: true
+        run: |
+          xcrun clang -fobjc-arc -O1 -Wall tools/mac-methods.m -framework Foundation -o build/mac-methods
+          nm build/device/AppKitShimCore.framework/AppKitShimCore > build/shim-symbols.txt
+          build/mac-methods types build/shim-symbols.txt build/device/AppKitShimCore.framework/mac-method-types.txt
+          cp build/device/AppKitShimCore.framework/mac-method-types.txt build/
+
       - name: Cache the game engines' Mac builds (tools/engines.txt)
         uses: actions/cache@v4
         with:
@@ -95,7 +103,10 @@ jobs:
           bash tools/fetch-engines.sh tools/engines.txt .enginecache build/engines
           nm -gU build/device/AKOpenGL.framework/AKOpenGL build/device/libOSMesa.dylib > build/opengl-exports.txt
           node tools/engine-gaps.js build/engines "$(xcrun --sdk iphoneos --show-sdk-path)" build/routes.json \
-            build/shim-exports.txt build/opengl-exports.txt data/runtime-gap.json build/engine-gaps.json
+            build/shim-exports.txt build/opengl-exports.txt data/runtime-gap.json build/engine-gaps.json \
+            build/engine-selectors.json
+          echo; echo "== AppKit methods the engines send that the shim lacks"
+          build/mac-methods audit build/shim-symbols.txt build/engine-selectors.json build/engine-methods.txt
 
       - name: Build the iOS host executable and the launcher interface it loads
         run: |
@@ -137,4 +148,6 @@ jobs:
             build/shim-exports.txt
             build/opengl-exports.txt
             build/engine-gaps.json
+            build/engine-methods.txt
+            build/mac-method-types.txt
           if-no-files-found: ignore

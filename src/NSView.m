@@ -63,6 +63,7 @@ static void AKViewDidMoveToWindow(NSView *view) {
   CALayer *_flipLayer;   // container with macOS (bottom-left) geometry; holds _hostedLayer
   CALayer *_hostedLayer; // the client's layer
   CGSize _lastSize;
+  CGSize _boundsScale;   // its bounds' size over its frame's, from -setBoundsSize: (zero: the same)
   BOOL _applyingLayout;
   CFRunLoopRef _ownerLoop; // run loop of the thread that made this view (Chromium's UI thread for its views)
 }
@@ -212,8 +213,25 @@ static BOOL AKMeasuresFromBottom(NSView *superview) { return superview && !super
   CFRunLoopWakeUp(loop);
 }
 
-- (NSRect)bounds { return _backing.bounds; }
-- (void)setBounds:(NSRect)bounds { AKOnMainSync(^{ self->_backing.bounds = bounds; }); }
+- (NSRect)bounds {
+  CGRect b = _backing.bounds;
+  if (_boundsScale.width > 0) b.size = CGSizeMake(b.size.width * _boundsScale.width, b.size.height * _boundsScale.height);
+  return b;
+}
+- (void)setBounds:(NSRect)bounds {
+  _boundsScale = CGSizeZero;
+  AKOnMainSync(^{ self->_backing.bounds = bounds; });
+}
+
+// AppKit: a bounds size apart from the frame's scales the view's own coordinates and leaves its
+// frame where it is (a game drawing at a lower resolution than its window, its mouse points in
+// that resolution). UIKit's bounds and frame share one size, so the scale is kept here and the
+// view's coordinate conversions apply it; it holds as the frame changes, as in AppKit.
+- (void)setBoundsSize:(NSSize)size {
+  CGSize frame = _backing.bounds.size;
+  BOOL scaled = frame.width > 0 && frame.height > 0 && size.width > 0 && size.height > 0 && !CGSizeEqualToSize(size, frame);
+  _boundsScale = scaled ? CGSizeMake(size.width / frame.width, size.height / frame.height) : CGSizeZero;
+}
 
 // AppKit's default: y goes up. Views that want top-down coordinates override this.
 - (BOOL)isFlipped { return NO; }
@@ -434,17 +452,30 @@ static void AKOnMainLater(dispatch_block_t block) {
   for (UIView *v = backing.superview; v; v = v.superview) {
     if (v.clipsToBounds) visible = CGRectIntersection(visible, [backing convertRect:v.bounds fromView:v]);
   }
-  return CGRectIsNull(visible) ? NSZeroRect : [self _ak_uikitRect:visible];   // the flip is its own inverse
+  return CGRectIsNull(visible) ? NSZeroRect : [self _ak_appkitRect:visible];
 }
 
-// This view's AppKit coordinates <-> its backing view's UIKit coordinates (the same flip
-// both ways).
+// This view's AppKit coordinates (its bounds: up from the bottom unless it is flipped, scaled
+// by -setBoundsSize:) <-> its backing view's UIKit coordinates.
 - (CGPoint)_ak_uikitPoint:(NSPoint)p {
+  if (_boundsScale.width > 0) p = CGPointMake(p.x / _boundsScale.width, p.y / _boundsScale.height);
   return self.isFlipped ? p : CGPointMake(p.x, _backing.bounds.size.height - p.y);
 }
+- (NSPoint)_ak_appkitPoint:(CGPoint)p {
+  if (!self.isFlipped) p.y = _backing.bounds.size.height - p.y;
+  if (_boundsScale.width > 0) p = CGPointMake(p.x * _boundsScale.width, p.y * _boundsScale.height);
+  return p;
+}
 - (CGRect)_ak_uikitRect:(NSRect)r {
-  if (self.isFlipped) return r;
-  r.origin.y = _backing.bounds.size.height - r.origin.y - r.size.height;
+  CGSize s = _boundsScale;
+  if (s.width > 0) r = CGRectMake(r.origin.x / s.width, r.origin.y / s.height, r.size.width / s.width, r.size.height / s.height);
+  if (!self.isFlipped) r.origin.y = _backing.bounds.size.height - r.origin.y - r.size.height;
+  return r;
+}
+- (NSRect)_ak_appkitRect:(CGRect)r {
+  CGSize s = _boundsScale;
+  if (!self.isFlipped) r.origin.y = _backing.bounds.size.height - r.origin.y - r.size.height;
+  if (s.width > 0) r = CGRectMake(r.origin.x * s.width, r.origin.y * s.height, r.size.width * s.width, r.size.height * s.height);
   return r;
 }
 
@@ -458,13 +489,13 @@ static void AKOnMainLater(dispatch_block_t block) {
   UIView *space = view ? view.backing : [self _ak_windowSpace];
   CGPoint p = view ? [view _ak_uikitPoint:point] : CGPointMake(point.x, space.bounds.size.height - point.y);
   if (space != _backing) p = [_backing convertPoint:p fromView:space];
-  return [self _ak_uikitPoint:p]; // the flip is its own inverse
+  return [self _ak_appkitPoint:p];
 }
 - (NSPoint)convertPoint:(NSPoint)point toView:(NSView *)view {
   UIView *space = view ? view.backing : [self _ak_windowSpace];
   CGPoint p = [self _ak_uikitPoint:point];
   if (space != _backing) p = [_backing convertPoint:p toView:space];
-  return view ? [view _ak_uikitPoint:p] : NSMakePoint(p.x, space.bounds.size.height - p.y);
+  return view ? [view _ak_appkitPoint:p] : NSMakePoint(p.x, space.bounds.size.height - p.y);
 }
 - (NSRect)convertRect:(NSRect)rect fromView:(NSView *)view {
   UIView *space = view ? view.backing : [self _ak_windowSpace];
@@ -472,13 +503,13 @@ static void AKOnMainLater(dispatch_block_t block) {
   if (view) r = [view _ak_uikitRect:rect];
   else r.origin.y = space.bounds.size.height - rect.origin.y - rect.size.height;
   if (space != _backing) r = [_backing convertRect:r fromView:space];
-  return [self _ak_uikitRect:r];
+  return [self _ak_appkitRect:r];
 }
 - (NSRect)convertRect:(NSRect)rect toView:(NSView *)view {
   UIView *space = view ? view.backing : [self _ak_windowSpace];
   CGRect r = [self _ak_uikitRect:rect];
   if (space != _backing) r = [_backing convertRect:r toView:space];
-  if (view) return [view _ak_uikitRect:r];
+  if (view) return [view _ak_appkitRect:r];
   r.origin.y = space.bounds.size.height - r.origin.y - r.size.height;
   return r;
 }
@@ -488,13 +519,16 @@ static void AKOnMainLater(dispatch_block_t block) {
   return s > 0 ? s : NSScreen.mainScreen.backingScaleFactor;
 }
 
+// From its own coordinates: a scaled bounds counts (its whole bounds is its frame's pixels).
 - (NSRect)convertRectToBacking:(NSRect)r {
-  CGFloat s = [self _ak_backingScale];
-  return NSMakeRect(r.origin.x * s, r.origin.y * s, r.size.width * s, r.size.height * s);
+  CGFloat sx = [self _ak_backingScale], sy = sx;
+  if (_boundsScale.width > 0) { sx /= _boundsScale.width; sy /= _boundsScale.height; }
+  return NSMakeRect(r.origin.x * sx, r.origin.y * sy, r.size.width * sx, r.size.height * sy);
 }
 - (NSRect)convertRectFromBacking:(NSRect)r {
-  CGFloat s = [self _ak_backingScale];
-  return NSMakeRect(r.origin.x / s, r.origin.y / s, r.size.width / s, r.size.height / s);
+  CGFloat sx = [self _ak_backingScale], sy = sx;
+  if (_boundsScale.width > 0) { sx /= _boundsScale.width; sy /= _boundsScale.height; }
+  return NSMakeRect(r.origin.x / sx, r.origin.y / sy, r.size.width / sx, r.size.height / sy);
 }
 // Edges to the nearest backing pixel (AppKit's NSAlignAllEdgesNearest; the per-edge options
 // aren't told apart).
