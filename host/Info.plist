@@ -41,6 +41,8 @@
 	<true/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>MinimumOSVersion</key>

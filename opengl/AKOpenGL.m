@@ -656,13 +656,15 @@ static void measureLater(AKGLContext *c) {
 // rate limit (0: none) and, while the Metal HUD is up, the HUD's layer settings.
 static double gRenderScale;   // atomic (as bits)
 static int gFrameLimit;       // atomic
+static int gRefreshRate = 60; // atomic: the display's, as the game was told (60 or 120)
 static NSDictionary *gHUD;    // under @synchronized (AKGLContext.class)
 
-void AKGLSetOptions(double renderScale, int frameLimit, CFDictionaryRef hud) {
+void AKGLSetOptions(double renderScale, int frameLimit, int refreshRate, CFDictionaryRef hud) {
   uint64_t bits;
   memcpy(&bits, &renderScale, sizeof bits);
   __atomic_store_n((uint64_t *)&gRenderScale, bits, __ATOMIC_RELAXED);
   __atomic_store_n(&gFrameLimit, frameLimit, __ATOMIC_RELAXED);
+  __atomic_store_n(&gRefreshRate, refreshRate > 0 ? refreshRate : 60, __ATOMIC_RELAXED);
   @synchronized (AKGLContext.class) { gHUD = [(__bridge NSDictionary *)hud copy]; }
 }
 
@@ -821,7 +823,7 @@ static uint64_t gFramesShown;
 uint64_t AKGLFramesShown(void) { return __atomic_load_n(&gFramesShown, __ATOMIC_RELAXED); }
 
 // The frame just drawn goes on screen and the next surface is bound. With a swap interval
-// the call waits for the next 60 Hz refresh, as a Mac's vsync would.
+// the call waits for the next refresh of the display the game was told about, as a Mac's vsync would.
 CGLError CGLFlushDrawable(CGLContextObj ctx) {
   if (!ctx) return kCGLBadContext;
   AKGLContext *c = context(ctx);
@@ -849,12 +851,14 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
   if (++c->frames % 30 == 0) dispatch_async(dispatch_get_main_queue(), ^{ measure(c); });
   bind(c);
 
-  // Frames go out at most once per 60 Hz refresh (more with a longer swap interval, or the
-  // game's frame rate limit), waiting asleep: a game that turned vsync off (GameMaker does) would
+  // Frames go out at most once per refresh of the display the game was told about (60 Hz, or
+  // 120 on a ProMotion screen when its frame rate limit allows; more with a longer swap interval,
+  // or the game's limit), waiting asleep: a game that turned vsync off (GameMaker does) would
   // otherwise keep a core busy timing its frames, which heats a phone.
   static mach_timebase_info_data_t tb;
   if (!tb.denom) mach_timebase_info(&tb);
-  uint64_t period = 1000000000ull / 60 * tb.denom / tb.numer * (uint64_t)MAX(c->swapInterval, 1);
+  uint64_t refresh = (uint64_t)__atomic_load_n(&gRefreshRate, __ATOMIC_RELAXED);
+  uint64_t period = 1000000000ull / refresh * tb.denom / tb.numer * (uint64_t)MAX(c->swapInterval, 1);
   int limit = __atomic_load_n(&gFrameLimit, __ATOMIC_RELAXED);
   if (limit > 0) period = MAX(period, 1000000000ull / (uint64_t)limit * tb.denom / tb.numer);
   uint64_t now = mach_absolute_time();

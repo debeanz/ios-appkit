@@ -31,6 +31,8 @@ static NSString *gGameDraws;             // "metal", "opengl", or nil (not known
 
 // What the running game is held to, read on its threads.
 static int gFrameLimit;          // frames per second, 0: none (atomic)
+static int gDisplayHz = 60;      // the refresh rate the running game was started with (atomic)
+static BOOL gProfileActive;      // a game started and hasn't ended (atomic)
 static int gOverlayLevel;        // atomic
 static double gRenderFraction = 1;   // of the screen's pixels per point, fixed at each launch
 
@@ -41,7 +43,8 @@ static NSLock *lock(void) {
   return l;
 }
 
-static NSDictionary *defaultPerApp(void) { return @{ @"fps_limit": @0, @"render_scale": @1.0 }; }
+// 60 fps unless a game (or the default profile) is set to more: cooler, and what games got before.
+static NSDictionary *defaultPerApp(void) { return @{ @"fps_limit": @60, @"render_scale": @1.0 }; }
 
 static void load(void) {
   if (gSettings) return;
@@ -85,9 +88,36 @@ static double fraction(id v) {
   return f >= 0.25 && f <= 1 ? f : 1;
 }
 
-// The frame rate limits offered: whole divisions of the 60 Hz the app's frames are shown at, and
-// none (0, "Off" on the slider, last as on the Deck).
-static NSArray<NSNumber *> *frameLimitOptions(void) { return @[ @15, @20, @30, @60, @0 ]; }
+// The screen's top refresh rate: 120 on a ProMotion iPhone (the app may use it: LiveContainer's
+// Info.plist, and the app's own, set CADisableMinimumFrameDurationOnPhone), else 60.
+static int screenMaxHz(void) {
+  NSInteger hz = UIScreen.mainScreen.maximumFramesPerSecond;
+  return hz >= 120 ? 120 : 60;
+}
+
+// The frame rate limits offered: 30, 60, 120 where the screen goes that fast, and none (0, "Off"
+// on the slider, last as on the Deck: the screen's own rate). A limit saved from another choice
+// is the nearest of these.
+static NSArray<NSNumber *> *frameLimitOptions(void) {
+  return screenMaxHz() >= 120 ? @[ @30, @60, @120, @0 ] : @[ @30, @60, @0 ];
+}
+
+static int snapLimit(int fps) {
+  if (fps <= 0) return 0;
+  if (fps < 45) return 30;
+  if (fps < 90 || screenMaxHz() < 120) return 60;
+  return 120;
+}
+
+// The refresh rate a game is started with, from its limit: 120 Hz for 120 or Off on a ProMotion
+// screen, else 60. It stays for the game's run: a game that counts refreshes must get the rate it
+// was told (told 120 and given 60, DELTARUNE ran at half speed), so going above 60 waits for the
+// game's next start; lowering the limit works at once (frames are paced below it).
+static int displayHzFor(int limit) { return (limit == 0 || limit > 60) && screenMaxHz() >= 120 ? 120 : 60; }
+
+NSInteger AKGameDisplayHz(void) {
+  return __atomic_load_n(&gProfileActive, __ATOMIC_RELAXED) ? __atomic_load_n(&gDisplayHz, __ATOMIC_RELAXED) : 60;
+}
 
 #pragma mark Metal HUD
 
@@ -221,11 +251,16 @@ static void applyRunning(void) {
   load();
   NSDictionary *p = profile(activeProfileID());
   int level = intValue(gSettings[@"global"][@"perf_overlay_level"], kOverlayHidden);
-  int fps = MAX(0, intValue(p[@"fps_limit"], 0));
-  BOOL running = gGameID != nil;
+  int fps = snapLimit(intValue(p[@"fps_limit"], 60));
+  BOOL running = __atomic_load_n(&gProfileActive, __ATOMIC_RELAXED);
   [lock() unlock];
+  // Frames no faster than the limit, nor than the rate the game started with (a Metal game's
+  // frames otherwise go out at the screen's own 120 while it was told 60); nothing to pace at
+  // the screen's own rate.
+  int hz = (int)AKGameDisplayHz();
+  int target = fps > 0 ? MIN(fps, hz) : hz;
   __atomic_store_n(&gOverlayLevel, level, __ATOMIC_RELAXED);
-  __atomic_store_n(&gFrameLimit, running ? fps : 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&gFrameLimit, running && target < screenMaxHz() ? target : 0, __ATOMIC_RELAXED);
   dispatch_async(dispatch_get_main_queue(), ^{
     applyToGameLayers();
     AKGameGLOptionsChanged();
@@ -264,10 +299,13 @@ void AKGameProfileBegin(NSString *gameID) {
   NSDictionary *p = profile(activeProfileID());
   gRenderFraction = fraction(p[@"render_scale"]);
   BOOL own = ![activeProfileID() isEqualToString:AKDefaultProfileID];
-  int fps = intValue(p[@"fps_limit"], 0), level = intValue(gSettings[@"global"][@"perf_overlay_level"], 0);
+  int fps = snapLimit(intValue(p[@"fps_limit"], 60)), level = intValue(gSettings[@"global"][@"perf_overlay_level"], 0);
+  __atomic_store_n(&gDisplayHz, displayHzFor(fps), __ATOMIC_RELAXED);
+  __atomic_store_n(&gProfileActive, YES, __ATOMIC_RELAXED);
   [lock() unlock];
-  fprintf(stderr, "[AppKitShim] game: its settings are %s profile's: frame limit %d, resolution %.0f%%, overlay level %d\n",
-          own ? "its own" : "the default", fps, gRenderFraction * 100, level);
+  fprintf(stderr, "[AppKitShim] game: its settings are %s profile's: frame limit %s, %d Hz display, resolution %.0f%%, overlay level %d\n",
+          own ? "its own" : "the default", fps ? [NSString stringWithFormat:@"%d", fps].UTF8String : "off", displayHzFor(fps),
+          gRenderFraction * 100, level);
   changed();
   // Layers a game makes later (a window, a resize) get the HUD as they come.
   static dispatch_source_t timer;
@@ -284,6 +322,8 @@ void AKGameProfileEnd(void) {
   gGameID = nil;
   gGameDraws = nil;
   gRenderFraction = 1;
+  __atomic_store_n(&gProfileActive, NO, __ATOMIC_RELAXED);
+  __atomic_store_n(&gDisplayHz, 60, __ATOMIC_RELAXED);
   [lock() unlock];
   changed();
 }
@@ -309,7 +349,9 @@ NSDictionary *AKPerfState(void) {
   NSString *active = activeProfileID();
   NSDictionary *p = profile(active);
   NSDictionary *global = gSettings[@"global"];
-  int fps = MAX(0, intValue(p[@"fps_limit"], 0));
+  int fps = snapLimit(intValue(p[@"fps_limit"], 60));
+  // A running game started at a lower refresh rate than this limit asks for gets it next start.
+  BOOL rateNextStart = __atomic_load_n(&gProfileActive, __ATOMIC_RELAXED) && displayHzFor(fps) > AKGameDisplayHz();
   NSDictionary *message = @{
     @"current_game_id": gGameID ?: AKDefaultProfileID,
     @"active_profile_game_id": active,
@@ -346,6 +388,8 @@ NSDictionary *AKPerfState(void) {
       @"game_draws": gGameDraws ?: @"",
       @"game_running": @(gGameID != nil),
       @"launch_render_scale": @(gRenderFraction),
+      @"frame_rate_next_start": @(rateNextStart),
+      @"display_hz": @(AKGameDisplayHz()),
     },
   };
   [lock() unlock];
@@ -379,7 +423,7 @@ NSDictionary *AKPerfUpdate(NSDictionary *update) {
     }
   }
   id fps = perApp[@"fps_limit"] ?: perApp[@"fps_limit_external"];
-  if ([fps isKindOfClass:NSNumber.class]) profile(gameID)[@"fps_limit"] = @(MAX(0, [fps intValue]));
+  if ([fps isKindOfClass:NSNumber.class]) profile(gameID)[@"fps_limit"] = @(snapLimit([fps intValue]));
   save();
   [lock() unlock];
   fprintf(stderr, "[AppKitShim] performance settings changed (%s profile)\n",

@@ -96,14 +96,15 @@ static uint64_t AKHostTimeFromSeconds(CFTimeInterval seconds) {
 
 @end
 
-// The refresh rate every display query answers with: the screen's, at most 60 Hz. An app gets
-// 120 Hz ticks on a ProMotion screen only when its own Info.plist asks (here, LiveContainer's),
-// and frames go out at 60 (AKOpenGL.m), so 60 is the rate a Mac app actually sees. Saying 120
-// while delivering 60 halved a game that counts refreshes (DELTARUNE ran at half speed). It also
-// spares the CPU: Chromium composites in software.
+// The refresh rate every display query answers with: the screen's, at most 60 Hz - or 120 on a
+// ProMotion screen while a game runs that was started at 120 (its frame rate limit is 120 or Off:
+// GameProfiles.m). An app gets 120 Hz ticks only when its Info.plist asks (LiveContainer's and
+// the app's do), and the rate said must be the rate frames go out at (AKOpenGL.m paces to it):
+// saying 120 while delivering 60 halved a game that counts refreshes (DELTARUNE ran at half
+// speed). 60 otherwise also spares the CPU.
 NSInteger AKDisplayRefreshRate(UIScreen *screen) {
   NSInteger fps = screen.maximumFramesPerSecond;
-  return fps > 0 ? MIN(fps, 60) : 60;
+  return fps > 0 ? MIN(fps, AKGameDisplayHz()) : 60;
 }
 
 static AKDisplayLink *AKLink(CVDisplayLinkRef ref) { return (__bridge AKDisplayLink *)(void *)ref; }

@@ -523,6 +523,15 @@ function akdeckInstall(win) {
       onChange: (i) => { const r = RESOLUTIONS[i]; if (r) call('perf-app-setting', { key: 'render_scale', value: r.value }).then(takeState); },
     });
   }
+  // A game started at 60 Hz goes faster only from its next start (it was told the screen's rate
+  // as it started: GameProfiles.m); slower limits work at once.
+  function FrameRateNote() {
+    const app = useWatch(watchPerf, () => perf.app || {});
+    if (!app.frame_rate_next_start) return null;
+    return h('div', { style: { fontSize: '12px', lineHeight: '16px', opacity: 0.7, padding: '0 0 10px' } },
+             'Above 60 fps takes effect the next time the game starts.');
+  }
+
   function PerformancePanel() {
     const { PanelSection, PanelSectionRow } = ui;
     // Each of Steam's rows on its own: one that fails is left out, not the whole tab.
@@ -536,6 +545,7 @@ function akdeckInstall(win) {
         row(perfRows.header, null, 'header'),
         row(perfRows.perGame, null, 'per-game'),
         row(perfRows.frameLimit, null, 'frame-limit'),
+        h(PanelSectionRow, { key: 'frame-rate-note' }, h(ErrorBoundary, { what: 'The frame rate note', fallback: null }, h(FrameRateNote))),
         ui.SliderField ? h(PanelSectionRow, { key: 'resolution' }, h(ErrorBoundary, { what: 'The resolution setting' }, h(ResolutionRow))) : null,
         row(perfRows.reset, { bottomSeparator: 'none' }, 'reset')));
   }

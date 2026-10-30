@@ -233,6 +233,7 @@ void AKGameProfileEnd(void);
 void AKGameProfileNoteDraws(NSString *how);
 double AKGameRenderFraction(void);
 int AKGameFrameLimit(void);
+NSInteger AKGameDisplayHz(void);   // the refresh rate the running game started with (60 or 120); 60 with none
 BOOL AKGameHUDShown(void);
 NSDictionary *AKGameHUDProperties(void);
 NSDictionary *AKPerfState(void);

@@ -24,7 +24,7 @@ static struct {
   CGLError (*setParameter)(CGLContextObj, int32_t, const AKGLint *);
   CGLError (*getParameter)(CGLContextObj, int32_t, AKGLint *);
   void (*setDrawable)(CGLContextObj, void *, double);
-  void (*setOptions)(double, int, CFDictionaryRef);
+  void (*setOptions)(double, int, int, CFDictionaryRef);
 } GL;
 
 static BOOL loadGL(void) {
@@ -56,13 +56,14 @@ static BOOL loadGL(void) {
 }
 
 // The running game's settings (GameProfiles.m): the pixels per point its frames are drawn at (0:
-// the screen's), its frame rate limit and the Metal HUD's layer settings (none: no HUD).
+// the screen's), its frame rate limit, the refresh rate it started with (frames go out no faster)
+// and the Metal HUD's layer settings (none: no HUD).
 void AKGameGLOptionsChanged(void) {
   if (!GL.setOptions) return;
   double fraction = AKGameRenderFraction();
   double scale = fraction < 1 ? MAX(1, UIScreen.mainScreen.scale * fraction) : 0;
   NSDictionary *hud = AKGameHUDShown() ? AKGameHUDProperties() : nil;
-  GL.setOptions(scale, AKGameFrameLimit(), (__bridge CFDictionaryRef)hud);
+  GL.setOptions(scale, AKGameFrameLimit(), (int)AKDisplayRefreshRate(UIScreen.mainScreen), (__bridge CFDictionaryRef)hud);
 }
 
 #pragma mark Pixel formats
