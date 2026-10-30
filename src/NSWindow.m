@@ -403,6 +403,10 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 // Color space and tab grouping: a window here always fills the one screen.
 - (void)setColorSpace:(id)colorSpace {}
 - (void)setTabbingMode:(NSInteger)mode {}
+- (NSInteger)tabbingMode { return 2; }   // NSWindowTabbingModeDisallowed
+static BOOL gAutomaticTabbing = YES;
++ (BOOL)allowsAutomaticWindowTabbing { return gAutomaticTabbing; }
++ (void)setAllowsAutomaticWindowTabbing:(BOOL)allows { gAutomaticTabbing = allows; }   // Unity turns it off at start
 - (NSWindow *)parentWindow { return nil; }
 - (NSArray<NSWindow *> *)childWindows { return @[]; }
 
@@ -452,6 +456,16 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
   NSMutableArray *numbers = [NSMutableArray array];
   for (NSWindow *w in visible) [numbers addObject:@(w.windowNumber)];
   return numbers;
+}
+// The frontmost visible window at a screen point, below the one given (0: from the top).
++ (NSInteger)windowNumberAtPoint:(NSPoint)point belowWindowWithWindowNumber:(NSInteger)below {
+  BOOL searching = below == 0;
+  for (NSNumber *number in [self windowNumbersWithOptions:0]) {
+    if (!searching) { searching = number.integerValue == below; continue; }
+    NSWindow *w = [NSApp windowWithWindowNumber:number.integerValue];
+    if (w && NSPointInRect(point, w.frame)) return number.integerValue;
+  }
+  return 0;
 }
 // Its screen's refresh drives the link (macOS 14's NSWindow/NSView/NSScreen display links).
 - (CADisplayLink *)displayLinkWithTarget:(id)target selector:(SEL)selector {

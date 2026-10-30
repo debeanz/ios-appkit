@@ -18,6 +18,12 @@
 // iOS's, which plays wherever iOS routes sound (GameAudio.m lets them choose this device).
 // tools/lib-routes.js routes CoreAudio through the shim so both bind to these first.
 //
+// The Mac's older forms of the same calls (AudioHardwareGetProperty, AudioDeviceGetProperty,
+// AudioStreamGetProperty; deprecated since 10.6) are answered the same way: FMOD, Unity's sound
+// engine, still lists devices with them, and iOS's own failed it ("FMOD failed to get number of
+// drivers", no sound). A device's property there is asked by channel and direction, which are
+// the element and scope of the newer calls.
+//
 // No CoreAudio headers here: the definitions only have to match the Mac signatures.
 #import <CoreFoundation/CoreFoundation.h>
 #import <stdbool.h>
@@ -36,8 +42,15 @@ typedef struct {
   uint32_t mFormatID, mFormatFlags, mBytesPerPacket, mFramesPerPacket, mBytesPerFrame, mChannelsPerFrame, mBitsPerChannel, mReserved;
 } AKStreamDescription;
 typedef struct { uint32_t mNumberChannels, mDataByteSize; void *mData; } AKAudioBuffer;
+typedef struct { AKStreamDescription mFormat; AKAudioValueRange mSampleRateRange; } AKRangedDescription;
+typedef struct { uint32_t mChannelLabel, mChannelFlags; float mCoordinates[3]; } AKChannelDescription;
+typedef struct {
+  uint32_t mChannelLayoutTag, mChannelBitmap, mNumberChannelDescriptions;
+  AKChannelDescription mChannelDescriptions[2];
+} AKStereoLayout;
 
-bool AKAddressIsInGame(const void *address);   // MacPrograms.m
+bool AKAddressIsInGame(const void *address);          // MacPrograms.m
+void AKGameAudioPreferBufferFrames(uint32_t frames);   // GameAudio.m
 
 #define FOURCC(a, b, c, d) ((uint32_t)(a) << 24 | (uint32_t)(b) << 16 | (uint32_t)(c) << 8 | (uint32_t)(d))
 enum {
@@ -79,18 +92,27 @@ enum {
   kAvailableSampleRates = FOURCC('n', 's', 'r', '#'),
   kBufferFrameSize = FOURCC('f', 's', 'i', 'z'),
   kBufferFrameSizeRange = FOURCC('f', 's', 'z', '#'),
+  kBufferSize = FOURCC('b', 's', 'i', 'z'),             // in bytes, the older form
+  kBufferSizeRange = FOURCC('b', 's', 'z', '#'),
   kHogMode = FOURCC('o', 'i', 'n', 'k'),
   kPreferredStereo = FOURCC('d', 'c', 'h', '2'),
+  kPreferredChannelLayout = FOURCC('s', 'r', 'n', 'd'),
+  kRelatedDevices = FOURCC('a', 'k', 'i', 'n'),
+  kDeviceStreamFormats = FOURCC('s', 'f', 'm', '#'),
   kVolumeScalar = FOURCC('v', 'o', 'l', 'm'),
   kMute = FOURCC('m', 'u', 't', 'e'),
-  // The stream's
+  // The stream's (the device's too, in the older calls)
   kDirection = FOURCC('s', 'd', 'i', 'r'),
   kTerminalType = FOURCC('t', 'e', 'r', 'm'),
   kStartingChannel = FOURCC('s', 'c', 'h', 'n'),
   kVirtualFormat = FOURCC('s', 'f', 'm', 't'),
   kPhysicalFormat = FOURCC('p', 'f', 't', ' '),
+  kAvailableVirtualFormats = FOURCC('s', 'f', 'm', 'a'),
+  kAvailablePhysicalFormats = FOURCC('p', 'f', 't', 'a'),
   // Scopes
+  kScopeGlobal = FOURCC('g', 'l', 'o', 'b'),
   kScopeInput = FOURCC('i', 'n', 'p', 't'),
+  kScopeOutput = FOURCC('o', 'u', 't', 'p'),
 };
 static const AKOSStatus kUnknownProperty = (AKOSStatus)FOURCC('w', 'h', 'o', '?');
 static const AKOSStatus kBadObject = (AKOSStatus)FOURCC('!', 'o', 'b', 'j');
@@ -130,7 +152,9 @@ typedef struct { uint8_t bytes[64]; } AKValue;
 
 static CFStringRef text(const char *s) { return CFStringCreateWithCString(NULL, s, kCFStringEncodingUTF8); }
 
-static AKOSStatus answer(bool game, AKAudioObjectID object, const AKAudioPropertyAddress *a, uint32_t qualifierSize,
+static AKRangedDescription rangedFormat(void) { return (AKRangedDescription){ streamFormat(), { kSampleRate, kSampleRate } }; }
+
+static AKOSStatus lookUp(bool game, AKAudioObjectID object, const AKAudioPropertyAddress *a, uint32_t qualifierSize,
                          const void *qualifier, uint32_t *size, void *out) {
   if (!a) return kUnknownProperty;
   bool input = a->mScope == kScopeInput;
@@ -189,8 +213,24 @@ static AKOSStatus answer(bool game, AKAudioObjectID object, const AKAudioPropert
       case kAvailableSampleRates: PUT(AKAudioValueRange, ((AKAudioValueRange){ kSampleRate, kSampleRate })); break;
       case kBufferFrameSize: PUT(uint32_t, gBufferFrames); break;
       case kBufferFrameSizeRange: PUT(AKAudioValueRange, ((AKAudioValueRange){ 64, 4096 })); break;
+      case kBufferSize: PUT(uint32_t, gBufferFrames * 8); break;   // stereo 32-bit float frames
+      case kBufferSizeRange: PUT(AKAudioValueRange, ((AKAudioValueRange){ 64 * 8, 4096 * 8 })); break;
       case kHogMode: PUT(int32_t, -1); break;
+      case kRelatedDevices: PUT(uint32_t, kDevice); break;
       case kPreferredStereo: { uint32_t ch[2] = { 1, 2 }; memcpy(v.bytes, ch, 8); n = 8; break; }
+      case kPreferredChannelLayout:   // left and right (FMOD takes its speaker mode from this)
+        if (input) return kUnknownProperty;
+        PUT(AKStereoLayout, ((AKStereoLayout){ 0, 0, 2, { { 1, 0, { 0, 0, 0 } }, { 2, 0, { 0, 0, 0 } } } }));
+        break;
+      // The older calls ask the device for its stream's format.
+      case kVirtualFormat: case kPhysicalFormat: case kDeviceStreamFormats:
+        if (input) return kUnknownProperty;
+        PUT(AKStreamDescription, streamFormat());
+        break;
+      case kAvailableVirtualFormats: case kAvailablePhysicalFormats:
+        if (input) return kUnknownProperty;
+        PUT(AKRangedDescription, rangedFormat());
+        break;
       case kVolumeScalar: if (input) return kUnknownProperty; PUT(float, 1.0f); break;
       case kMute: if (input) return kUnknownProperty; PUT(uint32_t, 0); break;
       default: return kUnknownProperty;
@@ -205,6 +245,7 @@ static AKOSStatus answer(bool game, AKAudioObjectID object, const AKAudioPropert
       case kLatency: PUT(uint32_t, 0); break;
       case kIsAlive: PUT(uint32_t, 1); break;
       case kVirtualFormat: case kPhysicalFormat: PUT(AKStreamDescription, streamFormat()); break;
+      case kAvailableVirtualFormats: case kAvailablePhysicalFormats: PUT(AKRangedDescription, rangedFormat()); break;
       default: return kUnknownProperty;
     }
   } else {
@@ -223,6 +264,32 @@ static AKOSStatus answer(bool game, AKAudioObjectID object, const AKAudioPropert
   else if (string) CFRelease(string);
   *size = n;
   return 0;
+}
+
+// What a game's code asked that has no answer here goes to its log, once each: the next
+// engine's sound may hang on one of them.
+static void noteUnanswered(AKAudioObjectID object, const AKAudioPropertyAddress *a) {
+  static uint64_t seen[64];
+  static int count;
+  static int lock;
+  uint64_t key = (uint64_t)object << 32 | a->mSelector;
+  while (__atomic_exchange_n(&lock, 1, __ATOMIC_ACQUIRE)) {}
+  bool first = count < 64;
+  for (int i = 0; i < count && first; i++) first = seen[i] != key;
+  if (first) seen[count++] = key;
+  __atomic_store_n(&lock, 0, __ATOMIC_RELEASE);
+  if (!first) return;
+  char selector[5] = { (char)(a->mSelector >> 24), (char)(a->mSelector >> 16), (char)(a->mSelector >> 8), (char)a->mSelector, 0 };
+  char scope[5] = { (char)(a->mScope >> 24), (char)(a->mScope >> 16), (char)(a->mScope >> 8), (char)a->mScope, 0 };
+  fprintf(stderr, "[AppKitShim] game audio: its code asked CoreAudio for '%s' (object %u, scope '%s'): not answered\n", selector,
+          object, scope);
+}
+
+static AKOSStatus answer(bool game, AKAudioObjectID object, const AKAudioPropertyAddress *a, uint32_t qualifierSize,
+                         const void *qualifier, uint32_t *size, void *out) {
+  AKOSStatus error = lookUp(game, object, a, qualifierSize, qualifier, size, out);
+  if (game && error == kUnknownProperty && a) noteUnanswered(object, a);
+  return error;
 }
 
 #define GAME_CALLER AKAddressIsInGame(__builtin_return_address(0))
@@ -258,7 +325,9 @@ uint8_t AudioObjectHasProperty(AKAudioObjectID object, const AKAudioPropertyAddr
 static bool settable(bool game, AKAudioObjectID object, uint32_t selector) {
   if (!game) return false;
   if (object == kSystemObject) return selector == kRunLoop;
-  if (object == kDevice) return selector == kNominalSampleRate || selector == kBufferFrameSize || selector == kHogMode;
+  if (object == kDevice)
+    return selector == kNominalSampleRate || selector == kBufferFrameSize || selector == kBufferSize || selector == kHogMode ||
+           selector == kVirtualFormat || selector == kPhysicalFormat;
   if (object == kStream) return selector == kVirtualFormat || selector == kPhysicalFormat;
   return false;
 }
@@ -271,20 +340,113 @@ AKOSStatus AudioObjectIsPropertySettable(AKAudioObjectID object, const AKAudioPr
   return error;
 }
 
-AKOSStatus AudioObjectSetPropertyData(AKAudioObjectID object, const AKAudioPropertyAddress *address, uint32_t qualifierSize,
-                                     const void *qualifier, uint32_t size, const void *data) {
-  bool game = GAME_CALLER;
-  if (!address || !settable(game, object, address->mSelector)) return kUnsupported;
-  switch (address->mSelector) {
+static AKOSStatus setData(bool game, AKAudioObjectID object, uint32_t selector, uint32_t size, const void *data) {
+  if (!settable(game, object, selector)) return kUnsupported;
+  switch (selector) {
     case kNominalSampleRate:   // the rate it has; its output unit converts any other
       return size >= sizeof(double) && *(const double *)data == kSampleRate ? 0 : kIllegalOperation;
-    case kBufferFrameSize:
+    case kBufferFrameSize: case kBufferSize:
       if (size < 4) return kBadSize;
-      AKGameAudioSetBufferFrames(*(const uint32_t *)data);
+      AKGameAudioSetBufferFrames(*(const uint32_t *)data / (selector == kBufferSize ? 8 : 1));
+      AKGameAudioPreferBufferFrames(gBufferFrames);
       return 0;
     default:
       return 0;
   }
+}
+
+AKOSStatus AudioObjectSetPropertyData(AKAudioObjectID object, const AKAudioPropertyAddress *address, uint32_t qualifierSize,
+                                     const void *qualifier, uint32_t size, const void *data) {
+  bool game = GAME_CALLER;
+  return address ? setData(game, object, address->mSelector, size, data) : kUnsupported;
+}
+
+#pragma mark The older calls
+
+static AKOSStatus oldInfo(bool game, AKAudioObjectID object, uint32_t selector, uint32_t scope, uint32_t element,
+                          uint32_t *outSize, uint8_t *outWritable) {
+  noteFirstCall();
+  if (game) noteGameCall();
+  AKAudioPropertyAddress a = { selector, scope, element };
+  uint32_t size = 0;
+  AKOSStatus error = answer(game, object, &a, 0, NULL, &size, NULL);
+  if (outSize) *outSize = error ? 0 : size;
+  if (outWritable) *outWritable = !error && settable(game, object, selector);
+  return error;
+}
+
+static AKOSStatus oldGet(bool game, AKAudioObjectID object, uint32_t selector, uint32_t scope, uint32_t element, uint32_t *ioSize,
+                         void *outData) {
+  noteFirstCall();
+  if (game) noteGameCall();
+  if (!ioSize) return kBadSize;
+  AKAudioPropertyAddress a = { selector, scope, element };
+  return answer(game, object, &a, 0, NULL, ioSize, outData);
+}
+
+static uint32_t direction(uint8_t isInput) { return isInput ? kScopeInput : kScopeOutput; }
+
+AKOSStatus AudioHardwareGetPropertyInfo(uint32_t property, uint32_t *outSize, uint8_t *outWritable) {
+  return oldInfo(GAME_CALLER, kSystemObject, property, kScopeGlobal, 0, outSize, outWritable);
+}
+
+AKOSStatus AudioHardwareGetProperty(uint32_t property, uint32_t *ioSize, void *outData) {
+  return oldGet(GAME_CALLER, kSystemObject, property, kScopeGlobal, 0, ioSize, outData);
+}
+
+AKOSStatus AudioHardwareSetProperty(uint32_t property, uint32_t size, const void *data) {
+  return setData(GAME_CALLER, kSystemObject, property, size, data);
+}
+
+AKOSStatus AudioDeviceGetPropertyInfo(AKAudioObjectID device, uint32_t channel, uint8_t isInput, uint32_t property,
+                                      uint32_t *outSize, uint8_t *outWritable) {
+  return oldInfo(GAME_CALLER, device, property, direction(isInput), channel, outSize, outWritable);
+}
+
+AKOSStatus AudioDeviceGetProperty(AKAudioObjectID device, uint32_t channel, uint8_t isInput, uint32_t property, uint32_t *ioSize,
+                                  void *outData) {
+  return oldGet(GAME_CALLER, device, property, direction(isInput), channel, ioSize, outData);
+}
+
+AKOSStatus AudioDeviceSetProperty(AKAudioObjectID device, const void *when, uint32_t channel, uint8_t isInput, uint32_t property,
+                                  uint32_t size, const void *data) {
+  bool game = GAME_CALLER;
+  if (isInput && game && device == kDevice) return kUnsupported;   // it has no input side
+  return setData(game, device, property, size, data);
+}
+
+AKOSStatus AudioStreamGetPropertyInfo(AKAudioObjectID stream, uint32_t channel, uint32_t property, uint32_t *outSize,
+                                      uint8_t *outWritable) {
+  return oldInfo(GAME_CALLER, stream, property, kScopeGlobal, channel, outSize, outWritable);
+}
+
+AKOSStatus AudioStreamGetProperty(AKAudioObjectID stream, uint32_t channel, uint32_t property, uint32_t *ioSize, void *outData) {
+  return oldGet(GAME_CALLER, stream, property, kScopeGlobal, channel, ioSize, outData);
+}
+
+AKOSStatus AudioStreamSetProperty(AKAudioObjectID stream, const void *when, uint32_t channel, uint32_t property, uint32_t size,
+                                  const void *data) {
+  return setData(GAME_CALLER, stream, property, size, data);
+}
+
+// As below: nothing changes, so a listener is never called.
+AKOSStatus AudioDeviceAddPropertyListener(AKAudioObjectID device, uint32_t channel, uint8_t isInput, uint32_t property,
+                                          void *listener, void *clientData) {
+  return GAME_CALLER && device == kDevice ? 0 : kBadObject;
+}
+
+AKOSStatus AudioDeviceRemovePropertyListener(AKAudioObjectID device, uint32_t channel, uint8_t isInput, uint32_t property,
+                                             void *listener) {
+  return 0;
+}
+
+AKOSStatus AudioStreamAddPropertyListener(AKAudioObjectID stream, uint32_t channel, uint32_t property, void *listener,
+                                          void *clientData) {
+  return GAME_CALLER && stream == kStream ? 0 : kBadObject;
+}
+
+AKOSStatus AudioStreamRemovePropertyListener(AKAudioObjectID stream, uint32_t channel, uint32_t property, void *listener) {
+  return 0;
 }
 
 uint32_t AKGameAudioBufferFrames(void) { return gBufferFrames; }

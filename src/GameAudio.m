@@ -118,6 +118,8 @@ static void preferBufferFrames(UInt32 frames) {
   [session setPreferredIOBufferDuration:frames / rate error:nil];
 }
 
+void AKGameAudioPreferBufferFrames(uint32_t frames) { preferBufferFrames(frames); }   // CoreAudioHAL.m's device
+
 static OSStatus gameUnitSetProperty(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
                                     const void *data, UInt32 size) {
   if (property == kMacCurrentDevice) return size >= sizeof(UInt32) ? noErr : kAudio_ParamError;
@@ -127,7 +129,17 @@ static OSStatus gameUnitSetProperty(AudioUnit unit, AudioUnitPropertyID property
     preferBufferFrames(AKGameAudioBufferFrames());
     return noErr;
   }
-  return AudioUnitSetProperty(unit, property, scope, element, data, size);
+  OSStatus status = AudioUnitSetProperty(unit, property, scope, element, data, size);
+  // The speaker layout of what it plays (FMOD sets stereo's on the Mac's output unit, and stops
+  // at the error): RemoteIO has no such property and plays the channels in their order anyway.
+  if (status != noErr && property == kAudioUnitProperty_AudioChannelLayout) {
+    static dispatch_once_t logged;
+    dispatch_once(&logged, ^{
+      fprintf(stderr, "[AppKitShim] game audio: its output's speaker layout taken as given (RemoteIO plays channels in order)\n");
+    });
+    return noErr;
+  }
+  return status;
 }
 
 static OSStatus gameUnitGetProperty(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
@@ -138,7 +150,18 @@ static OSStatus gameUnitGetProperty(AudioUnit unit, AudioUnitPropertyID property
     *size = sizeof(UInt32);
     return noErr;
   }
-  return AudioUnitGetProperty(unit, property, scope, element, data, size);
+  OSStatus status = AudioUnitGetProperty(unit, property, scope, element, data, size);
+  // The hardware side's format: a Mac engine takes its rate as the one to mix at (FMOD), and
+  // RemoteIO can say 0 before the session has a route. Then it is the session's, or 48 kHz.
+  if (status == noErr && property == kAudioUnitProperty_StreamFormat && scope == kAudioUnitScope_Output && element == 0 && data &&
+      size && *size >= sizeof(AudioStreamBasicDescription)) {
+    AudioStreamBasicDescription *format = data;
+    if (format->mSampleRate <= 0) {
+      double rate = AVAudioSession.sharedInstance.sampleRate;
+      format->mSampleRate = rate > 0 ? rate : 48000;
+    }
+  }
+  return status;
 }
 
 static OSStatus gameUnitGetPropertyInfo(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,

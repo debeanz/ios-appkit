@@ -70,8 +70,10 @@ UIScreen *AKScreenForDisplayID(CGDirectDisplayID display);
 // AKForwarding.m: a shim class that is missing a method logs it (once per class+selector,
 // to stderr -> steam-console.log) and returns zero instead of raising "unrecognized
 // selector". This keeps the client running so one launch surfaces every method the shim
-// still needs, the way a real AppKit object would already respond. A class opts in by
-// putting AK_UNIMPLEMENTED_FORWARDER in its @implementation. respondsToSelector: is
+// still needs, the way a real AppKit object would already respond. Every class of the shim's
+// own lineages gets it as the shim loads, class methods too (AKForwarding.m), and a game's
+// messages to iOS's classes; a class that subclasses UIKit's opts in by putting
+// AK_UNIMPLEMENTED_FORWARDER in its @implementation. respondsToSelector: is
 // unaffected (it checks the real method list), so feature detection still sees the truth.
 // The zero returned has the method's real type when macOS's signature for it is known
 // (AKFallbackSignature: a struct or floating-point return goes where the caller reads it).
@@ -202,6 +204,7 @@ void AKGameControllersHoldBack(void);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioBegin(void);    // a game starts: the app's audio session plays (each launch)
+void AKGameAudioPreferBufferFrames(uint32_t frames);   // the session's I/O buffer, as the game's device was set
 // CoreAudioHAL.m: the output device a game's code sees (Steam's sees none); GameAudio.m lets a
 // game choose it for its output unit or audio queue.
 enum { AKGameAudioDevice = 0x41, AKGameAudioStream = 0x42 };

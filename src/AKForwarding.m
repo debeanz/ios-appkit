@@ -6,6 +6,7 @@
 // implement it; until then a zero return is what most AppKit calls can tolerate.
 #import "AKShimPrivate.h"
 #import <dlfcn.h>
+#import <execinfo.h>
 #import <objc/runtime.h>
 #import <os/lock.h>
 
@@ -80,8 +81,9 @@ void AKLogUnimplemented(id obj, SEL sel) {
   static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
   const char *cls = object_getClassName(obj);
   const char *name = sel_getName(sel);
+  char kind = object_isClass(obj) ? '+' : '-';
   char key[512];
-  snprintf(key, sizeof key, "%s %s", cls, name);
+  snprintf(key, sizeof key, "%c%s %s", kind, cls, name);
 
   os_unfair_lock_lock(&lock);
   if (!seen) seen = CFSetCreateMutable(NULL, 0, &kCFTypeSetCallBacks);
@@ -91,5 +93,88 @@ void AKLogUnimplemented(id obj, SEL sel) {
   if (k) CFRelease(k);
   os_unfair_lock_unlock(&lock);
 
-  if (first) fprintf(stderr, "[AppKitShim] unimplemented: -[%s %s]\n", cls, name);
+  if (first) fprintf(stderr, "[AppKitShim] unimplemented: %c[%s %s]\n", kind, cls, name);
+}
+
+// Every shim class answers a method it lacks this way, its class methods too: the macros cover
+// the classes that opted in, and this the rest, as the shim loads. A game sends what its engine
+// was built against, and the first message the shim had no method for ended the game (Unity's
+// start-up sends +[NSWindow setAllowsAutomaticWindowTabbing:]). Only the shim's own lineages get
+// it - classes whose superclass is NSObject, not its UIKit and Core Animation subclasses, nor its
+// own helpers (AK..., but AKShim_ classes stand for Mac ones). class_addMethod leaves a class that
+// defines the method itself (AK_UNIMPLEMENTED_FORWARDER) as it is.
+static IMP gObjectSignature, gClassSignature;
+
+static NSMethodSignature *shimSignature(id self, SEL _cmd, SEL sel) {
+  NSMethodSignature *sig = ((NSMethodSignature * (*)(id, SEL, SEL))gObjectSignature)(self, _cmd, sel);
+  return sig ?: AKFallbackSignature(self, sel, NO);
+}
+
+static NSMethodSignature *shimClassSignature(id self, SEL _cmd, SEL sel) {
+  NSMethodSignature *sig = ((NSMethodSignature * (*)(id, SEL, SEL))gClassSignature)(self, _cmd, sel);
+  return sig ?: AKFallbackSignature(self, sel, YES);
+}
+
+static void shimForward(id self, SEL _cmd, NSInvocation *invocation) {
+  AKLogUnimplemented(self, invocation.selector);
+  NSUInteger len = invocation.methodSignature.methodReturnLength;
+  if (len) { void *zero = calloc(1, len); [invocation setReturnValue:zero]; free(zero); }
+}
+
+// A game's messages to iOS's own classes, too: one with no method there - a Mac-only method of a
+// class iOS also has (AppKit's additions to NSString, NSBundle, NSValue...) - is logged and returns
+// zero rather than ending the game. Only for the game: its main thread, or a message its code sent
+// (the forwarding machinery's caller, a few frames up). Steam's messages raise as on iOS.
+static IMP gObjectForward, gClassForward;
+
+static BOOL sentByGame(void) {
+  if (AKIsGameThread()) return YES;
+  void *frames[8];
+  int n = backtrace(frames, 8);
+  for (int i = 1; i < n; i++) if (AKAddressIsInGame(frames[i])) return YES;
+  return NO;
+}
+
+static NSMethodSignature *gameSignature(id self, SEL _cmd, SEL sel) {
+  NSMethodSignature *sig = ((NSMethodSignature * (*)(id, SEL, SEL))gObjectSignature)(self, _cmd, sel);
+  return sig || !AKGameIsRunning() || !sentByGame() ? sig : AKFallbackSignature(self, sel, NO);
+}
+
+static NSMethodSignature *gameClassSignature(id self, SEL _cmd, SEL sel) {
+  NSMethodSignature *sig = ((NSMethodSignature * (*)(id, SEL, SEL))gClassSignature)(self, _cmd, sel);
+  return sig || !AKGameIsRunning() || !sentByGame() ? sig : AKFallbackSignature(self, sel, YES);
+}
+
+static void gameForward(id self, SEL _cmd, NSInvocation *invocation) {
+  if (AKGameIsRunning() && ![self respondsToSelector:invocation.selector] && sentByGame()) shimForward(self, _cmd, invocation);
+  else ((void (*)(id, SEL, NSInvocation *))gObjectForward)(self, _cmd, invocation);
+}
+
+static void gameClassForward(id self, SEL _cmd, NSInvocation *invocation) {
+  if (AKGameIsRunning() && ![self respondsToSelector:invocation.selector] && sentByGame()) shimForward(self, _cmd, invocation);
+  else ((void (*)(id, SEL, NSInvocation *))gClassForward)(self, _cmd, invocation);
+}
+
+__attribute__((constructor)) static void forwardEveryShimClass(void) {
+  Dl_info info;
+  if (!dladdr((const void *)forwardEveryShimClass, &info) || !info.dli_fname) return;
+  Class object = NSObject.class, objectMeta = object_getClass(object);
+  SEL signature = @selector(methodSignatureForSelector:), forward = @selector(forwardInvocation:);
+  gObjectSignature = method_setImplementation(class_getInstanceMethod(object, signature), (IMP)gameSignature);
+  gClassSignature = method_setImplementation(class_getInstanceMethod(objectMeta, signature), (IMP)gameClassSignature);
+  gObjectForward = method_setImplementation(class_getInstanceMethod(object, forward), (IMP)gameForward);
+  gClassForward = method_setImplementation(class_getInstanceMethod(objectMeta, forward), (IMP)gameClassForward);
+  unsigned count = 0;
+  const char **names = objc_copyClassNamesForImage(info.dli_fname, &count);
+  for (unsigned i = 0; i < count; i++) {
+    if (!strncmp(names[i], "AK", 2) && strncmp(names[i], "AKShim", 6)) continue;
+    Class cls = objc_getClass(names[i]);
+    if (!cls || class_getSuperclass(cls) != object) continue;
+    Class meta = object_getClass(cls);
+    class_addMethod(cls, signature, (IMP)shimSignature, "@@::");
+    class_addMethod(cls, forward, (IMP)shimForward, "v@:@");
+    class_addMethod(meta, signature, (IMP)shimClassSignature, "@@::");
+    class_addMethod(meta, forward, (IMP)shimForward, "v@:@");
+  }
+  free(names);
 }

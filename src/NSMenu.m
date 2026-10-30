@@ -155,6 +155,9 @@ static const NSEventModifierFlags AKShortcutModifiers =
 static BOOL gMenuBarVisible = YES;
 + (BOOL)menuBarVisible { return gMenuBarVisible; }
 + (void)setMenuBarVisible:(BOOL)visible { gMenuBarVisible = visible; }
+// It takes no room: a game's window gets the whole screen (Unity and SDL subtract this).
++ (CGFloat)menuBarHeight { return 0; }
+- (CGFloat)menuBarHeight { return 0; }
 
 AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER
