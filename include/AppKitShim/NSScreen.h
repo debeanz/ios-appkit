@@ -5,6 +5,8 @@
 #import <Foundation/Foundation.h>
 #import "NSGeometry.h"
 
+@class NSColorSpace;
+
 extern NSNotificationName const NSScreenColorSpaceDidChangeNotification;
 
 @interface NSScreen : NSObject
@@ -21,6 +23,8 @@ extern NSNotificationName const NSScreenColorSpaceDidChangeNotification;
 @property (nonatomic, readonly) NSEdgeInsets safeAreaInsets;
 @property (nonatomic, readonly) NSRect auxiliaryTopLeftArea, auxiliaryTopRightArea;
 @property (nonatomic, readonly) int depth;
+@property (nonatomic, readonly) NSColorSpace *colorSpace;
+- (BOOL)canRepresentDisplayGamut:(NSInteger)displayGamut;
 @property (nonatomic, readonly) const int *supportedWindowDepths;
 - (NSRect)convertRectToBacking:(NSRect)rect;
 - (NSRect)convertRectFromBacking:(NSRect)rect;

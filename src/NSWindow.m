@@ -410,6 +410,64 @@ static BOOL AKViewTracks(NSView *view, NSTrackingAreaOptions option) {
 // shown — order it in without taking key status, as AppKit's -orderBack: does.
 - (void)orderBack:(id)sender { if (!self.isVisible) [self orderFront:sender]; }
 
+// What game engines ask of a window beyond Steam's use (tools/mac-methods.m lists them).
+// The area its content is drawn in, unobscured by a title bar: its content view, all of it.
+- (NSRect)contentLayoutRect {
+  NSView *content = self.contentView;
+  return content ? content.frame : NSMakeRect(0, 0, self.frame.size.width, self.frame.size.height);
+}
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)isSheet { return NO; }
+- (NSWindow *)sheetParent { return nil; }
+- (NSWindow *)attachedSheet { return nil; }
+- (NSScreen *)deepestScreen { return self.screen; }
+- (NSDictionary<NSString *, id> *)deviceDescription { return self.screen.deviceDescription; }
+- (NSColorSpace *)colorSpace { return self.screen.colorSpace; }
+- (BOOL)canRepresentDisplayGamut:(NSInteger)gamut { return [self.screen canRepresentDisplayGamut:gamut]; }
+- (NSTimeInterval)animationResizeTime:(NSRect)newFrame { return 0; }   // nothing animates
+- (NSRect)frameRectForContentRect:(NSRect)rect styleMask:(NSWindowStyleMask)style {
+  return [NSWindow frameRectForContentRect:rect styleMask:style];
+}
+// Events go through the application's queue, as AppKit's window methods do.
+- (NSEvent *)currentEvent { return NSApp.currentEvent; }
+- (NSEvent *)nextEventMatchingMask:(NSUInteger)mask untilDate:(NSDate *)date inMode:(NSString *)mode dequeue:(BOOL)dequeue {
+  return [NSApp nextEventMatchingMask:mask untilDate:date inMode:mode dequeue:dequeue];
+}
+- (NSEvent *)nextEventMatchingMask:(NSUInteger)mask {
+  return [NSApp nextEventMatchingMask:mask untilDate:NSDate.distantFuture inMode:NSDefaultRunLoopMode dequeue:YES];
+}
+- (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart { [NSApp postEvent:event atStart:atStart]; }
+// The close button's action: the delegate may refuse.
+- (void)performClose:(id)sender {
+  id delegate = self.delegate;
+  SEL ask = NSSelectorFromString(@"windowShouldClose:");
+  if ([delegate respondsToSelector:ask] && !((BOOL (*)(id, SEL, id))objc_msgSend)(delegate, ask, self)) return;
+  [self close];
+}
+// The visible windows' numbers, front to back.
++ (NSArray<NSNumber *> *)windowNumbersWithOptions:(NSUInteger)options {
+  NSMutableArray *visible = [NSMutableArray array];
+  for (NSWindow *w in NSApp.windows) if (w.isVisible) [visible addObject:w];
+  [visible sortUsingComparator:^NSComparisonResult(NSWindow *a, NSWindow *b) { return [@(a.orderedIndex) compare:@(b.orderedIndex)]; }];
+  NSMutableArray *numbers = [NSMutableArray array];
+  for (NSWindow *w in visible) [numbers addObject:@(w.windowNumber)];
+  return numbers;
+}
+// Its screen's refresh drives the link (macOS 14's NSWindow/NSView/NSScreen display links).
+- (CADisplayLink *)displayLinkWithTarget:(id)target selector:(SEL)selector {
+  return [CADisplayLink displayLinkWithTarget:target selector:selector];
+}
+
+static char kIdentifierKey, kIgnoresMouseKey;
+- (NSString *)identifier { return objc_getAssociatedObject(self, &kIdentifierKey); }
+- (void)setIdentifier:(NSString *)identifier {
+  objc_setAssociatedObject(self, &kIdentifierKey, identifier, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+- (BOOL)ignoresMouseEvents { return [objc_getAssociatedObject(self, &kIgnoresMouseKey) boolValue]; }
+- (void)setIgnoresMouseEvents:(BOOL)ignores {
+  objc_setAssociatedObject(self, &kIgnoresMouseKey, @(ignores), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 // Cursor rectangles (the pointer shape per region); recorded so the getter round-trips.
 - (void)invalidateCursorRectsForView:(NSView *)view { /* no pointer shapes to recompute on iOS */ }
 - (void)disableCursorRects { self.cursorRectsDisabled = YES; }

@@ -174,6 +174,10 @@ static NSEvent *AKMakeEvent(NSEventType type, NSPoint location, NSEventModifierF
   @synchronized (NSEvent.class) { [gLocalMonitors removeObject:monitor]; }
 }
 
+// An event doesn't change once made: a copy is itself (Unity keeps copies of the events it
+// gets; without this, -copy came back nil).
+- (id)copyWithZone:(NSZone *)zone { return self; }
+
 AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER
 

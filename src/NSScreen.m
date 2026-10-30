@@ -44,6 +44,13 @@ NSNotificationName const NSScreenColorSpaceDidChangeNotification = @"NSScreenCol
 // The screen with the most color depth: there's one kind here.
 + (NSScreen *)deepestScreen { return self.mainScreen; }
 
+// Its CoreGraphics display (deviceDescription's NSScreenNumber), and a display link it drives.
+- (CGDirectDisplayID)CGDirectDisplayID { return AKDisplayIDForScreen(_screen); }
+- (CADisplayLink *)displayLinkWithTarget:(id)target selector:(SEL)selector {
+  CADisplayLink *link = [_screen displayLinkWithTarget:target selector:selector];
+  return link ?: [CADisplayLink displayLinkWithTarget:target selector:selector];
+}
+
 // 1 to a game, as its windows are (NSWindow.m).
 - (CGFloat)backingScaleFactor { return AKIsGameThread() ? 1 : _screen.scale; }
 - (NSInteger)maximumFramesPerSecond { return AKDisplayRefreshRate(_screen); }   // CVDisplayLink.m

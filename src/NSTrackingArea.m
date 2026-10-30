@@ -16,6 +16,8 @@
   return self;
 }
 
+// Nothing of it changes once made: a copy is itself, as for AppKit's own (NSCopying).
+- (id)copyWithZone:(NSZone *)zone { return self; }
 
 AK_UNIMPLEMENTED_FORWARDER
 AK_UNIMPLEMENTED_CLASS_FORWARDER

@@ -123,8 +123,18 @@ static int writeAudit(NSString *nmPath, NSString *selectorsPath, NSString *outPa
         if (!c) continue;
         for (int meta = 0; meta < 2; meta++) {
           Method m = meta ? class_getClassMethod(c, sel) : class_getInstanceMethod(c, sel);
-          Method base = meta ? class_getClassMethod(root, sel) : class_getInstanceMethod(root, sel);
-          if (!m || m == base) continue;   // not macOS's, or NSObject's (iOS has those)
+          // Not macOS's, or one NSObject has too (-init, -dealloc, -description, key-value
+          // observing...: iOS's NSObject has them, and AppKit's overrides change nothing a game sees).
+          if (!m || (meta ? class_getClassMethod(root, sel) : class_getInstanceMethod(root, sel))) continue;
+          // Defined by a class of iOS's (the shim's CAOpenGLLayer is a CALayer): iOS has it.
+          Class owner = c;
+          for (Class k = c; k && class_getSuperclass(k); k = class_getSuperclass(k)) {
+            Class up = class_getSuperclass(k);
+            Method above = meta ? class_getClassMethod(up, sel) : class_getInstanceMethod(up, sel);
+            owner = k;
+            if (above != m) break;
+          }
+          if (![classes containsObject:appKitName(@(class_getName(owner)))]) continue;
           char kind = meta ? '+' : '-';
           if (shimHas(shim, c, kind, sel_getName(sel))) continue;
           NSString *line = [NSString stringWithFormat:@"%@ %c%@  %s%@", name, kind, selName, method_getTypeEncoding(m) ?: "",

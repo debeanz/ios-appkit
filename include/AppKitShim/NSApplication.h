@@ -26,6 +26,8 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
 @property (nonatomic, readonly, copy) NSArray<NSWindow *> *windows;
 @property (nonatomic, readonly, weak) NSWindow *keyWindow;
 @property (nonatomic, readonly, getter=isRunning) BOOL running;
+@property (readonly, strong) NSEvent *currentEvent;          // the last event dequeued or sent
+@property (nonatomic, readonly) NSUInteger occlusionState;   // visible: the app is in front
 
 - (void)run;
 - (void)stop:(id)sender;

@@ -421,7 +421,15 @@ static void AKOnMainLater(dispatch_block_t block) {
   if (NSThread.isMainThread) block();
   else dispatch_async(dispatch_get_main_queue(), block);
 }
-- (void)setNeedsDisplay:(BOOL)flag { if (flag) AKOnMainLater(^{ [self->_backing setNeedsDisplay]; }); }
+- (void)setNeedsDisplay:(BOOL)flag {
+  if (!flag) return;
+  if (_wantsLayer && [self wantsUpdateLayer]) {
+    __weak NSView *weakSelf = self;
+    [self _ak_performOnOwnerThread:^{ [weakSelf updateLayer]; }];
+    return;
+  }
+  AKOnMainLater(^{ [self->_backing setNeedsDisplay]; });
+}
 - (void)setNeedsDisplayInRect:(NSRect)rect {
   CGRect r = [self _ak_uikitRect:rect];
   AKOnMainLater(^{ [self->_backing setNeedsDisplayInRect:r]; });
@@ -518,6 +526,24 @@ static void AKOnMainLater(dispatch_block_t block) {
   CGFloat s = self.window.backingScaleFactor;
   return s > 0 ? s : NSScreen.mainScreen.backingScaleFactor;
 }
+- (CGFloat)backingScaleFactor { return [self _ak_backingScale]; }
+
+// What game engines ask of a view beyond Steam's use (tools/mac-methods.m lists them).
+- (BOOL)inLiveResize { return NO; }   // no one drags a window's edge here
+- (BOOL)isOpaque { return NO; }
+- (CADisplayLink *)displayLinkWithTarget:(id)target selector:(SEL)selector {
+  return [CADisplayLink displayLinkWithTarget:target selector:selector];
+}
+static char kViewIdentifierKey;
+- (NSString *)identifier { return objc_getAssociatedObject(self, &kViewIdentifierKey); }
+- (void)setIdentifier:(NSString *)identifier {
+  objc_setAssociatedObject(self, &kViewIdentifierKey, identifier, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
+// A layer-backed view that says -wantsUpdateLayer is redrawn by -updateLayer, not -drawRect:
+// (SDL's and Godot's views: their expose events and OpenGL context updates come from there).
+- (BOOL)wantsUpdateLayer { return NO; }
+- (void)updateLayer {}
 
 // From its own coordinates: a scaled bounds counts (its whole bounds is its frame's pixels).
 - (NSRect)convertRectToBacking:(NSRect)r {

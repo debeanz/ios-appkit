@@ -79,6 +79,7 @@ NSNotificationName const NSApplicationDidChangeScreenParametersNotification = @"
 // (Steam already had its), and an event loop that runs until it quits.
 static id gGameDelegate;
 static BOOL gGameRunning, gGameStopped;
+static NSEvent *gCurrentEvent[2];   // Steam's, a game's (-currentEvent)
 
 @synthesize delegate = _delegate;
 
@@ -93,6 +94,7 @@ static BOOL gGameRunning, gGameStopped;
 
 void AKGameAppEnded(void) {
   gGameDelegate = nil;
+  gCurrentEvent[1] = nil;
   gGameRunning = gGameStopped = NO;
 }
 
@@ -199,13 +201,25 @@ static BOOL isGameEvent(NSEvent *e) { return objc_getAssociatedObject(e, &kGameE
         continue;
       }
       if (mask & (1UL << e.type)) {
-        if (dequeue) [_eventQueue removeObjectAtIndex:i];
+        if (dequeue) {
+          [_eventQueue removeObjectAtIndex:i];
+          gCurrentEvent[gameThread] = e;
+        }
         return e;
       }
     }
   }
   return nil;
 }
+
+// The event last dequeued or sent, as AppKit keeps it: the game's apart from Steam's.
+- (NSEvent *)currentEvent {
+  @synchronized (_eventQueue) { return gCurrentEvent[AKGameIsRunning() && AKIsGameThread()]; }
+}
+
+// The app is in front whenever any of it runs (it doesn't run hidden): visible. Engines stop
+// drawing for an occluded app (Unity's applicationDidChangeOcclusionState:, SDL, Godot).
+- (NSUInteger)occlusionState { return 1u << 1; }   // NSApplicationOcclusionStateVisible
 
 // How long other threads spend waiting for these steps, logged every few seconds: Chromium's
 // UI thread stalls for as long as the main thread takes to get to them, which shows as lag.
@@ -310,6 +324,7 @@ void AKOnMainSync(dispatch_block_t block) {
 - (void)sendEvent:(NSEvent *)event {
   event = AKRunLocalEventMonitors(event);  // a local monitor may replace or swallow it
   if (!event) return;
+  @synchronized (_eventQueue) { gCurrentEvent[AKGameIsRunning() && AKIsGameThread()] = event; }
   AKNoteInputEvent(event);
   NSWindow *window = event.window ?: self.keyWindow;
   [window sendEvent:event];
