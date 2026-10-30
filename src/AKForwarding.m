@@ -164,7 +164,7 @@ __attribute__((constructor)) static void forwardEveryShimClass(void) {
   gClassSignature = method_setImplementation(class_getInstanceMethod(objectMeta, signature), (IMP)gameClassSignature);
   gObjectForward = method_setImplementation(class_getInstanceMethod(object, forward), (IMP)gameForward);
   gClassForward = method_setImplementation(class_getInstanceMethod(objectMeta, forward), (IMP)gameClassForward);
-  unsigned count = 0;
+  unsigned count = 0, lineages = 0;
   const char **names = objc_copyClassNamesForImage(info.dli_fname, &count);
   for (unsigned i = 0; i < count; i++) {
     if (!strncmp(names[i], "AK", 2) && strncmp(names[i], "AKShim", 6)) continue;
@@ -175,6 +175,9 @@ __attribute__((constructor)) static void forwardEveryShimClass(void) {
     class_addMethod(cls, forward, (IMP)shimForward, "v@:@");
     class_addMethod(meta, signature, (IMP)shimClassSignature, "@@::");
     class_addMethod(meta, forward, (IMP)shimForward, "v@:@");
+    lineages++;
   }
   free(names);
+  fprintf(stderr, "[AppKitShim] a method the shim lacks returns zero: %u of its classes' lineages (of %u classes), "
+                  "and a game's messages to iOS's classes\n", lineages, count);
 }
