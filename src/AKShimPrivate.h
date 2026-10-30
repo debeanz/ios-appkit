@@ -202,6 +202,12 @@ void AKGameControllersHoldBack(void);
 // GameAudio.m: a game library's lookups of the Mac's output audio units find iOS's RemoteIO.
 void AKGameBindAudio(const struct mach_header *header, intptr_t slide);
 void AKGameAudioBegin(void);    // a game starts: the app's audio session plays (each launch)
+// CoreAudioHAL.m: the output device a game's code sees (Steam's sees none); GameAudio.m lets a
+// game choose it for its output unit or audio queue.
+enum { AKGameAudioDevice = 0x41, AKGameAudioStream = 0x42 };
+extern const char *const AKGameAudioDeviceUID;
+uint32_t AKGameAudioBufferFrames(void);   // the buffer size it asked for (64-4096 frames)
+void AKGameAudioSetBufferFrames(uint32_t frames);
 // MetalCompat.m: Metal answers a Mac game's code as a Mac GPU would (once, before the first game).
 void AKGameMetalPrepare(void);
 // GameCrash.m: from the first launch on, a game that crashes ends alone; the app keeps running.

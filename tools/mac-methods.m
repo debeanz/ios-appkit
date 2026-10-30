@@ -61,7 +61,7 @@ static BOOL interestingReturn(Method m) {
   return yes;
 }
 
-static int types(NSString *nmPath, NSString *outPath) {
+static int writeTypes(NSString *nmPath, NSString *outPath) {
   NSMutableSet<NSString *> *classes = [NSMutableSet set];
   shimMethods(nmPath, classes);
   NSMutableSet<NSString *> *lines = [NSMutableSet set];
@@ -104,7 +104,7 @@ static BOOL shimHas(NSSet<NSString *> *shim, Class c, char kind, const char *sel
   return NO;
 }
 
-static int audit(NSString *nmPath, NSString *selectorsPath, NSString *outPath) {
+static int writeAudit(NSString *nmPath, NSString *selectorsPath, NSString *outPath) {
   NSMutableSet<NSString *> *classes = [NSMutableSet set];
   NSSet<NSString *> *shim = shimMethods(nmPath, classes);
   NSDictionary<NSString *, NSArray<NSString *> *> *engines =
@@ -150,8 +150,8 @@ static int audit(NSString *nmPath, NSString *selectorsPath, NSString *outPath) {
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
     dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY | RTLD_GLOBAL);
-    if (argc == 4 && !strcmp(argv[1], "types")) return types(@(argv[2]), @(argv[3]));
-    if (argc == 5 && !strcmp(argv[1], "audit")) return audit(@(argv[2]), @(argv[3]), @(argv[4]));
+    if (argc == 4 && !strcmp(argv[1], "types")) return writeTypes(@(argv[2]), @(argv[3]));
+    if (argc == 5 && !strcmp(argv[1], "audit")) return writeAudit(@(argv[2]), @(argv[3]), @(argv[4]));
     fprintf(stderr, "usage: mac-methods types <shim-nm.txt> <out.txt>\n"
                     "       mac-methods audit <shim-nm.txt> <engine-selectors.json> <out.txt>\n");
     return 2;

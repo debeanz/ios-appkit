@@ -107,6 +107,74 @@ static OSStatus gameInstanceDispose(AudioComponentInstance unit) {
   return AudioComponentInstanceDispose(unit);
 }
 
+// The device its code chose (CoreAudioHAL.m: the one there is), on the Mac's HAL output unit or
+// an audio queue: RemoteIO and iOS's queues play to the route iOS picks and have no such
+// property, and a Mac sound engine stops at the error. Its buffer size goes to the session.
+enum { kMacCurrentDevice = 2000, kMacBufferFrameSize = 0x6673697a /* 'fsiz' */, kMacQueueCurrentDevice = 0x61716364 /* 'aqcd' */ };
+
+static void preferBufferFrames(UInt32 frames) {
+  AVAudioSession *session = AVAudioSession.sharedInstance;
+  double rate = session.sampleRate > 0 ? session.sampleRate : 48000;
+  [session setPreferredIOBufferDuration:frames / rate error:nil];
+}
+
+static OSStatus gameUnitSetProperty(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
+                                    const void *data, UInt32 size) {
+  if (property == kMacCurrentDevice) return size >= sizeof(UInt32) ? noErr : kAudio_ParamError;
+  if (property == kMacBufferFrameSize) {
+    if (size < sizeof(UInt32)) return kAudio_ParamError;
+    AKGameAudioSetBufferFrames(*(const UInt32 *)data);   // the device's too, clamped
+    preferBufferFrames(AKGameAudioBufferFrames());
+    return noErr;
+  }
+  return AudioUnitSetProperty(unit, property, scope, element, data, size);
+}
+
+static OSStatus gameUnitGetProperty(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
+                                    void *data, UInt32 *size) {
+  if (property == kMacCurrentDevice || property == kMacBufferFrameSize) {
+    if (!data || !size || *size < sizeof(UInt32)) return kAudio_ParamError;
+    *(UInt32 *)data = property == kMacCurrentDevice ? AKGameAudioDevice : AKGameAudioBufferFrames();
+    *size = sizeof(UInt32);
+    return noErr;
+  }
+  return AudioUnitGetProperty(unit, property, scope, element, data, size);
+}
+
+static OSStatus gameUnitGetPropertyInfo(AudioUnit unit, AudioUnitPropertyID property, AudioUnitScope scope, AudioUnitElement element,
+                                        UInt32 *size, Boolean *writable) {
+  if (property == kMacCurrentDevice || property == kMacBufferFrameSize) {
+    if (size) *size = sizeof(UInt32);
+    if (writable) *writable = true;
+    return noErr;
+  }
+  return AudioUnitGetPropertyInfo(unit, property, scope, element, size, writable);
+}
+
+static OSStatus gameQueueSetProperty(AudioQueueRef queue, AudioQueuePropertyID property, const void *data, UInt32 size) {
+  if (property == kMacQueueCurrentDevice) return noErr;
+  return AudioQueueSetProperty(queue, property, data, size);
+}
+
+static OSStatus gameQueueGetProperty(AudioQueueRef queue, AudioQueuePropertyID property, void *data, UInt32 *size) {
+  if (property == kMacQueueCurrentDevice) {
+    if (!data || !size || *size < sizeof(CFStringRef)) return kAudio_ParamError;
+    CFStringRef uid = CFStringCreateWithCString(NULL, AKGameAudioDeviceUID, kCFStringEncodingUTF8);   // the caller's
+    memcpy(data, &uid, sizeof uid);
+    *size = sizeof uid;
+    return noErr;
+  }
+  return AudioQueueGetProperty(queue, property, data, size);
+}
+
+static OSStatus gameQueueGetPropertySize(AudioQueueRef queue, AudioQueuePropertyID property, UInt32 *size) {
+  if (property == kMacQueueCurrentDevice) {
+    if (size) *size = sizeof(CFStringRef);
+    return noErr;
+  }
+  return AudioQueueGetPropertySize(queue, property, size);
+}
+
 // Stopped first (its threads may still be running), released once they aren't (AKGameAudioRelease).
 void AKGameAudioStop(void) {
   NSArray<NSValue *> *units, *queues;
@@ -145,6 +213,12 @@ void AKGameBindAudio(const struct mach_header *header, intptr_t slide) {
     if (strcmp(symbol, "_AudioQueueNewInput") == 0) return (void *)gameQueueNewInput;
     if (strcmp(symbol, "_AudioQueueNewOutputWithDispatchQueue") == 0) return (void *)gameQueueNewOutputBlock;
     if (strcmp(symbol, "_AudioQueueDispose") == 0) return (void *)gameQueueDispose;
+    if (strcmp(symbol, "_AudioUnitSetProperty") == 0) return (void *)gameUnitSetProperty;
+    if (strcmp(symbol, "_AudioUnitGetProperty") == 0) return (void *)gameUnitGetProperty;
+    if (strcmp(symbol, "_AudioUnitGetPropertyInfo") == 0) return (void *)gameUnitGetPropertyInfo;
+    if (strcmp(symbol, "_AudioQueueSetProperty") == 0) return (void *)gameQueueSetProperty;
+    if (strcmp(symbol, "_AudioQueueGetProperty") == 0) return (void *)gameQueueGetProperty;
+    if (strcmp(symbol, "_AudioQueueGetPropertySize") == 0) return (void *)gameQueueGetPropertySize;
     return NULL;
   });
 }
